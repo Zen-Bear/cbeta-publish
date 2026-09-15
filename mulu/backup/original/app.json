@@ -1,0 +1,144 @@
+{
+  "book_dir": "E:/dev/cbeta/publish/cbeta_xml",
+  "official_ebooks_dir": "E:/dev/cbeta/publish/cbeta_ebooks",
+  "mulu_dir": "E:/dev/cbeta/publish/mulu",
+  "collections_dir": "E:/dev/cbeta/publish/collections",
+  "theme": {
+    "mode": "system",
+    "accent": "#8B4513"
+  },
+  "language": "zh-Hans",
+  "update_interval": "weekly",
+  "local_xml_root": "E:/CBETA/CBReader2X/Bookcase/CBETA/XML",
+  "output_dir": "my_books",
+  "ui": {
+    "tree_expand": {
+      "mode": "depth",
+      "depth": 2
+    }
+  },
+  "default_source": "official",
+  "xml2pdf": {
+    "path": "E:/dev/cbeta/xml2pdf",
+    "page": "a4",
+    "font_lang": "zh-Hant",
+    "engine": "docx2pdf",
+    "vertical": false
+  },
+  "catalog": {
+    "filters": {
+      "tripitaka": {
+        "hidden": []
+      },
+      "dynasty": {
+        "hidden": []
+      }
+    }
+  },
+  "cover": {
+    "organizer": "CBETA 整理",
+    "mode": "print",
+    "images": {
+      "buddha": {
+        "file": "assets/images/buddha.jpg",
+        "enabled": true
+      },
+      "weituo": {
+        "file": "assets/images/weituo.jpg",
+        "enabled": true
+      }
+    },
+    "sizes": {
+      "body_a5": 10,
+      "body_a4": 12,
+      "body_16k": 11,
+      "body_32k": 9,
+      "margins": {
+        "a5": {
+          "left": 36,
+          "right": 36,
+          "top": 40,
+          "bottom": 40
+        },
+        "a4": {
+          "left": 48,
+          "right": 48,
+          "top": 48,
+          "bottom": 48
+        },
+        "16k": {
+          "left": 42,
+          "right": 42,
+          "top": 44,
+          "bottom": 44
+        },
+        "32k": {
+          "left": 32,
+          "right": 32,
+          "top": 36,
+          "bottom": 36
+        }
+      },
+      "margin_ratio": {
+        "left": 0.07,
+        "right": 0.07,
+        "top": 0.05,
+        "bottom": 0.05
+      }
+    },
+    "styles": {
+      "cbeta": {
+        "font": "C:\\Windows\\Fonts\\simhei.ttf",
+        "color": [51, 51, 51],
+        "ratio": 1.0
+      },
+      "title": {
+        "font": "C:\\Windows\\Fonts\\Source Han Serif SC Heavy (TrueType).ttf",
+        "color": [0, 0, 0],
+        "ratio": 3.0
+      },
+      "organizer": {
+        "font": "C:\\Windows\\Fonts\\Source Han Serif SC Heavy (TrueType).ttf",
+        "color": [51, 51, 51],
+        "ratio": 1.35
+      },
+      "date": {
+        "font": "C:\\Windows\\Fonts\\simhei.ttf",
+        "color": [100, 100, 100],
+        "ratio": 0.75
+      },
+      "series": {
+        "font": "C:\\Windows\\Fonts\\simhei.ttf",
+        "color": [51, 51, 51],
+        "ratio": 0.9
+      },
+      "toc_title": {
+        "font": "C:\\Windows\\Fonts\\Source Han Serif SC Heavy (TrueType).ttf",
+        "color": [0, 0, 0],
+        "ratio": 2
+      },
+      "toc_item": {
+        "font": "C:\\Windows\\Fonts\\simhei.ttf",
+        "color": [30, 30, 30],
+        "delta": 2
+      },
+      "toc_page": {
+        "font": "C:\\Windows\\Fonts\\simhei.ttf",
+        "color": [100, 100, 100],
+        "ratio": 1
+      },
+      "background": {
+        "color": [250, 245, 230]
+      }
+    },
+    "positions": {
+      "cbeta_left_mm": 18,
+      "cbeta_top_mm": 12,
+      "title_y_ratio": 0.30,
+      "organizer_y_ratio": 0.84,
+      "date_y_ratio": 0.89,
+      "toc_y_ratio": 0.15,
+      "toc_item_y_ratio": 0.25
+    }
+  }
+}
