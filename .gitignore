@@ -7,7 +7,6 @@ __pycache__/
 # ---- 下载/缓存数据（可重新获取） ----
 cbeta_ebooks/
 cbeta_xml/
-mulu/backup/
 mulu/cache/
 
 # ---- 合成产物 / 临时文件 ----
@@ -16,9 +15,7 @@ my_books/
 _tmp_cover/
 _export/
 
-# ---- 大体积二进制（高分辨率原件与字体，入库意义不大） ----
-assets/images/BP*
-assets/fonts/
+# 说明：assets/（含高分辨率扫描件与字体）、mulu/backup/ 已按需纳入版本控制。
 
 # ---- 派生缓存 ----
 collections/index.json
