@@ -1,0 +1,4 @@
+repo=https://github.com/cbeta-org/cbeta-fetch
+commit=634b14bb31f1d721aa9bf6521c373b9effc4bc31
+version=0.1.2
+sha256=c6c779289aba9dc49d6fed581ea2eade2be9fcf5396807f0066ce37a2c71fcaf

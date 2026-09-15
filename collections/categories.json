@@ -1,0 +1,46 @@
+{
+  "categories": [
+    {
+      "id": "author",
+      "name": "作者",
+      "preset": true,
+      "description": "按作译者汇集，如太虚大师全集，来源作者搜索"
+    },
+    {
+      "id": "sect",
+      "name": "宗派",
+      "preset": true,
+      "description": "按宗派传承，如华严宗、天台宗文集"
+    },
+    {
+      "id": "sutra",
+      "name": "经论",
+      "preset": true,
+      "description": "按单经/论及其相关注解汇集，如金刚经注解集"
+    },
+    {
+      "id": "theme",
+      "name": "专题",
+      "preset": true,
+      "description": "按修学专题，如禅修、戒律、净土，需配具体标签"
+    },
+    {
+      "id": "custom",
+      "name": "其他",
+      "preset": true,
+      "description": "未分类或个人随选，兜底分组"
+    },
+    {
+      "id": "Bear",
+      "name": "自制丛书",
+      "description": "自个制的丛书",
+      "preset": false
+    },
+    {
+      "id": "ceshi",
+      "name": "测试",
+      "description": "test",
+      "preset": false
+    }
+  ]
+}

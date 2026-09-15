@@ -1,0 +1,46 @@
+{
+  "tags": [
+    {
+      "id": "author:taixu",
+      "name": "太虚",
+      "parent": "author",
+      "level": 1,
+      "description": "太虚大师相关著述"
+    },
+    {
+      "id": "sect:huayan",
+      "name": "华严",
+      "parent": "sect",
+      "level": 1,
+      "description": "华严宗相关典籍"
+    },
+    {
+      "id": "sutra:jingang",
+      "name": "金刚经",
+      "parent": "sutra",
+      "level": 1,
+      "description": "金刚经本经及有关注疏"
+    },
+    {
+      "id": "theme:chanxiu",
+      "name": "禅修",
+      "parent": "theme",
+      "level": 1,
+      "description": "禅修方法、止观、坐禅相关"
+    },
+    {
+      "id": "theme:jielv",
+      "name": "戒律",
+      "parent": "theme",
+      "level": 1,
+      "description": "戒律、毗尼、羯磨相关"
+    },
+    {
+      "id": "theme:jingtu",
+      "name": "净土",
+      "parent": "theme",
+      "level": 1,
+      "description": "净土、念佛、往生相关"
+    }
+  ]
+}

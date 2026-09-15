@@ -1,0 +1,30 @@
+# ---- Python ----
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# ---- 下载/缓存数据（可重新获取） ----
+cbeta_ebooks/
+cbeta_xml/
+mulu/backup/
+mulu/cache/
+
+# ---- 合成产物 / 临时文件 ----
+my_books/
+*.zip
+_tmp_cover/
+_export/
+
+# ---- 大体积二进制（高分辨率原件与字体，入库意义不大） ----
+assets/images/BP*
+assets/fonts/
+
+# ---- 派生缓存 ----
+collections/index.json
+
+# ---- 编辑器/系统 ----
+.idea/
+.vscode/
+Thumbs.db
+desktop.ini
