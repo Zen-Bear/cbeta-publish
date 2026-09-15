@@ -1,38 +1,22 @@
 # -*- coding: utf-8 -*-
-"""设置对话框：封面/版式面板顺序、字体路径正斜杠与起始目录、确定(仅应用不保存)。
+"""设置对话框：封面/版式子页签顺序、字体路径用系统默认分隔符、确定(仅应用不保存)。
 
 背景：settings_dialog.py 曾因编码往返损坏，这些断言同时防回归。
 """
 import copy
 import os
 import unittest
+from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication, QGroupBox, QPushButton  # noqa: E402
+from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from cbeta_publish.gui.settings_dialog import DEFAULT_CONFIG, SettingsDialog  # noqa: E402
 
 
 def _app():
     return QApplication.instance() or QApplication([])
-
-
-def _row_titles(form):
-    """QFormLayout 行标签文本序列（仅字符串标签）。"""
-    from PySide6.QtWidgets import QFormLayout
-    role = QFormLayout.ItemRole.LabelRole
-    out = []
-    for i in range(form.rowCount()):
-        item = form.itemAt(i, role)
-        w = form.itemAt(i, QFormLayout.ItemRole.FieldRole)
-        text = ""
-        if item is not None and item.widget() is not None:
-            text = item.widget().text()
-        elif w is not None and w.widget() is not None and isinstance(w.widget(), QGroupBox):
-            text = w.widget().title()
-        out.append(text)
-    return out
 
 
 class SettingsDialogTest(unittest.TestCase):
@@ -43,22 +27,27 @@ class SettingsDialogTest(unittest.TestCase):
     def _dlg(self):
         return SettingsDialog(copy.deepcopy(DEFAULT_CONFIG), None)
 
-    def test_cover_tab_order_bg_font_margins(self):
+    def test_cover_subtabs_order(self):
+        # 封面/版式 4 个子页签，按 佛像、背景色 → 字体 → 基准字号 → 边距
         dlg = self._dlg()
-        texts = _row_titles(dlg._cover_form)
-        i_bg = texts.index("封面背景色")
-        i_font = texts.index("字体（封面/目录/说明页）")
-        i_margin = texts.index("每纸张边距(pt)")
-        self.assertLess(i_bg, i_font)
-        self.assertLess(i_font, i_margin)
+        sub = dlg._cover_subtabs
+        names = [sub.tabText(i) for i in range(sub.count())]
+        self.assertEqual(names, ["封面佛像、背景色", "字体", "基准字号", "边距"])
+        # 控件归属：背景色在页签1、字体在页签2、基准字号在页签3、边距在页签4
+        self.assertTrue(sub.widget(0).isAncestorOf(dlg.btn_bg))
+        self.assertTrue(sub.widget(1).isAncestorOf(dlg.font_rows["title"]))
+        self.assertTrue(sub.widget(2).isAncestorOf(dlg.sp_body["a5"]))
+        self.assertTrue(sub.widget(3).isAncestorOf(dlg.sp_margins["a5"]["left"]))
 
-    def test_slash_and_font_input(self):
+    def test_font_input_uses_native_separator(self):
         cfg = copy.deepcopy(DEFAULT_CONFIG)
-        cfg["cover"]["styles"]["title"] = {"font": "C:\\Windows\\Fonts\\simhei.ttf"}
+        cfg["cover"]["styles"]["title"] = {"font": "C:/Windows/Fonts/simhei.ttf"}
         dlg = SettingsDialog(cfg, None)
-        self.assertEqual(dlg.font_rows["title"].text(), "C:/Windows/Fonts/simhei.ttf")
-        self.assertEqual(SettingsDialog._slash(None), "")
-        self.assertEqual(SettingsDialog._slash("a\\b\\c"), "a/b/c")
+        shown = dlg.font_rows["title"].text()
+        self.assertNotIn("/", shown.replace(os.sep, ""))   # 用系统默认分隔符
+        self.assertEqual(Path(shown), Path("C:/Windows/Fonts/simhei.ttf"))
+        self.assertEqual(SettingsDialog._native_path(""), "")
+        self.assertEqual(Path(SettingsDialog._native_path("a/b/c")), Path("a/b/c"))
 
     def test_apply_does_not_write(self):
         dlg = self._dlg()
@@ -77,12 +66,41 @@ class SettingsDialogTest(unittest.TestCase):
         dlg = self._dlg()
         self.assertEqual(dlg._btn_apply.text(), "确定")
 
+    def test_buttons_layout_and_default(self):
+        # 恢复默认/恢复原始靠左；确定/保存/取消靠右；确定为默认按钮
+        dlg = self._dlg()
+        row = dlg._btn_row
+        texts = [row.itemAt(i).widget().text()
+                 for i in range(row.count()) if row.itemAt(i).widget()]
+        self.assertEqual(texts, ["恢复默认", "恢复原始", "确定", "保存", "取消"])
+        self.assertTrue(dlg._btn_apply.isDefault())
+        self.assertFalse(dlg._btn_save.isDefault())
+
     def test_series_migrates_to_imprint(self):
         cfg = copy.deepcopy(DEFAULT_CONFIG)
         cfg["cover"]["series"] = "太虛大師全書"
         dlg = SettingsDialog(cfg, None)
         self.assertEqual(dlg.ed_imprint.text(), "太虛大師全書")
         self.assertNotIn("series", dlg._cfg["cover"])
+
+    def test_collect_roundtrip_after_restructure(self):
+        # 子页签拆分后，控件仍在 _collect 覆盖范围内
+        cfg = copy.deepcopy(DEFAULT_CONFIG)
+        cfg["cover"]["sizes"]["body_a5"] = 13
+        cfg["cover"]["sizes"]["margins"]["a5"] = {"left": 21, "right": 22, "top": 23, "bottom": 24}
+        cfg["cover"]["styles"]["background"] = {"color": [1, 2, 3]}
+        cfg["cover"]["images"]["buddha"]["enabled"] = False
+        dlg = SettingsDialog(cfg, None)
+        dlg.ed_organizer.setText("某某整理")
+        out = dlg._collect()
+        cv = out["cover"]
+        self.assertEqual(cv["organizer"], "某某整理")
+        self.assertEqual(cv["sizes"]["body_a5"], 13)
+        self.assertEqual(cv["sizes"]["margins"]["a5"],
+                         {"left": 21, "right": 22, "top": 23, "bottom": 24})
+        self.assertEqual(cv["styles"]["background"]["color"], [1, 2, 3])
+        self.assertFalse(cv["images"]["buddha"]["enabled"])
+        self.assertIn("font", cv["styles"]["title"])
 
 
 if __name__ == "__main__":

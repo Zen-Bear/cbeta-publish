@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """统一设置对话框：数据目录 / 封面版式（含背景色、图像）/ 外观。"""
-import json, shutil
+import json, os, shutil
 from pathlib import Path
 from PySide6.QtWidgets import (
     QDialog, QTabWidget, QWidget, QFormLayout, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QCheckBox, QPushButton,
-    QLabel, QFileDialog, QColorDialog, QMessageBox, QDialogButtonBox, QGroupBox,
+    QLabel, QFileDialog, QColorDialog, QMessageBox, QGroupBox,
     QTableWidget, QTableWidgetItem, QHeaderView, QApplication,
     QListWidget, QListWidgetItem,
 )
@@ -58,12 +58,12 @@ DEFAULT_CONFIG = {
             "margin_ratio": {"left": 0.07, "right": 0.07, "top": 0.05, "bottom": 0.05},
         },
         "styles": {
-            "title": {"font": "C:/Windows/Fonts\\Source Han Serif SC Heavy (TrueType).ttf", "color": [0, 0, 0], "ratio": 3.0},
-            "organizer": {"font": "C:/Windows/Fonts\\Source Han Serif SC Heavy (TrueType).ttf", "color": [51, 51, 51], "ratio": 1.35},
-            "date": {"font": "C:/Windows/Fonts\\simhei.ttf", "color": [100, 100, 100], "ratio": 1.0},
-            "toc_title": {"font": "C:/Windows/Fonts\\Source Han Serif SC Heavy (TrueType).ttf", "color": [0, 0, 0], "ratio": 2.0},
-            "toc_item": {"font": "C:/Windows/Fonts\\simhei.ttf", "color": [30, 30, 30], "delta": 2},
-            "toc_page": {"font": "C:/Windows/Fonts\\simhei.ttf", "color": [100, 100, 100], "ratio": 1.0},
+            "title": {"font": "C:/Windows/Fonts/Source Han Serif SC Heavy (TrueType).ttf", "color": [0, 0, 0], "ratio": 3.0},
+            "organizer": {"font": "C:/Windows/Fonts/Source Han Serif SC Heavy (TrueType).ttf", "color": [51, 51, 51], "ratio": 1.35},
+            "date": {"font": "C:/Windows/Fonts/simhei.ttf", "color": [100, 100, 100], "ratio": 1.0},
+            "toc_title": {"font": "C:/Windows/Fonts/Source Han Serif SC Heavy (TrueType).ttf", "color": [0, 0, 0], "ratio": 2.0},
+            "toc_item": {"font": "C:/Windows/Fonts/simhei.ttf", "color": [30, 30, 30], "delta": 2},
+            "toc_page": {"font": "C:/Windows/Fonts/simhei.ttf", "color": [100, 100, 100], "ratio": 1.0},
             "background": {"color": [250, 245, 230]},
         },
         "positions": {
@@ -114,19 +114,27 @@ class SettingsDialog(QDialog):
         v.addWidget(tabs)
         self._sync_from_cfg()
 
-        btns = QDialogButtonBox()
-        self._btn_apply = btns.addButton("确定", QDialogButtonBox.ApplyRole)
-        self._btn_save = btns.addButton("保存", QDialogButtonBox.AcceptRole)
-        self._btn_default = btns.addButton("恢复默认", QDialogButtonBox.ResetRole)
-        self._btn_original = btns.addButton("恢复原始", QDialogButtonBox.ResetRole)
-        self._btn_cancel = btns.addButton("取消", QDialogButtonBox.RejectRole)
+        btns = QHBoxLayout()
+        self._btn_row = btns
+        self._btn_apply = QPushButton("确定")
+        self._btn_save = QPushButton("保存")
+        self._btn_default = QPushButton("恢复默认")
+        self._btn_original = QPushButton("恢复原始")
+        self._btn_cancel = QPushButton("取消")
+        # 确定=默认按钮（回车触发）；恢复默认/恢复原始靠左，其余靠右
+        self._btn_apply.setDefault(True)
         self._btn_apply.setToolTip("不保存到 config/app.json，仅本次运行生效")
+        btns.addWidget(self._btn_default)
+        btns.addWidget(self._btn_original)
+        btns.addStretch(1)
+        for _b in (self._btn_apply, self._btn_save, self._btn_cancel):
+            btns.addWidget(_b)
         self._btn_apply.clicked.connect(self._apply)
         self._btn_save.clicked.connect(self._save)
         self._btn_default.clicked.connect(self._restore_default)
         self._btn_original.clicked.connect(self._restore_original)
         self._btn_cancel.clicked.connect(self.reject)
-        v.addWidget(btns)
+        v.addLayout(btns)
 
     def _no_wheel_until_focused(self, widget):
         widget.setFocusPolicy(Qt.StrongFocus)
@@ -211,11 +219,12 @@ class SettingsDialog(QDialog):
     # ---------- 页签：封面/版式 ----------
     def _tab_cover(self):
         w = QWidget()
-        form = QFormLayout(w)
+        outer = QVBoxLayout(w)
+        form = QFormLayout()
         self._cover_form = form
         cover = self._cfg.setdefault("cover", {})
         self._migrate_series_imprint(cover)
-        # 整理者 + 模式 + 左上角系列名
+        # 通用项（书籍署名/开关），版式细节见下方子页签
         self.ed_organizer = QLineEdit(cover.get("organizer", "CBETA 整理"))
         self.ed_imprint = QLineEdit(cover.get("imprint", "CBETA 電子佛典自選叢書"))
         self.ed_imprint.setToolTip("封面左上角文字；可填系列名（如太虛大師全書）或落款；留空则不绘制")
@@ -231,6 +240,7 @@ class SettingsDialog(QDialog):
         form.addRow(self.chk_cover_enabled)
         hint_cover = QLabel("关闭后直接拼接原文件，仅生成书签（原书书签降一级归入对应书下）。")
         hint_cover.setStyleSheet("color: gray;")
+        hint_cover.setWordWrap(True)
         form.addRow(hint_cover)
         # 说明页（部类统计 + 完整清单，自动从书单推导；仅封面模式生效）
         intro = cover.setdefault("intro", {"enabled": True, "title": "说明", "list": True})
@@ -241,74 +251,29 @@ class SettingsDialog(QDialog):
         form.addRow("说明页标题", self.ed_intro_title)
         hint_intro = QLabel("部类统计与清单自动从丛书书单推导；仅在「合并时使用封面/封底页」开启时插入。")
         hint_intro.setStyleSheet("color: gray;")
+        hint_intro.setWordWrap(True)
         form.addRow(hint_intro)
-        # 封面页基准字号（纸张联动基准）
-        sizes = cover.setdefault("sizes", {})
-        self.sp_body = {}
-        for paper in ["a5", "a4", "16k", "32k"]:
-            self.sp_body[paper] = self._no_wheel_until_focused(QSpinBox())
-            self.sp_body[paper].setRange(6, 40)
-            self.sp_body[paper].setValue(int(sizes.get(f"body_{paper}", {"a5":10,"a4":12,"16k":11,"32k":9}[paper])))
-            form.addRow(f"封面页基准字号（{paper}）", self.sp_body[paper])
-        # 封面背景色
-        styles = cover.setdefault("styles", {})
-        bg = styles.setdefault("background", {"color": [250, 245, 230]})
-        self._bg_color = QColor(*bg.get("color", [250, 245, 230]))
-        self.btn_bg = QPushButton()
-        self.btn_bg.setFixedWidth(80)
-        self._refresh_bg_btn()
-        self.btn_bg.clicked.connect(self._pick_bg)
-        form.addRow("封面背景色", self.btn_bg)
-        # 字体（封面/目录/说明页）：styles.<key>.font
-        font_box = QGroupBox("字体（封面/目录/说明页）")
-        font_form = QFormLayout(font_box)
-        self.font_rows = {}
-        font_labels = [
-            ("cbeta", "左上角文字"), ("title", "封面标题"), ("organizer", "整理者"),
-            ("date", "日期"), ("toc_title", "目录/说明标题"),
-            ("toc_item", "目录/说明条目"), ("toc_page", "目录页码"),
-        ]
-        for key, label in font_labels:
-            row = QWidget()
-            h = QHBoxLayout(row)
-            h.setContentsMargins(0, 0, 0, 0)
-            ed = QLineEdit(self._slash(styles.get(key, {}).get("font", "")))
-            ed.setReadOnly(True)
-            ed.setToolTip("缺繁体字形时按顺序回退到系统全字库（黑体simhei → 微软雅黑msyh → 宋体simsun）")
-            btn = QPushButton("浏览…")
-            btn.clicked.connect(lambda _, k=key, e=ed: self._pick_font(k, e))
-            h.addWidget(ed, 1); h.addWidget(btn)
-            self.font_rows[key] = ed
-            font_form.addRow(label, row)
-        form.addRow(font_box)
-        # 每纸张边距(pt)：封面/目录/说明页统一以边距为准
-        margins = sizes.setdefault("margins", {})
-        mg_box = QGroupBox("每纸张边距(pt)")
-        mg_grid = QGridLayout(mg_box)
-        for col, name in enumerate(["纸张", "左", "右", "上", "下"]):
-            mg_grid.addWidget(QLabel(name), 0, col)
-        default_margins = {
-            "a5": {"left":36,"right":36,"top":40,"bottom":40},
-            "a4": {"left":48,"right":48,"top":48,"bottom":48},
-            "16k": {"left":42,"right":42,"top":44,"bottom":44},
-            "32k": {"left":32,"right":32,"top":36,"bottom":36},
-        }
-        self.sp_margins = {}
-        for row, paper in enumerate(["a5", "a4", "16k", "32k"], start=1):
-            mg_grid.addWidget(QLabel(paper), row, 0)
-            self.sp_margins[paper] = {}
-            cur = margins.get(paper, {}) if isinstance(margins.get(paper), dict) else {}
-            for col, side in enumerate(["left", "right", "top", "bottom"], start=1):
-                sp = self._no_wheel_until_focused(QSpinBox())
-                sp.setRange(0, 200)
-                sp.setValue(int(cur.get(side, default_margins[paper][side])))
-                self.sp_margins[paper][side] = sp
-                mg_grid.addWidget(sp, row, col)
-        form.addRow(mg_box)
-        hint_mg = QLabel("封面文本、目录、说明页均以该边距为界（未配置纸张时回退到内部默认）。")
-        hint_mg.setStyleSheet("color: gray;")
-        form.addRow(hint_mg)
-        # 图像（佛像/韦陀）
+        outer.addLayout(form)
+        # 版式子页签（按使用顺序）：佛像/背景色 → 字体 → 基准字号 → 边距
+        sub = QTabWidget()
+        self._cover_subtabs = sub
+        sub.addTab(self._cover_tab_images(cover), "封面佛像、背景色")
+        sub.addTab(self._cover_tab_fonts(cover), "字体")
+        sub.addTab(self._cover_tab_sizes(cover), "基准字号")
+        sub.addTab(self._cover_tab_margins(cover), "边距")
+        outer.addWidget(sub)
+        # 面板过长：套卷动窗
+        from PySide6.QtWidgets import QScrollArea
+        sc = QScrollArea()
+        sc.setWidgetResizable(True)
+        sc.setFrameShape(QScrollArea.NoFrame)
+        sc.setWidget(w)
+        return sc
+
+    def _cover_tab_images(self, cover):
+        # 子页签 1：封面佛像/韦陀 + 背景色
+        w = QWidget()
+        form = QFormLayout(w)
         images = cover.setdefault("images", {
             "buddha": {"file": "assets/images/buddha.jpg", "enabled": True},
             "weituo": {"file": "assets/images/weituo.jpg", "enabled": True},
@@ -333,14 +298,95 @@ class SettingsDialog(QDialog):
         form.addRow(self.btn_reset_images)
         hint = QLabel("关闭图像开关后，合成时不插入该图及其前后空白页。")
         hint.setStyleSheet("color: gray;")
+        hint.setWordWrap(True)
         form.addRow(hint)
-        # 面板过长：套卷动窗
-        from PySide6.QtWidgets import QScrollArea
-        sc = QScrollArea()
-        sc.setWidgetResizable(True)
-        sc.setFrameShape(QScrollArea.NoFrame)
-        sc.setWidget(w)
-        return sc
+        # 封面背景色
+        styles = cover.setdefault("styles", {})
+        bg = styles.setdefault("background", {"color": [250, 245, 230]})
+        self._bg_color = QColor(*bg.get("color", [250, 245, 230]))
+        self.btn_bg = QPushButton()
+        self.btn_bg.setFixedWidth(80)
+        self._refresh_bg_btn()
+        self.btn_bg.clicked.connect(self._pick_bg)
+        form.addRow("封面背景色", self.btn_bg)
+        return w
+
+    def _cover_tab_fonts(self, cover):
+        # 子页签 2：字体（封面/目录/说明页）：styles.<key>.font
+        w = QWidget()
+        form = QFormLayout(w)
+        styles = cover.setdefault("styles", {})
+        self.font_rows = {}
+        font_labels = [
+            ("cbeta", "左上角系列名"), ("title", "封面标题"), ("organizer", "整理者"),
+            ("date", "日期"), ("toc_title", "目录/说明标题"),
+            ("toc_item", "目录/说明条目"), ("toc_page", "目录页码"),
+        ]
+        for key, label in font_labels:
+            row = QWidget()
+            h = QHBoxLayout(row)
+            h.setContentsMargins(0, 0, 0, 0)
+            ed = QLineEdit(self._native_path(styles.get(key, {}).get("font", "")))
+            ed.setReadOnly(True)
+            ed.setToolTip("缺繁体字形时按顺序回退到系统全字库（黑体simhei → 微软雅黑msyh → 宋体simsun）")
+            btn = QPushButton("浏览…")
+            btn.clicked.connect(lambda _, k=key, e=ed: self._pick_font(k, e))
+            h.addWidget(ed, 1); h.addWidget(btn)
+            self.font_rows[key] = ed
+            form.addRow(label, row)
+        return w
+
+    def _cover_tab_sizes(self, cover):
+        # 子页签 3：封面页基准字号（纸张联动基准）
+        w = QWidget()
+        form = QFormLayout(w)
+        sizes = cover.setdefault("sizes", {})
+        self.sp_body = {}
+        for paper in ["a5", "a4", "16k", "32k"]:
+            self.sp_body[paper] = self._no_wheel_until_focused(QSpinBox())
+            self.sp_body[paper].setRange(6, 40)
+            self.sp_body[paper].setValue(int(sizes.get(f"body_{paper}", {"a5":10,"a4":12,"16k":11,"32k":9}[paper])))
+            form.addRow(f"封面页基准字号（{paper}）", self.sp_body[paper])
+        hint = QLabel("基准字号按源 PDF 纸张自动选用；其余位置/字号由此派生。")
+        hint.setStyleSheet("color: gray;")
+        hint.setWordWrap(True)
+        form.addRow(hint)
+        return w
+
+    def _cover_tab_margins(self, cover):
+        # 子页签 4：每纸张边距(pt)：封面/目录/说明页统一以边距为准
+        w = QWidget()
+        v = QVBoxLayout(w)
+        sizes = cover.setdefault("sizes", {})
+        margins = sizes.setdefault("margins", {})
+        mg_box = QGroupBox("每纸张边距(pt)")
+        mg_grid = QGridLayout(mg_box)
+        for col, name in enumerate(["纸张", "左", "右", "上", "下"]):
+            mg_grid.addWidget(QLabel(name), 0, col)
+        default_margins = {
+            "a5": {"left":36,"right":36,"top":40,"bottom":40},
+            "a4": {"left":48,"right":48,"top":48,"bottom":48},
+            "16k": {"left":42,"right":42,"top":44,"bottom":44},
+            "32k": {"left":32,"right":32,"top":36,"bottom":36},
+        }
+        self.sp_margins = {}
+        for row, paper in enumerate(["a5", "a4", "16k", "32k"], start=1):
+            mg_grid.addWidget(QLabel(paper), row, 0)
+            self.sp_margins[paper] = {}
+            cur = margins.get(paper, {}) if isinstance(margins.get(paper), dict) else {}
+            for col, side in enumerate(["left", "right", "top", "bottom"], start=1):
+                sp = self._no_wheel_until_focused(QSpinBox())
+                sp.setRange(0, 200)
+                sp.setValue(int(cur.get(side, default_margins[paper][side])))
+                self.sp_margins[paper][side] = sp
+                mg_grid.addWidget(sp, row, col)
+        v.addWidget(mg_box)
+        hint_mg = QLabel("封面文本、目录、说明页均以该边距为界（未配置纸张时回退到内部默认）。")
+        hint_mg.setStyleSheet("color: gray;")
+        hint_mg.setWordWrap(True)
+        v.addWidget(hint_mg)
+        v.addStretch(1)
+        return w
 
     def _sync_from_cfg(self):
         """恢复默认/原始后，将 self._cfg 的值重新填充到所有控件。"""
@@ -401,7 +447,7 @@ class SettingsDialog(QDialog):
         self.chk_by_volume.setChecked(bool((c.get("merge", {}) or {}).get("by_volume", False)))
         styles = cover.setdefault("styles", {})
         for key, ed in self.font_rows.items():
-            ed.setText(self._slash(styles.get(key, {}).get("font", "")))
+            ed.setText(self._native_path(styles.get(key, {}).get("font", "")))
         theme = c.setdefault("theme", {"mode": "system", "accent": "#8B4513"})
         self.cb_theme.setCurrentText(theme.get("mode", "system"))
         self.ed_accent.setText(theme.get("accent", "#8B4513"))
@@ -740,8 +786,8 @@ class SettingsDialog(QDialog):
             self._refresh_bg_btn()
 
     def _pick_font(self, key, ed):
-        # 起始目录：当前字体所在目录（无则 C:/Windows/Fonts）；存正斜杠
-        start = "C:/Windows/Fonts"
+        # 起始目录：当前字体所在目录（无则系统字体目录）
+        start = str(Path(os.environ.get("WINDIR", "C:/Windows")) / "Fonts")
         cur = (ed.text() or "").strip()
         if cur:
             p = Path(cur)
@@ -752,12 +798,17 @@ class SettingsDialog(QDialog):
         f, _ = QFileDialog.getOpenFileName(self, f"选择字体（{key}）", start,
                                            "字体 (*.ttf *.ttc *.otf)")
         if f:
-            ed.setText(self._slash(f))
+            ed.setText(self._native_path(f))
 
     @staticmethod
-    def _slash(p):
-        # 路径统一正斜杠（配置里反斜杠显示混乱，且跨处比对需一致）
-        return (p or "").replace("\\", "/")
+    def _native_path(p):
+        # 用当前系统的默认分隔符显示（Windows 为反斜杠）
+        if not p:
+            return ""
+        try:
+            return str(Path(p))
+        except Exception:
+            return p
 
     def _pick_image(self, key, ed):
         f, _ = QFileDialog.getOpenFileName(self, f"选择{key}图片", str(IMAGES_DIR),
