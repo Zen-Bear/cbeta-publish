@@ -1,5 +1,5 @@
 ﻿# -*- coding: utf-8 -*-
-from PySide6.QtWidgets import QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QTreeWidget, QTreeWidgetItem, QListWidget, QListWidgetItem, QSplitter, QSplitterHandle, QLabel, QPushButton, QToolButton, QLineEdit, QComboBox, QInputDialog, QMessageBox, QApplication, QTabWidget, QTextBrowser, QSizePolicy, QProgressDialog, QScrollArea
+from PySide6.QtWidgets import QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QTreeWidget, QTreeWidgetItem, QListWidget, QListWidgetItem, QSplitter, QSplitterHandle, QLabel, QPushButton, QToolButton, QLineEdit, QComboBox, QInputDialog, QMessageBox, QApplication, QTabWidget, QTextBrowser, QSizePolicy, QProgressDialog, QScrollArea, QGroupBox
 from PySide6.QtCore import Qt, QEvent, QTimer
 from PySide6.QtGui import QShortcut, QKeySequence
 from pathlib import Path
@@ -90,6 +90,24 @@ class _Splitter(QSplitter):
         return _PanelHandle(self.orientation(), self)
 
 
+def _log_replace_last(view, html: str) -> bool:
+    """把日志面板最后一段替换为 html（用于「下载 X ...」与「完成 X」合并成一行）。
+
+    成功替换返回 True；面板为空（无可替换行）返回 False，由调用方改为追加。
+    """
+    from PySide6.QtGui import QTextCursor
+    doc = view.document()
+    if doc.blockCount() <= 1 and not doc.toPlainText().strip():
+        return False
+    # 只替换最后一段的文本（EndOfBlock 不含段落分隔符，避免与前一段合并）
+    blk = doc.lastBlock()
+    cur = QTextCursor(blk)
+    cur.movePosition(QTextCursor.EndOfBlock, QTextCursor.KeepAnchor)
+    cur.removeSelectedText()
+    cur.insertHtml(html)
+    return True
+
+
 def apply_ui_fonts(ui: dict):
     """即时应用界面字体/字号与补充字型（设置保存后调用，无需重启）。"""
     from PySide6.QtGui import QFont, QFontDatabase
@@ -141,25 +159,52 @@ class MainWindow(QMainWindow):
         lv.addWidget(self.nav_combo)
         self.bulei_filter=QComboBox()
         self.bulei_filter.setEditable(True)
-        self.bulei_filter.setPlaceholderText("目录：全部部类（可输入筛选）")
-        self.bulei_filter.addItem("目录：全部部类", None)
+        self.bulei_filter.setPlaceholderText("全部部类（可输入筛选）")
+        self.bulei_filter.addItem("全部部类", None)
         lv.addWidget(self.bulei_filter)
+        # 三藏视图二级过滤：部类
+        self.tripitaka_filter=QComboBox()
+        self.tripitaka_filter.setToolTip("二级过滤：部类")
+        self.tripitaka_filter.addItem("全部部类", None)
+        lv.addWidget(self.tripitaka_filter)
+        # 刊本视图二级过滤：刊本（一级目录本身）
+        self.vol_filter=QComboBox()
+        self.vol_filter.setToolTip("过滤：刊本")
+        self.vol_filter.addItem("全部刊本", None)
+        lv.addWidget(self.vol_filter)
         self.coll_filter=QComboBox()
         self.coll_filter.addItem("分类：全部", None)
         lv.addWidget(self.coll_filter)
         self.coll_tag_filter=QComboBox()
         self.coll_tag_filter.addItem("标签：全部", None)
         lv.addWidget(self.coll_tag_filter)
-        self.author_sort=QComboBox()
-        self.author_sort.addItems(["拼音排序","笔画排序","朝代排序"])
-        lv.addWidget(self.author_sort)
+        # 作者排序：单选按钮（原下拉框）
+        self.author_sort_row=QWidget()
+        asr=QHBoxLayout(self.author_sort_row)
+        asr.setContentsMargins(0,0,0,0)
+        from PySide6.QtWidgets import QRadioButton, QButtonGroup
+        self.author_sort_group=QButtonGroup(self.author_sort_row)
+        self.author_radios={}
+        for _i, _name in enumerate(["拼音排序","笔画排序","朝代排序"]):
+            rb=QRadioButton(_name)
+            asr.addWidget(rb)
+            self.author_sort_group.addButton(rb, _i)
+            self.author_radios[_name]=rb
+        self.author_radios["拼音排序"].setChecked(True)
+        asr.addStretch()
+        lv.addWidget(self.author_sort_row)
         self.author_filter=QComboBox()
         self.author_filter.setEditable(True)
         self.author_filter.setPlaceholderText("笔画：全部")
         lv.addWidget(self.author_filter)
         self.search=QLineEdit()
-        self.search.setPlaceholderText("搜索经名/作者/经号（全局）")
-        lv.addWidget(self.search)
+        self.search.setPlaceholderText("经名/作者/经号（全局）")
+        search_row=QWidget()
+        sh=QHBoxLayout(search_row)
+        sh.setContentsMargins(0,0,0,0)
+        sh.addWidget(QLabel("搜索："))
+        sh.addWidget(self.search, 1)
+        lv.addWidget(search_row)
         self.tree=QTreeWidget()
         self.tree.setHeaderHidden(True)
         self.tree.setDragEnabled(True)
@@ -284,6 +329,10 @@ class MainWindow(QMainWindow):
         hb.addStretch()
         hb.addWidget(self.btn_remove)
         rv.addWidget(btn_box)
+        publish_group = QGroupBox("发布")
+        pg = QVBoxLayout(publish_group)
+        pg.setContentsMargins(6, 6, 6, 6)
+        pg.setSpacing(4)
         fmt_box=QWidget()
         fh=QHBoxLayout(fmt_box)
         fh.setContentsMargins(0,0,0,0)
@@ -298,12 +347,11 @@ class MainWindow(QMainWindow):
         self.chk_epub.setIcon(QIcon(str(icon_dir/"epub.png")))
         fh.addWidget(self.chk_pdf); fh.addWidget(self.chk_epub)
         fh.addStretch()
-        rv.addWidget(fmt_box)
+        pg.addWidget(fmt_box)
         publish_box=QWidget()
         hb2=QHBoxLayout(publish_box)
         hb2.setContentsMargins(0,0,0,0)
-        hb2.addWidget(QLabel("发布:"))
-        self.btn_download=QPushButton("下载")
+        self.btn_download=QPushButton("下载/更新")
         self.btn_merge=QPushButton("合并")
         self.btn_merge.setToolTip("PDF/ePub合并成一个文件（单一格式，允许分册）")
         self.btn_zip=QPushButton("ZIP")
@@ -312,7 +360,8 @@ class MainWindow(QMainWindow):
         self.btn_export.setToolTip("拷贝到指定目录")
         hb2.addWidget(self.btn_merge); hb2.addWidget(self.btn_zip); hb2.addWidget(self.btn_export); hb2.addWidget(self.btn_download)
         hb2.addStretch()
-        rv.addWidget(publish_box)
+        pg.addWidget(publish_box)
+        rv.addWidget(publish_group)
         cache_box=QWidget()
         ch=QHBoxLayout(cache_box)
         ch.setContentsMargins(0,0,0,0)
@@ -383,9 +432,11 @@ class MainWindow(QMainWindow):
 
         self.nav_combo.currentTextChanged.connect(self._on_nav_changed)
         self.bulei_filter.currentIndexChanged.connect(self._on_bulei_filter)
+        self.tripitaka_filter.currentIndexChanged.connect(self._on_tripitaka_filter)
+        self.vol_filter.currentIndexChanged.connect(self._on_vol_filter)
         self.author_filter.currentIndexChanged.connect(self._on_author_filter)
         self.coll_filter.currentIndexChanged.connect(self._on_coll_filter)
-        self.author_sort.currentTextChanged.connect(self._on_author_sort)
+        self.author_sort_group.buttonClicked.connect(lambda *_: self._refresh_author_tree())
         self.sort_combo.currentTextChanged.connect(self._on_sort_changed)
         self.tree.itemClicked.connect(self._on_tree_preview)
         self.tree.itemDoubleClicked.connect(self._on_tree_double_click)
@@ -450,11 +501,9 @@ class MainWindow(QMainWindow):
         from cbeta_publish.utils import text_util
         text_util.init()
         self._title_s2={}
-        self._bulei_title_s2={}
         try:
             def walk_b(nodes):
                 for n in nodes:
-                    self._bulei_title_s2[n.title]=text_util.to_simplified(n.title)
                     for w in WORK_RE.findall(n.title):
                         if len(w)>=4 and (self.sutra.title_of(w)!=w or self.mapping.work_exists(w)):
                             t=self.sutra.title_of(w)
@@ -585,11 +634,16 @@ class MainWindow(QMainWindow):
         try:
             mulu=Path(self.config["mulu_dir"])
             cat_json=mulu/"category.json"
+            bt_txt=mulu/"bulei.txt"
             if cat_json.exists():
                 # 官方 scope-selector/category.json（权威，CBETA 部類）
                 self._bulei_roots=parse_bulei_json(cat_json)
+                # 官方偶缺分组（如 般若部類 缺 01/09），用 bulei.txt 补同层缺失分组
+                if bt_txt.exists():
+                    from cbeta_publish.catalog.bulei_parser import merge_missing_children
+                    merge_missing_children(self._bulei_roots, parse_bulei(bt_txt))
             else:
-                self._bulei_roots=parse_bulei(mulu/"bulei.txt")
+                self._bulei_roots=parse_bulei(bt_txt)
             self._refresh_bulei_tree()
         except Exception as e:
             print(e)
@@ -600,7 +654,7 @@ class MainWindow(QMainWindow):
         self.bulei_filter.blockSignals(True)
         cur = self.bulei_filter.currentData()
         self.bulei_filter.clear()
-        self.bulei_filter.addItem("全部（全部部类）", None)
+        self.bulei_filter.addItem("全部部类", None)
         def collect_levels(nodes, out):
             for n in nodes:
                 if n.level==1:
@@ -616,13 +670,17 @@ class MainWindow(QMainWindow):
                 if self.bulei_filter.itemData(i)==cur:
                     self.bulei_filter.setCurrentIndex(i)
                     break
+        else:
+            # clear()+addItem() 后可编辑 combo 可能停在 currentIndex=-1（只显示占位符）
+            # → 显式回到「全部部类」并同步行编辑文本
+            self.bulei_filter.setCurrentIndex(0)
         self.bulei_filter.blockSignals(False)
         # 可编辑 combo：恢复行编辑显示文本
-        if cur is not None:
-            for i in range(self.bulei_filter.count()):
-                if self.bulei_filter.itemData(i)==cur:
-                    self.bulei_filter.setEditText(self.bulei_filter.itemText(i))
-                    break
+        idx = self.bulei_filter.currentIndex()
+        if idx < 0:
+            idx = 0
+            self.bulei_filter.setCurrentIndex(0)
+        self.bulei_filter.setEditText(self.bulei_filter.itemText(idx))
         nodes = [filter_node] if filter_node else self._bulei_roots
         def add(nodes, parent):
             for n in nodes:
@@ -638,11 +696,32 @@ class MainWindow(QMainWindow):
         add(nodes, None)
         self._expand_tree()
 
-    def _refresh_tripitaka_tree(self):
-        # 三藏视图：三藏→部類→…→经（复用 bulei 子树，内存重分组）
+    def _refresh_tripitaka_tree(self, filter_title=None):
+        # 三藏视图：三藏→部類→…→经（复用 bulei 子树，内存重分组）；二级过滤=部类
         from cbeta_publish.catalog.tripitaka_service import group_by_pitaka
         self.tree.clear()
         groups=group_by_pitaka(self._bulei_roots)
+        hidden=set(self._catalog_filter_hidden("tripitaka"))
+        if filter_title is None:
+            filter_title=self.tripitaka_filter.currentData()
+        # 二级过滤下拉：部类（一级节点）
+        self.tripitaka_filter.blockSignals(True)
+        self.tripitaka_filter.clear()
+        self.tripitaka_filter.addItem("全部部类", None)
+        for _pitaka, _nodes in groups:
+            for _n in _nodes:
+                if _n.title in hidden:
+                    continue
+                self.tripitaka_filter.addItem(_n.title, _n.title)
+        idx=0
+        if filter_title:
+            for i in range(self.tripitaka_filter.count()):
+                if self.tripitaka_filter.itemData(i)==filter_title:
+                    idx=i
+                    break
+        self.tripitaka_filter.setCurrentIndex(idx)
+        self.tripitaka_filter.blockSignals(False)
+        filter_title=self.tripitaka_filter.currentData()
         def add(nodes, parent):
             for n in nodes:
                 item=QTreeWidgetItem([n.title])
@@ -653,8 +732,9 @@ class MainWindow(QMainWindow):
                     self.tree.addTopLevelItem(item)
                 add(n.children, item)
         for pitaka, nodes in groups:
-            hidden=set(self._catalog_filter_hidden("tripitaka"))
             nodes=[n for n in nodes if n.title not in hidden]
+            if filter_title:
+                nodes=[n for n in nodes if n.title==filter_title]
             if not nodes:
                 continue
             # 统计该三藏下经数（叶节点）
@@ -700,38 +780,62 @@ class MainWindow(QMainWindow):
             else:
                 self.tree.expandToDepth(depth-1)
 
-    def _refresh_vol_tree(self):
-        # 刊本视图：刊本（藏经版本）→册→经（部分刊本第二层直接是经）；受 catalog.filters.vol.hidden 过滤
-        from cbeta_publish.catalog.vol_service import load_vol, count_works
+    def _refresh_vol_tree(self, filter_edition=None):
+        # 刊本视图：刊本→册→经（部分刊本第二层直接是经）；受 catalog.filters.vol.hidden 过滤；
+        # 过滤下拉 = 刊本（一级目录本身）
+        from cbeta_publish.catalog.vol_service import load_vol
         self.tree.clear()
         path=Path(self.config["mulu_dir"])/"vol.json"
         hidden=set(self._catalog_filter_hidden("vol"))
         if not path.exists():
+            self.vol_filter.blockSignals(True)
+            self.vol_filter.clear(); self.vol_filter.addItem("全部刊本", None)
+            self.vol_filter.blockSignals(False)
             it=QTreeWidgetItem(["（未下载 vol.json，请到 设置→更新源 检查更新）"])
             it.setForeground(0, Qt.gray)
             self.tree.addTopLevelItem(it)
             return
-        def _work_item(wid, wtitle):
-            l_item=QTreeWidgetItem([wtitle])
-            l_item.setData(0, Qt.UserRole, {"key": wid, "title": wtitle})
-            return l_item
-        for entry in load_vol(path):
+        entries=load_vol(path)
+        if filter_edition is None:
+            filter_edition=self.vol_filter.currentData()
+        # 过滤下拉：刊本（一级）
+        self.vol_filter.blockSignals(True)
+        self.vol_filter.clear()
+        self.vol_filter.addItem("全部刊本", None)
+        for entry in entries:
             edition=entry["edition"]
             if edition in hidden:
                 continue
+            self.vol_filter.addItem(edition, edition)
+        idx=0
+        if filter_edition:
+            for i in range(self.vol_filter.count()):
+                if self.vol_filter.itemData(i)==filter_edition:
+                    idx=i
+                    break
+        self.vol_filter.setCurrentIndex(idx)
+        self.vol_filter.blockSignals(False)
+        filter_edition=self.vol_filter.currentData()
+        for entry in entries:
+            edition=entry["edition"]
+            if edition in hidden:
+                continue
+            if filter_edition and edition!=filter_edition:
+                continue
             vols=entry.get("vols", [])
-            e_item=QTreeWidgetItem([f"{edition} ({len(vols)}册/{count_works(entry)}部)"])
+            works=entry.get("works", [])
+            total=sum(len(v["works"]) for v in vols)+len(works)
+            e_item=QTreeWidgetItem([f"{edition} ({len(vols)}册/{total}部)"])
             e_item.setData(0, Qt.UserRole, {"vol": edition})
             self.tree.addTopLevelItem(e_item)
-            # 直属经（部分刊本无册分组）
-            for wid, wtitle in entry.get("works", []):
-                e_item.addChild(_work_item(wid, wtitle))
+            for wid, wtitle in works:
+                e_item.addChild(self._work_item(wid, wtitle))
             for vol in vols:
                 v_item=QTreeWidgetItem([f"{vol['title']} ({len(vol['works'])}部)"])
                 v_item.setData(0, Qt.UserRole, {"vol_title": vol["title"], "edition": edition})
                 e_item.addChild(v_item)
                 for wid, wtitle in vol["works"]:
-                    v_item.addChild(_work_item(wid, wtitle))
+                    v_item.addChild(self._work_item(wid, wtitle))
         self._expand_tree()
 
     def _refresh_dynasty_tree(self):
@@ -763,9 +867,27 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, lambda n=node: self._refresh_bulei_tree(filter_node=n))
         self.list.clear()
 
+    def _on_tripitaka_filter(self, idx):
+        # 三藏视图二级过滤：按部类标题过滤
+        title=self.tripitaka_filter.currentData()
+        QTimer.singleShot(0, lambda t=title: self._refresh_tripitaka_tree(filter_title=t))
+        self.list.clear()
+
+    def _on_vol_filter(self, idx):
+        # 刊本视图过滤：按刊本（一级目录）过滤
+        key=self.vol_filter.currentData()
+        QTimer.singleShot(0, lambda k=key: self._refresh_vol_tree(filter_edition=k))
+        self.list.clear()
+
+    def _author_sort_mode(self):
+        for name, rb in self.author_radios.items():
+            if rb.isChecked():
+                return name
+        return "拼音排序"
+
     def _on_author_filter(self, idx):
         d=self.author_filter.currentData()
-        if self.author_sort.currentText() in ("拼音排序","朝代排序"):
+        if self._author_sort_mode() in ("拼音排序","朝代排序"):
             QTimer.singleShot(0, lambda l=d: self._refresh_author_tree(filter_letter=l))
         else:
             QTimer.singleShot(0, lambda s=d: self._refresh_author_tree(filter_stroke=s))
@@ -773,9 +895,6 @@ class MainWindow(QMainWindow):
     def _on_coll_filter(self, idx):
         cat=self.coll_filter.currentData()
         QTimer.singleShot(0, lambda c=cat: self._refresh_coll_tree(filter_cat=c))
-
-    def _on_author_sort(self, mode):
-        self._refresh_author_tree()
 
     # ---------- 作者树 ----------
     def _dynasty_index(self):
@@ -793,6 +912,11 @@ class MainWindow(QMainWindow):
         self._dyn_order=order
         return dmap, order
 
+    @staticmethod
+    def _stroke_label(title):
+        # 笔画分组标题形如「1畫(stroke)」→ 显示为「1畫」
+        return re.sub(r"\s*\(stroke\)\s*", "", title or "").strip()
+
     def _refresh_author_tree(self, filter_stroke=None, filter_letter=None):
         self.tree.clear()
         try:
@@ -802,7 +926,7 @@ class MainWindow(QMainWindow):
                 strokes=data[0].get("children",[])
             else:
                 strokes=data
-            mode=self.author_sort.currentText()
+            mode=self._author_sort_mode()
             # 过滤下拉按排序模式填充：笔画排序=笔画列表；拼音排序=A-Z 字母
             self.author_filter.blockSignals(True)
             cur=self.author_filter.currentData()
@@ -819,7 +943,7 @@ class MainWindow(QMainWindow):
             else:
                 self.author_filter.addItem("笔画：全部", None)
                 for s in strokes:
-                    self.author_filter.addItem(s.get("title",""), s)
+                    self.author_filter.addItem(self._stroke_label(s.get("title","")), s)
             if cur:
                 for i in range(self.author_filter.count()):
                     if self.author_filter.itemData(i)==cur:
@@ -890,7 +1014,7 @@ class MainWindow(QMainWindow):
             if filter_stroke:
                 strokes=[filter_stroke]
             for stroke in strokes:
-                s_item=QTreeWidgetItem([stroke.get("title","")])
+                s_item=QTreeWidgetItem([self._stroke_label(stroke.get("title",""))])
                 s_item.setData(0, Qt.UserRole, stroke)
                 self.tree.addTopLevelItem(s_item)
                 for surname in stroke.get("children",[]):
@@ -914,6 +1038,12 @@ class MainWindow(QMainWindow):
         tag=self.coll_tag_filter.currentData()
         QTimer.singleShot(0, lambda t=tag: self._refresh_coll_tree(
             filter_cat=self.coll_filter.currentData(), filter_tag=t))
+
+    def _work_item(self, wid, wtitle=""):
+        # 统一的作品叶节点（各树共用；_item_payload 认 {"key": wid}）
+        it=QTreeWidgetItem([wtitle or wid])
+        it.setData(0, Qt.UserRole, {"key": wid, "title": wtitle or wid})
+        return it
 
     def _refresh_coll_tree(self, filter_cat=None, filter_tag=None):
         self.tree.clear()
@@ -955,6 +1085,15 @@ class MainWindow(QMainWindow):
             item=QTreeWidgetItem([f"{d.get('name')} [{self._cat_name(d.get('category',''))}] {len(d.get('work_ids',[]))}部"])
             item.setData(0, Qt.UserRole, d)
             self.tree.addTopLevelItem(item)
+            # 列出经书名字（原来只有丛书名）
+            for wid in (d.get("work_ids", []) or []):
+                title=self.sutra.title_of(wid)
+                if title==wid:
+                    m=self.mapping.resolve(wid)
+                    if m:
+                        title=m.get("name") or wid
+                item.addChild(self._work_item(wid, f"{title}"))
+        self._expand_tree()
 
     def _load_collections(self):
         cdir=Path(self.config["collections_dir"])
@@ -1348,8 +1487,10 @@ class MainWindow(QMainWindow):
         self.tree.clear()
         self.list.clear()
         self.bulei_filter.setVisible(mode=="部类")
+        self.tripitaka_filter.setVisible(mode=="三藏")
+        self.vol_filter.setVisible(mode=="刊本")
         self.author_filter.setVisible(mode=="作者")
-        self.author_sort.setVisible(mode=="作者")
+        self.author_sort_row.setVisible(mode=="作者")
         self.coll_filter.setVisible(mode=="丛书")
         self.coll_tag_filter.setVisible(mode=="丛书")
         # 左栏状态栏：操作提示（按模式）
@@ -1943,13 +2084,45 @@ class MainWindow(QMainWindow):
                 out.append(wk)
         return out
 
+    def _is_known_work(self, w):
+        # 树标题里抓出的候选是否为真实作品（滤掉 T01 这类分组号）
+        return len(w)>=4 and (self.sutra.title_of(w)!=w or self.mapping.work_exists(w))
+
+    def _search_current_tree(self, kw):
+        """在当前左栏树里按关键字找节点（大小写不敏感；繁简/异体变体），命中即取其全部子孙作品。
+
+        覆盖所有视图（部类/三藏/刊本/朝代/作者/丛书），与原先只对部类生效的行为一致。
+        """
+        kw_l=kw.lower()
+        vars_kw_s={text_util.to_simplified(v).lower() for v in self._search_variants(kw)}
+        def _hit(text):
+            tl=(text or "").lower()
+            if kw_l in tl:
+                return True
+            ts=text_util.to_simplified(text).lower()
+            return any(kv in ts for kv in vars_kw_s)
+        out=[]; seen=set()
+        def walk(it):
+            if _hit(it.text(0)):
+                for wid, _g in self._item_payload(it):
+                    if wid and wid not in seen and self._is_known_work(wid):
+                        seen.add(wid); out.append(wid)
+                return
+            for i in range(it.childCount()):
+                walk(it.child(i))
+        for i in range(self.tree.topLevelItemCount()):
+            walk(self.tree.topLevelItem(i))
+        return out
+
     def _on_search(self, kw):
         # 始终从搜索基准过滤；结果只更新显示，不改基准，回车可重复搜
+        # 英文大小写不敏感（t0220 与 T0220 等价）
         if not kw:
             self._current_works=list(self._base_works)
             self._show_works_sorted()
             return
-        vars_kw_s={text_util.to_simplified(v) for v in self._search_variants(kw)}
+        kw_l=kw.lower()
+        vars_kw_s={text_util.to_simplified(v).lower() for v in self._search_variants(kw)}
         # 作者模式：优先作者搜索（避免被当前列表的其它匹配抢占）
         if self.nav_combo.currentText()=="作者":
             res=self._author_search(kw)
@@ -1960,30 +2133,21 @@ class MainWindow(QMainWindow):
                     self._show_works_sorted()
                     return
         def _match(w):
-            if kw in w:
+            if kw_l in (w or "").lower():
                 return True
             t_s,m_s=self._title_s2.get(w,("",""))
             for kv in vars_kw_s:
-                if kv in t_s or kv in m_s:
+                if kv in t_s.lower() or kv in m_s.lower():
                     return True
             t=self.sutra.title_of(w)
-            if kw in t:
+            if kw_l in (t or "").lower():
                 return True
             m=(self.mapping.resolve(w) or {}).get("name","")
-            return kw in m
+            return kw_l in (m or "").lower()
         filtered=[w for w in self._base_works if _match(w)]
-        if not filtered and self.nav_combo.currentText()=="部类":
-            all_works=[]
-            def collect_all(nodes):
-                for n in nodes:
-                    if any(kv in self._bulei_title_s2.get(n.title, n.title) for kv in vars_kw_s):
-                        for w in WORK_RE.findall(n.title):
-                            if len(w)>=4 and (self.sutra.title_of(w)!=w or self.mapping.work_exists(w)):
-                                all_works.append(w)
-                    collect_all(n.children)
-            collect_all(self._bulei_roots)
-            seen=set()
-            filtered=[w for w in all_works if not (w in seen or seen.add(w))]
+        if not filtered:
+            # 各视图统一：在当前左栏树里按标题查找（部类/三藏/刊本/朝代/作者/丛书）
+            filtered=self._search_current_tree(kw)
         if not filtered and self.nav_combo.currentText()=="作者":
             res=self._author_search(kw)
             if res:
@@ -2899,19 +3063,26 @@ class MainWindow(QMainWindow):
             self.detail.setText(f"已移动 {len(sel)} 部")
 
     def _add_record(self, text):
-        # 下载记录：文本形式（可选中拷贝）；成功 ✓ / 更新 ↻ 蓝字 / 跳过 – 灰字 / 失败 ✗ 红字
+        # 下载记录：文本形式（可选中拷贝）；完成 ✓ / 更新 ↻ 蓝字 / 跳过 – 灰字 / 失败 ✗ 红字。
+        # 以 REPLACE_LAST 开头 => 替换上一行（把「下载 X ...」与「完成 X」合并为一行）。
         import html as _html
+        from cbeta_publish.books.download_worker import REPLACE_LAST
+        replace = text.startswith(REPLACE_LAST)
+        if replace:
+            text = text[len(REPLACE_LAST):]
         t=_html.escape(text)
-        if text.startswith("失败"):
+        if "失败" in text:
             line=f'<font color="red">✗ {t}</font>'
-        elif text.startswith("更新"):
+        elif "更新" in text:
             line=f'<font color="blue">↻ {t}</font>'
         elif text.startswith("跳过"):
             line=f'<font color="gray">– {t}</font>'
-        elif text.startswith("完成"):
+        elif "完成" in text:
             line=f'✓ {t}'
         else:
             line=t
+        if replace and _log_replace_last(self.log_view, line):
+            return
         self.log_view.append(line)
 
     # ---------- 下载 ----------
@@ -2950,7 +3121,7 @@ class MainWindow(QMainWindow):
             if failed:
                 self._add_record("失败: " + ", ".join(failed[:3]) + (f" 等共 {len(failed)} 个" if len(failed)>3 else ""))
                 QMessageBox.warning(self, "下载失败", f"{len(failed)} 个文件下载失败：\n" + "\n".join(failed[:10]) + (f"\n...共 {len(failed)} 个" if len(failed)>10 else ""))
-            self.btn_download.setText("下载")
+            self.btn_download.setText("下载/更新")
             if ok+len(failed)<total:
                 self._add_record(f"取消 剩余 {total-ok-len(failed)} 个未下载")
             self._load_coll_works()
@@ -2976,6 +3147,52 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         self.detail.setText("正在取消下载…")
+
+    def _download_missing(self, pairs, dest_dir, title="下载"):
+        """下载缺失书籍并弹进度窗（合并/ZIP/导出 前置调用）。
+
+        pairs: [(work, fmt), ...]。下载在 DownloadWorker 线程里跑，用嵌套事件循环
+        保持窗口可响应（否则下载期间界面会“无响应”）。返回 True 表示全部下载成功。
+        """
+        from cbeta_publish.books.download_worker import DownloadWorker, REPLACE_LAST
+        from PySide6.QtCore import QEventLoop
+        if not pairs:
+            return True
+        total=max(1, len(pairs))
+        dlg, update, pstate = self._make_progress(title, total)
+        result={"ok": 0, "failed": []}
+        done={"n": 0}
+        def on_progress(msg):
+            # 「下载 X ...」不计数；「\r下载 X ...完成/更新/失败」计一件已完成
+            if msg.startswith(REPLACE_LAST):
+                done["n"]+=1
+            update(done["n"], msg)
+        def on_done(ok, tot, failed):
+            result["ok"]=ok
+            result["failed"]=list(failed)
+        worker=DownloadWorker(dest_dir=dest_dir, pairs=list(pairs))
+        worker.progress.connect(on_progress)
+        worker.finished_all.connect(on_done)
+        pstate["oncancel"]=worker.stop
+        loop=QEventLoop()
+        worker.finished_all.connect(lambda *a: loop.quit())
+        worker.start()
+        loop.exec()
+        try:
+            worker.wait()
+        except Exception:
+            pass
+        failed=result["failed"]
+        summary=[]
+        if result["ok"]:
+            summary.append(f"下载完成 {result['ok']}/{total}")
+        if failed:
+            summary.append(f"失败 {len(failed)}：{', '.join(failed[:10])}")
+        if pstate["cancel"]:
+            summary.append("已取消下载。")
+        pstate["finish"](summary or ["无可下载项。"])
+        self._load_coll_works()
+        return (not failed) and (not pstate["cancel"])
 
     def _commit_publish_meta(self, data, d):
         # 发布元数据：丛书已有未保存改动则并入脏状态（保存时一起落盘）；
@@ -3301,26 +3518,45 @@ class MainWindow(QMainWindow):
         lay.addWidget(bar)
         btn=QPushButton("取消", dlg)
         lay.addWidget(btn)
-        st={"cancel": False, "lines": []}
+        st={"cancel": False, "lines": [], "oncancel": None}
         def _cancel():
             st["cancel"]=True
             btn.setEnabled(False)
             btn.setText("取消中…")
+            cb=st.get("oncancel")
+            if cb is not None:
+                try:
+                    cb()
+                except Exception as e:
+                    print("cancel hook fail", e)
         btn.clicked.connect(_cancel)
         dlg.rejected.connect(_cancel)
         dlg.show()
         def _put(text, is_html):
             # 统一走 insertHtml：纯文本先转义；每次显式复位字符格式，
             # 否则链接的蓝/下划线/锚点格式会泄漏给后续行（源文件名变蓝即此因）。
+            # 以 REPLACE_LAST 开头 => 替换上一行（合并「下载 X ...」与「完成 X」）。
+            from cbeta_publish.books.download_worker import REPLACE_LAST
+            text=str(text)
+            replace=text.startswith(REPLACE_LAST)
+            if replace:
+                text=text[len(REPLACE_LAST):]
             sb=log.verticalScrollBar()
             at_bottom=sb.value() >= sb.maximum()-8
             pos=sb.value()
+            content=text if is_html else _htm.escape(text)
+            if replace and _log_replace_last(log, content):
+                if at_bottom:
+                    log.moveCursor(QTextCursor.End)
+                else:
+                    sb.setValue(min(pos, sb.maximum()))
+                return
             log.moveCursor(QTextCursor.End)
             c=log.textCursor()
             c.setCharFormat(QTextCharFormat())
             c.insertBlock()
             log.setTextCursor(c)
-            log.insertHtml(text if is_html else _htm.escape(str(text)))
+            log.insertHtml(content)
             c2=log.textCursor()
             c2.setCharFormat(QTextCharFormat())
             log.setTextCursor(c2)
@@ -3400,7 +3636,6 @@ class MainWindow(QMainWindow):
             if not works:
                 QMessageBox.warning(self,"失败","丛书为空")
                 return
-        from cbeta_publish.books.official_ebook_source import download_ebook
         from cbeta_publish.books.ebook_merger import merge_pdfs, merge_epubs, MergeCancelled
         from cbeta_publish.books import xml2pdf_bridge
         from cbeta_publish.books import official_ebook_source
@@ -3422,14 +3657,18 @@ class MainWindow(QMainWindow):
                 if not _official_dest(fmt, w).exists():
                     missing.append(f"{w}.{fmt}")
         if missing:
-            ret=QMessageBox.question(self, "下载确认", f"有 {len(missing)} 部未下载（{', '.join(missing[:3])}{'...' if len(missing)>3 else ''}），是否先下载后合并？", QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel)
+            _pre=", ".join(missing[:3]) + ("..." if len(missing)>3 else "")
+            ret=QMessageBox.question(self, "下载确认",
+                f"有 {len(missing)} 部未下载（{_pre}）。\n是否先下载？（「否」= 跳过未下载继续合并）",
+                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel)
             if ret==QMessageBox.Cancel:
                 return
-            elif ret==QMessageBox.Yes:
-                for fmt in fmts:
-                    for w in works:
-                        if _src(w)=="official" and not _official_dest(fmt, w).exists():
-                            download_ebook(w, fmt, dest_dir)
+            if ret==QMessageBox.Yes:
+                pairs=[(w, fmt) for fmt in fmts for w in works
+                       if _src(w)=="official" and not _official_dest(fmt, w).exists()]
+                self._download_missing(pairs, dest_dir, title="下载（合并前）")
+                missing=[f"{w}.{fmt}" for fmt in fmts for w in works
+                         if _src(w)=="official" and not _official_dest(fmt, w).exists()]
         skip_missing = (ret == QMessageBox.No) if missing else False
         self.btn_merge.setEnabled(False)
         success=[]
@@ -3611,8 +3850,21 @@ class MainWindow(QMainWindow):
                 if not dest.exists():
                     missing.append(f"{w}.{fmt}")
         if missing:
-            self._wrap_box(QMessageBox.Warning, "未全部下载", f"有 {len(missing)} 部未下载（{', '.join(missing[:3])}{'...' if len(missing)>3 else ''}），请先点击「下载」后再打包。")
-            return
+            _pre=", ".join(missing[:3]) + ("..." if len(missing)>3 else "")
+            ret=QMessageBox.question(self, "下载确认",
+                f"有 {len(missing)} 部未下载（{_pre}）。\n是否先下载？",
+                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel)
+            if ret!=QMessageBox.Yes:
+                self._wrap_box(QMessageBox.Warning, "未全部下载", f"有 {len(missing)} 部未下载，请先下载后再打包。")
+                return
+            pairs=[(w, fmt) for fmt in fmts for w in works
+                   if not official_ebook_source.local_path(w, fmt, dest_dir).exists()]
+            self._download_missing(pairs, dest_dir, title="下载（ZIP 前）")
+            missing=[f"{w}.{fmt}" for fmt in fmts for w in works
+                     if not official_ebook_source.local_path(w, fmt, dest_dir).exists()]
+            if missing:
+                self._wrap_box(QMessageBox.Warning, "未全部下载", f"仍有 {len(missing)} 部未下载，已取消打包。")
+                return
         from PySide6.QtWidgets import QFileDialog
         sel=QFileDialog.getExistingDirectory(self, "选择ZIP输出目录", str(self._out_dir()))
         if not sel:
@@ -3721,8 +3973,21 @@ class MainWindow(QMainWindow):
                 if not dest.exists():
                     missing.append(f"{w}.{fmt}")
         if missing:
-            self._wrap_box(QMessageBox.Warning, "未全部下载", f"有 {len(missing)} 部未下载（{', '.join(missing[:3])}{'...' if len(missing)>3 else ''}），请先点击「下载」后再导出。")
-            return
+            _pre=", ".join(missing[:3]) + ("..." if len(missing)>3 else "")
+            ret=QMessageBox.question(self, "下载确认",
+                f"有 {len(missing)} 部未下载（{_pre}）。\n是否先下载？",
+                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel)
+            if ret!=QMessageBox.Yes:
+                self._wrap_box(QMessageBox.Warning, "未全部下载", f"有 {len(missing)} 部未下载，请先下载后再导出。")
+                return
+            pairs=[(w, fmt) for fmt in fmts for w in works
+                   if not official_ebook_source.local_path(w, fmt, dest_dir).exists()]
+            self._download_missing(pairs, dest_dir, title="下载（导出前）")
+            missing=[f"{w}.{fmt}" for fmt in fmts for w in works
+                     if not official_ebook_source.local_path(w, fmt, dest_dir).exists()]
+            if missing:
+                self._wrap_box(QMessageBox.Warning, "未全部下载", f"仍有 {len(missing)} 部未下载，已取消导出。")
+                return
         from PySide6.QtWidgets import QFileDialog
         target=QFileDialog.getExistingDirectory(self, "选择导出目录")
         if not target:

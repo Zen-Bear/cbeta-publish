@@ -148,10 +148,14 @@ class DownloadWorkerTest(unittest.TestCase):
         oes.download_ebook = fake_dl
         msgs, done = self._run(["T0001", "T0002", "T0003", "T0004"])
         self.assertEqual(done, {"ok": 3, "total": 4, "failed": ["T0004.pdf"]})
-        self.assertTrue(any(m.startswith("跳过 T0001") for m in msgs), msgs)
-        self.assertTrue(any(m.startswith("完成 T0002") for m in msgs), msgs)
-        self.assertTrue(any(m.startswith("更新 T0003") for m in msgs), msgs)
-        self.assertTrue(any(m.startswith("失败 T0004") for m in msgs), msgs)
+        text = [m.lstrip("\r") for m in msgs]
+        self.assertTrue(any(m.startswith("跳过 T0001") for m in text), text)
+        # 「下载 …」与「完成/更新 …」合并为一行（完成行以 \r 前缀要求替换上一行）
+        self.assertTrue(any(m.startswith("下载 T0002.pdf ...完成 ") for m in text), text)
+        self.assertTrue(any(m.startswith("下载 T0003.pdf ...更新 ") for m in text), text)
+        self.assertTrue(any(m.startswith("下载 T0004.pdf ...失败") for m in text), text)
+        from cbeta_publish.books.download_worker import REPLACE_LAST
+        self.assertTrue(any(m.startswith(REPLACE_LAST) for m in msgs), msgs)
 
     def test_stop_breaks(self):
         from cbeta_publish.books.download_worker import DownloadWorker
@@ -173,6 +177,29 @@ class DownloadWorkerTest(unittest.TestCase):
         self.assertEqual(attempted, ["T0001"])
         self.assertEqual(done["total"], 2)
         self.assertEqual(done["ok"] + len(done["failed"]), 1)
+
+    def test_pairs_mode_downloads_only_given_combos(self):
+        # 明确 pairs（缺书集合）：只下这些组合，不展开为 works × fmts
+        from cbeta_publish.books.download_worker import DownloadWorker
+        oes.remote_info = lambda work, fmt: None
+        tried = []
+
+        def fake_dl(work, fmt, dest_dir):
+            tried.append((work, fmt))
+            p = oes.dest_path(work, fmt, dest_dir)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(b"z" * 10)
+            return p
+        oes.download_ebook = fake_dl
+        msgs = []
+        done = {}
+        w = DownloadWorker(dest_dir=self.dir, pairs=[("T0002", "pdf"), ("T0002", "epub")])
+        w.progress.connect(msgs.append)
+        w.finished_all.connect(lambda ok, total, failed: done.update(ok=ok, total=total, failed=list(failed)))
+        w.run()
+        self.assertEqual(tried, [("T0002", "pdf"), ("T0002", "epub")])
+        self.assertEqual(done, {"ok": 2, "total": 2, "failed": []})
+        self.assertEqual(len([m for m in msgs if m.startswith("\r")]), 2)
 
 
 if __name__ == "__main__":

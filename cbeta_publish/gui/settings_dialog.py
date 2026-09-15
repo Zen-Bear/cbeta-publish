@@ -534,6 +534,8 @@ class SettingsDialog(QDialog):
         self.tbl.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
         self.tbl.setEditTriggers(QTableWidget.NoEditTriggers)
         self.tbl.setSelectionBehavior(QTableWidget.SelectRows)
+        self.tbl.verticalHeader().setVisible(False)
+        self.tbl.verticalHeader().setDefaultSectionSize(28)
         v.addWidget(self.tbl, 1)
         self.lbl_upd_log = QLabel("")
         self.lbl_upd_log.setWordWrap(True)
@@ -544,9 +546,9 @@ class SettingsDialog(QDialog):
         h.setContentsMargins(0, 0, 0, 0)
         btn_check = QPushButton("立即检查更新")
         btn_check.clicked.connect(self._check_update)
-        btn_r_orig = QPushButton("恢复原始（mulu）")
+        btn_r_orig = QPushButton("恢复原始（目录数据）")
         btn_r_orig.clicked.connect(lambda: self._restore_mulu("original"))
-        btn_r_last = QPushButton("恢复上一次（mulu）")
+        btn_r_last = QPushButton("恢复上一次（目录数据）")
         btn_r_last.clicked.connect(lambda: self._restore_mulu("last"))
         h.addWidget(btn_check); h.addWidget(btn_r_orig); h.addWidget(btn_r_last); h.addStretch()
         v.addWidget(row)
@@ -557,6 +559,15 @@ class SettingsDialog(QDialog):
         self._reload_update_table()
         return w
 
+    @staticmethod
+    def _ro_field(text: str) -> QLineEdit:
+        # 只读文本框：内容可完整查看/选中拷贝（表格单元格会截断长 URL/路径）
+        ed = QLineEdit(text)
+        ed.setReadOnly(True)
+        ed.setToolTip(f"{text}\n（只读，可选中拷贝）")
+        ed.setCursorPosition(0)
+        return ed
+
     def _reload_update_table(self):
         from cbeta_publish.books.remote_sources import SOURCES, local_path
         self.tbl.setRowCount(0)
@@ -564,9 +575,20 @@ class SettingsDialog(QDialog):
             r = self.tbl.rowCount()
             self.tbl.insertRow(r)
             p = local_path(rel)
-            vals = [cat, key, url, rel, "已就绪" if p.exists() else "缺失"]
-            for c, val in enumerate(vals):
-                self.tbl.setItem(r, c, QTableWidgetItem(val))
+            for c, val in enumerate([cat, key]):
+                item = QTableWidgetItem(val)
+                item.setToolTip(val)
+                self.tbl.setItem(r, c, item)
+            # URL / 本地文件：只读文本框（可查看/拷贝完整内容）
+            self.tbl.setCellWidget(r, 2, self._ro_field(url))
+            self.tbl.setCellWidget(r, 3, self._ro_field(str(p)))
+            st = QTableWidgetItem("已就绪" if p.exists() else "缺失")
+            st.setToolTip(f"{rel}")
+            self.tbl.setItem(r, 4, st)
+        self.tbl.resizeRowsToContents()
+        self.tbl.setColumnWidth(0, 60)
+        self.tbl.setColumnWidth(1, 130)
+        self.tbl.setColumnWidth(4, 70)
         try:
             import json as _json
             meta = _json.loads((PROJECT_ROOT / "mulu" / "cache" / "meta.json").read_text(encoding="utf-8")) if (PROJECT_ROOT / "mulu" / "cache" / "meta.json").exists() else {}

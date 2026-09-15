@@ -73,6 +73,13 @@
 | `vol.json` | https://cbdata.dila.edu.tw/stable/download/scope-selector/vol.json | **刊本→册→经**（26 刊本 / 465 册 / 5939 部；部分刊本第二层直接是经）；已接入「刊本」导航，约 1.1MB |
 
 > 结论：`category.json` / `dynasty-works.json` / `creators-by-strokes*.json` 均以该页为统一更新源，纳入 `remote_manager` 按 `ETag`/`Last-Modified` 定时拉取（启动检查），替代 GitHub 罐头。
+>
+> **现状（2026-09）**：`category.json` 已作为「部类」权威源（`bulei.txt` 仅作**补缺**）。
+> cbdata 无 `bulei.txt` 端点（`download/bulei/bulei.txt` 等均 404），故 `bulei.txt` 仍取
+> `heavenchou/cbwork-bin`（`ref/README.md:4` 所指；GitHub API 的 `download_url` 与本表 raw 直链一致）。
+> 实测 `category.json` 缺 般若部類 `01 小品般若經(大般若經第1會) T05-06`、`09 …第11會`
+> （远端同一缺），而 `bulei.txt` 完整 → `_load_bulei` 以 category.json 为主、用
+> `bulei_parser.merge_missing_children()` 按前导序号补入缺失分组。
 
 ## 6. 更新逻辑（供程序实现）
 

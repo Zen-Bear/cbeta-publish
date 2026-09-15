@@ -1,8 +1,19 @@
 """mulu 远端增量：ETag/Last-Modified（HTTP 走共享层 cbeta-fetch）"""
-import json, shutil
+import json, re, shutil
 from pathlib import Path
 
 from cbeta_publish._vendor import cbeta_fetch as cf
+
+# 服务端对 gzip 表示会给 ETag 加 `-gzip` 后缀（如 cbdata）；
+# 发条件头前去掉，否则与实体表示的 ETag 不匹配 → 恒 200、每次都「有更新」
+_GZIP_ETAG = re.compile(r'^(W/)?"(.*)-gzip"$')
+
+
+def _clean_etag(etag: str | None):
+    if not etag:
+        return etag
+    m = _GZIP_ETAG.match(etag)
+    return '%s"%s"' % (m.group(1) or "", m.group(2)) if m else etag
 
 
 class RemoteManager:
@@ -16,7 +27,16 @@ class RemoteManager:
 
     def _cond(self, url: str):
         m = self.meta.get(url, {}) or {}
-        return m.get("etag") or None, m.get("last_modified") or None
+        return _clean_etag(m.get("etag") or None), m.get("last_modified") or None
+
+    @staticmethod
+    def _local_for(url: str):
+        # 由 URL 反查本地文件（SOURCES 单源表）
+        from cbeta_publish.books.remote_sources import SOURCES, local_path
+        for _key, _cat, u, rel in SOURCES:
+            if u == url:
+                return local_path(rel)
+        return None
 
     def fetch(self, url: str, dest: Path) -> bool:
         """条件 GET → dest（原子落盘）。返回 True=已更新，False=未变/失败。"""
@@ -32,14 +52,30 @@ class RemoteManager:
         return False
 
     def check(self, url: str) -> bool:
-        """仅比对是否需要更新（HEAD + 条件头），不下载。返回 True=有新版。"""
+        """比对是否需要更新（HEAD 条件头 + 远端大小兜底），不下载。返回 True=有新版。
+
+        服务端常不返回 304（cbdata 的 ETag 带 `-gzip` 后缀已失配、GitHub raw 忽略
+        条件头），否则会永远误报「有更新」→ 无谓重下。故条件头判「changed」时，
+        再用远端 Content-Length 与本地文件大小比对（`probe_info` 即为此设计）：
+        大小一致即视为未更新。注意：内容等长的改动不会被检出。
+        """
         etag, lm = self._cond(url)
-        status, _etag, _lm = cf.probe(url, etag=etag, last_modified=lm)
-        if status == "changed":
-            return True
+        r = cf.probe_info(url, etag=etag, last_modified=lm)
+        status = r.get("status")
+        if status == "not-modified":
+            return False
         if status == "failed":
             print(f"check {url} failed")
-        return False
+            return False
+        dest = self._local_for(url)
+        size = r.get("size")
+        if dest is not None and size is not None and dest.exists():
+            try:
+                if dest.stat().st_size == size:
+                    return False
+            except OSError:
+                pass
+        return True
 
     def check_all(self, sources, progress=None) -> list:
         """检查所有源是否需要更新，返回有更新的 key 列表（不下载）。"""
