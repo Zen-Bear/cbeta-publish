@@ -49,6 +49,30 @@ class SettingsDialogTest(unittest.TestCase):
         self.assertEqual(SettingsDialog._native_path(""), "")
         self.assertEqual(Path(SettingsDialog._native_path("a/b/c")), Path("a/b/c"))
 
+    def test_update_table_uses_readonly_textboxes(self):
+        # 更新源表：URL / 本地文件两列改为只读文本框（可查看/拷贝完整内容）
+        from PySide6.QtWidgets import QLineEdit
+        from cbeta_publish.books.remote_sources import SOURCES, local_path
+        dlg = self._dlg()
+        tbl = dlg.tbl
+        self.assertGreaterEqual(tbl.rowCount(), 1)
+        for r, (key, cat, url, rel) in enumerate(SOURCES):
+            for c, want in ((2, url), (3, str(local_path(rel)))):
+                w = tbl.cellWidget(r, c)
+                self.assertIsInstance(w, QLineEdit, (r, c))
+                self.assertTrue(w.isReadOnly(), (r, c))
+                self.assertEqual(w.text(), want, (r, c))
+                self.assertIn(want, w.toolTip())
+
+    def test_restore_buttons_say_dir_data(self):
+        # 两个恢复按钮去掉突兀的“(mulu)”，改称“目录数据”
+        from PySide6.QtWidgets import QPushButton
+        dlg = self._dlg()
+        texts = [b.text() for b in dlg.findChildren(QPushButton)]
+        self.assertIn("恢复原始（目录数据）", texts)
+        self.assertIn("恢复上一次（目录数据）", texts)
+        self.assertFalse([t for t in texts if "mulu" in t], texts)
+
     def test_apply_does_not_write(self):
         dlg = self._dlg()
         # 记录磁盘内容，确认「确定」不写盘

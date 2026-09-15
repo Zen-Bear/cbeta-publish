@@ -47,6 +47,17 @@ def local_path(work: str, fmt: str, dest_dir) -> Path:
     return zip_dest_dir(work, fmt, dest_dir) if fmt in _ZIP_FORMATS else dest_path(work, fmt, dest_dir)
 
 
+def local_size_kb(path) -> int:
+    """本地已下载文件/目录的大小（KB）；失败返回 0。"""
+    try:
+        p = Path(path)
+        if p.is_file():
+            return p.stat().st_size // 1024
+        return sum(f.stat().st_size for f in p.rglob("*") if f.is_file()) // 1024
+    except OSError:
+        return 0
+
+
 def remote_info(work: str, fmt: str) -> dict | None:
     """HEAD 探针（复用共享层），返回 {url,size,mtime,etag}；失败/zip 型返回 None。"""
     if fmt in _ZIP_FORMATS:

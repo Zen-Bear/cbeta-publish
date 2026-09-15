@@ -1,0 +1,29 @@
+{
+  "id": "custom_kongbaicongshu_20260914",
+  "slug": "Bear_duobuleicongshu_20260915",
+  "name": "多部类丛书",
+  "category": "Bear",
+  "tags": [
+    "custom"
+  ],
+  "work_ids": [
+    "D8817",
+    "D8814",
+    "CC0005",
+    "LC0004",
+    "LC0003",
+    "GAa001",
+    "GA0005",
+    "TX0015",
+    "TX0016"
+  ],
+  "works": [],
+  "source": "official",
+  "work_sources": {},
+  "work_groups": {},
+  "xml_options": {},
+  "created_at": "2026-09-15T01:09:28.460245Z",
+  "updated_at": "2026-09-15T13:45:50.473364Z",
+  "last_publish_at": "2026-09-15T14:12:07.901080Z",
+  "last_publish_dir": "my_books\\多部类丛书"
+}

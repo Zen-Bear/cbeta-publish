@@ -57,8 +57,62 @@ def parse_bulei_json(path: str | Path) -> list[BuleiNode]:
         return children
     return roots
 
+_LEAD_NUM = re.compile(r"^\s*(\d+)\b")
+
+
+def _lead_num(title: str):
+    m = _LEAD_NUM.match(title or "")
+    return m.group(1) if m else None
+
+
+def _norm_title(title: str) -> str:
+    """去掉尾部 T/X 范围描述，用于跨源匹配同一分组。"""
+    return re.sub(r"\s+[TX]\d.*$", "", (title or "").strip()).strip()
+
+
+def _copy(node: BuleiNode, level: int) -> BuleiNode:
+    n = BuleiNode(level=level, title=node.title, raw=node.raw)
+    for c in node.children:
+        n.children.append(_copy(c, level + 1))
+    return n
+
+
+def merge_missing_children(primary: list, fallback: list) -> int:
+    """把 fallback 里 primary 缺失的同级分组补进 primary（按前导序号插入）。
+
+    背景：官方 `category.json` 偶尔缺分组（实测 般若部類 缺 01/09），
+    而 `bulei.txt` 仍完整。只在「顶层部類 → 直接子分组」这一层按序号补齐，
+    不改动 primary 既有节点。返回补入的节点数。
+    """
+    added = 0
+    by_name = {}
+    for top in fallback:
+        by_name.setdefault(_norm_title(top.title), top)
+    for top in primary:
+        src = by_name.get(_norm_title(top.title))
+        if src is None:
+            continue
+        have = {_lead_num(c.title) for c in top.children}
+        for c in src.children:
+            num = _lead_num(c.title)
+            if not num or num in have:
+                continue
+            node = _copy(c, top.level + 1)
+            # 按前导序号放进正确位置
+            pos = len(top.children)
+            for i, ex in enumerate(top.children):
+                en = _lead_num(ex.title)
+                if en and en.isdigit() and num.isdigit() and int(en) > int(num):
+                    pos = i
+                    break
+            top.children.insert(pos, node)
+            have.add(num)
+            added += 1
+    return added
+
+
 def flatten_bulei(nodes: list[BuleiNode]) -> list[tuple[int,str]]:
-    out=[]
+    out = []
     def dfs(n):
         out.append((n.level, n.title))
         for c in n.children:
