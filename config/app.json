@@ -1,0 +1,206 @@
+{
+  "book_dir": "E:/dev/cbeta/publish/cbeta_xml",
+  "official_ebooks_dir": "E:/dev/cbeta/publish/cbeta_ebooks",
+  "mulu_dir": "E:/dev/cbeta/publish/mulu",
+  "collections_dir": "E:/dev/cbeta/publish/collections",
+  "theme": {
+    "mode": "system",
+    "accent": "#8B4513"
+  },
+  "language": "zh-Hant",
+  "update_interval": "manual",
+  "local_xml_root": "E:/CBETA/CBReader2X/Bookcase/CBETA/XML",
+  "output_dir": "my_books",
+  "ui": {
+    "tree_expand": {
+      "mode": "none"
+    },
+    "app_font": "Microsoft YaHei",
+    "app_font_size": 9,
+    "supplement_ttf": "E:/dev/cbeta/xml2pdf/cbeta/CBETA 補充字型/CBETASupplement.ttf",
+    "last_collection": "E:\\dev\\cbeta\\publish\\collections\\author\\守序大师全集.json"
+  },
+  "default_source": "official",
+  "pdf": {
+    "split_pages": 5000
+  },
+  "epub": {
+    "split_items": 500
+  },
+  "merge": {
+    "by_volume": false
+  },
+  "xml2pdf": {
+    "path": "E:/dev/cbeta/xml2pdf",
+    "page": "a4",
+    "font_lang": "zh-Hant",
+    "engine": "docx2pdf",
+    "vertical": false
+  },
+  "catalog": {
+    "filters": {
+      "tripitaka": {
+        "hidden": [
+          "11 律部類 T22-24,40a,45,85, X38-44,59-60,74 etc.",
+          "20 敦煌寫本部類 T85",
+          "22 南傳大藏經部類 N01-70"
+        ]
+      },
+      "dynasty": {
+        "hidden": []
+      },
+      "vol": {
+        "hidden": []
+      }
+    }
+  },
+  "cover": {
+    "organizer": "",
+    "imprint": "CBETA 電子佛典自選叢書",
+    "mode": "print",
+    "enabled": true,
+    "intro": {
+      "enabled": true,
+      "title": "说明",
+      "list": true
+    },
+    "images": {
+      "buddha": {
+        "file": "assets/images/buddha.jpg",
+        "enabled": true
+      },
+      "weituo": {
+        "file": "assets/images/weituo.jpg",
+        "enabled": true
+      }
+    },
+    "sizes": {
+      "body_a5": 16,
+      "body_a4": 16,
+      "body_16k": 16,
+      "body_32k": 16,
+      "margins": {
+        "a5": {
+          "left": 36,
+          "right": 36,
+          "top": 40,
+          "bottom": 40
+        },
+        "a4": {
+          "left": 48,
+          "right": 48,
+          "top": 48,
+          "bottom": 48
+        },
+        "16k": {
+          "left": 42,
+          "right": 42,
+          "top": 44,
+          "bottom": 44
+        },
+        "32k": {
+          "left": 32,
+          "right": 32,
+          "top": 36,
+          "bottom": 36
+        }
+      },
+      "margin_ratio": {
+        "left": 0.1,
+        "right": 0.1,
+        "top": 0.1,
+        "bottom": 0.1
+      }
+    },
+    "styles": {
+      "cbeta": {
+        "font": "C:\\Windows\\Fonts\\simfang.ttf",
+        "color": [
+          51,
+          51,
+          51
+        ],
+        "ratio": 1.0
+      },
+      "title": {
+        "font": "E:/软件/6、字体/3、汇文系列、京华老宋体/標題明朝體/朝華標題B.ttf",
+        "color": [
+          0,
+          0,
+          0
+        ],
+        "ratio": 3.0
+      },
+      "organizer": {
+        "font": "C:\\Windows\\Fonts\\simsun.ttc",
+        "color": [
+          51,
+          51,
+          51
+        ],
+        "ratio": 1.35
+      },
+      "date": {
+        "font": "C:\\Windows\\Fonts\\simsun.ttc",
+        "color": [
+          51,
+          51,
+          51
+        ],
+        "ratio": 1.0
+      },
+      "series": {
+        "font": "C:\\Windows\\Fonts\\simfang.ttf",
+        "color": [
+          51,
+          51,
+          51
+        ],
+        "ratio": 0.9
+      },
+      "toc_title": {
+        "font": "C:\\Windows\\Fonts\\msyhbd.ttc",
+        "color": [
+          0,
+          0,
+          0
+        ],
+        "ratio": 2
+      },
+      "toc_item": {
+        "font": "C:\\Windows\\Fonts\\simkai.ttf",
+        "color": [
+          30,
+          30,
+          30
+        ],
+        "delta": 2
+      },
+      "toc_page": {
+        "font": "C:\\Windows\\Fonts\\msyhbd.ttc",
+        "color": [
+          30,
+          30,
+          30
+        ],
+        "ratio": 1
+      },
+      "background": {
+        "color": [
+          250,
+          245,
+          230
+        ]
+      }
+    },
+    "positions": {
+      "cbeta_left_mm": 18,
+      "cbeta_top_mm": 12,
+      "title_y_ratio": 0.3,
+      "organizer_y_ratio": 0.84,
+      "date_y_ratio": 0.89,
+      "toc_y_ratio": 0.15,
+      "toc_item_y_ratio": 0.25
+    }
+  }
+}

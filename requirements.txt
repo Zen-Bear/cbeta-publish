@@ -1,0 +1,6 @@
+PySide6>=6.6
+pypinyin
+pymupdf
+EbookLib
+reportlab
+opencc-python-reimplemented

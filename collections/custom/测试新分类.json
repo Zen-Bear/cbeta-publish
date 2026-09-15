@@ -1,0 +1,18 @@
+{
+  "id": "custom_kongbaicongshu_20260829",
+  "slug": "custom_ceshixinfenlei_20260829",
+  "name": "测试新分类",
+  "category": "custom",
+  "tags": [
+    "custom"
+  ],
+  "work_ids": [
+    "T1693",
+    "T1694"
+  ],
+  "works": [],
+  "created_at": "2026-08-29T14:27:01.017853Z",
+  "updated_at": "2026-08-29T15:27:23.947722Z",
+  "last_publish_at": null,
+  "last_publish_dir": null
+}
