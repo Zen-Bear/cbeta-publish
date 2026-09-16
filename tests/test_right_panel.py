@@ -66,7 +66,6 @@ class RightPanelTest(unittest.TestCase):
 
     def test_source_preset_row(self):
         # 来源单选（官方/自制）+ 预设下拉在发布分组框内；切换写回全局
-        import json
         win = self.win
         win.config["default_source"] = "official"
         win._sync_source_preset_ui()
@@ -95,6 +94,31 @@ class RightPanelTest(unittest.TestCase):
         _ensure_app().processEvents()
         self.assertEqual(win.config["default_source"], "official")
         self.assertFalse(win.cb_preset.isEnabled())
+
+    def test_regen_row(self):
+        # 生成策略单选（仅缺/全部）：仅自制启用；切换写回全局
+        import json
+        win = self.win
+        win.config["default_source"] = "xml"
+        win.config["xml2pdf"]["regen"] = "missing"
+        win._sync_source_preset_ui()
+        _ensure_app().processEvents()
+        self.assertEqual([win.rb_regen_missing.text(), win.rb_regen_all.text()], ["仅缺", "全部"])
+        self.assertTrue(win.rb_regen_missing.isChecked())
+        self.assertTrue(win.rb_regen_all.isEnabled())
+        self.assertEqual(win._run_regen(), "missing")
+        win.rb_regen_all.setChecked(True)
+        win.regen_group.buttonClicked.emit(win.rb_regen_all)
+        _ensure_app().processEvents()
+        self.assertEqual(win.config["xml2pdf"]["regen"], "all")
+        self.assertEqual(win._run_regen(), "all")
+        disk = json.loads(Path(win._config_path).read_text(encoding="utf-8"))
+        self.assertEqual(disk["xml2pdf"]["regen"], "all")
+        # 官方来源：策略行禁用
+        win.config["default_source"] = "official"
+        win._sync_source_preset_ui()
+        _ensure_app().processEvents()
+        self.assertFalse(win.rb_regen_all.isEnabled())
 
     def test_preset_dialog_opens(self):
         # 上游 XmlOptionsDialog 可实例化（调整入口不断链）

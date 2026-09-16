@@ -173,20 +173,44 @@ class BridgePresetDirTest(unittest.TestCase):
         (base / "T0001.pdf").write_bytes(b"x")          # 精确名优先
         self.assertEqual(b.find_built("T0001", "pdf", base), base / "T0001.pdf")
 
-    def test_is_fresh(self):
-        import os
-        import time
+    def test_ensure_one_missing_vs_all(self):
+        # 仅缺：已有产物直接复用（不调 convert）；全部：一律重跑 convert 并覆盖原路径
         import cbeta_publish.books.xml2pdf_bridge as b
-        dest = self.dir / "T0001.pdf"
-        dest.write_bytes(b"x")
-        self.assertTrue(b.is_fresh(dest, None))
-        preset = self.dir / "p.json"
-        preset.write_text("{}", encoding="utf-8")
-        old = time.time() - 100
-        os.utime(dest, (old, old))
-        self.assertFalse(b.is_fresh(dest, preset))       # 预设更新过 → 重生成
-        os.utime(preset, (old - 100, old - 100))
-        self.assertTrue(b.is_fresh(dest, preset))
+        base = self.dir / "out"
+        base.mkdir()
+        calls = []
+
+        def fake_convert(w, xml, out, config, fmt="pdf", preset=None, stop=None):
+            calls.append(Path(out))
+            Path(out).write_bytes(b"x")
+            return Path(out)
+        real = b.convert
+        b.convert = fake_convert
+        try:
+            # 无产物 → 生成
+            p, reused = b.ensure_one("T0001", "pdf", base, self.cfg)
+            self.assertFalse(reused)
+            self.assertEqual(len(calls), 1)
+            # 已有 → 仅缺模式复用
+            p2, reused2 = b.ensure_one("T0001", "pdf", base, self.cfg)
+            self.assertTrue(reused2)
+            self.assertEqual(p2, p)
+            self.assertEqual(len(calls), 1)
+            # 全部模式 → 重跑，覆盖同名
+            p3, reused3 = b.ensure_one("T0001", "pdf", base, self.cfg, regen_all=True)
+            self.assertFalse(reused3)
+            self.assertEqual(len(calls), 2)
+            self.assertEqual(p3, p)
+            # 异名产物（GUI 命名）在全部模式下也覆盖原路径，不留两份
+            (base / "T0001.pdf").unlink()
+            gui = base / "T0001 中論.pdf"
+            gui.write_bytes(b"x")
+            p4, _ = b.ensure_one("T0001", "pdf", base, self.cfg, regen_all=True)
+            self.assertEqual(p4, gui)
+            self.assertEqual(len(calls), 3)
+            self.assertFalse((base / "T0001.pdf").exists())
+        finally:
+            b.convert = real
 
     def test_dirs_are_absolute_and_unified(self):
         # 目录统一绝对路径：缺省与相对值都按工程根解析

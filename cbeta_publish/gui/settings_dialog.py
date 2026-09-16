@@ -34,7 +34,8 @@ DEFAULT_CONFIG = {
     "pdf": {"split_pages": 5000},
     "epub": {"split_items": 500},
     "merge": {"by_volume": False},
-    "xml2pdf": {"path": "E:/dev/cbeta/xml2pdf", "cbeta_ebook": "", "preset": ""},
+    "xml2pdf": {"path": "E:/dev/cbeta/xml2pdf", "cbeta_ebook": "", "preset": "",
+                "regen": "missing"},
     "catalog": {"filters": {"tripitaka": {"hidden": []}, "dynasty": {"hidden": []}, "vol": {"hidden": []}}},
     "cover": {
         "organizer": "CBETA 整理",
