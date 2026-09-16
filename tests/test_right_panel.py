@@ -191,6 +191,48 @@ class RightPanelTest(unittest.TestCase):
         self.assertEqual(len(calls), 1)          # 已有产物也重新生成
         col.unlink(missing_ok=True)
 
+    def test_nav_is_radio_bar(self):
+        # 左栏「视图」由下拉改为单选（接口仿 QComboBox，调用方不变）
+        from cbeta_publish.gui.main_window import _RadioBar
+        win = self.win
+        self.assertIsInstance(win.nav_combo, _RadioBar)
+        self.assertEqual([b.text() for b in win.nav_combo._btns],
+                         ["部类", "三藏", "刊本", "朝代", "作者", "丛书"])
+        self.assertEqual(win.nav_combo.currentText(), win.nav_combo.currentText())
+        seen = []
+        win.nav_combo.currentTextChanged.connect(lambda m: seen.append(m))
+        win.nav_combo.setCurrentText("刊本")
+        _ensure_app().processEvents()
+        self.assertEqual(win.nav_combo.currentText(), "刊本")
+        self.assertEqual(seen, ["刊本"])
+        # blockSignals 时不发信号（既有测试用法）
+        seen.clear()
+        win.nav_combo.blockSignals(True)
+        win.nav_combo.setCurrentText("部类")
+        win.nav_combo.blockSignals(False)
+        self.assertEqual(seen, [])
+        self.assertEqual(win.nav_combo.currentText(), "部类")
+
+    def test_ebook_path_follows_source(self):
+        # 右栏「已有」标志随来源：官方→cbeta_ebooks；自制→xml_to_ebooks_dir
+        import tempfile
+        from pathlib import Path as _P
+        win = self.win
+        xb = _P(tempfile.mkdtemp())
+        win.config["xml_to_ebooks_dir"] = str(xb)
+        win.config["default_source"] = "xml"
+        self.assertIsNone(win._ebook_path("T0099", "pdf"))     # 无文件
+        (xb / "T0099.pdf").write_bytes(b"x")
+        self.assertEqual(win._ebook_path("T0099", "pdf"), xb / "T0099.pdf")
+        (xb / "T0099.pdf").unlink()
+        (xb / "T0099 中論.pdf").write_bytes(b"x")              # GUI 平展命名也认
+        self.assertEqual(win._ebook_path("T0099", "pdf"), xb / "T0099 中論.pdf")
+        win.config["default_source"] = "official"
+        p = win._ebook_path("T0099", "pdf")                     # 官方目录（可能不存在→None）
+        if p is not None:
+            self.assertNotEqual(str(p).startswith(str(xb)), True)
+        win.config["default_source"] = "xml"
+
     def test_preset_dialog_opens(self):
         # 上游 XmlOptionsDialog 可实例化（调整入口不断链）
         # 注意：xml2pdf 可能处于编辑中间态，此跨仓检查失败时跳过（不阻断 publish）

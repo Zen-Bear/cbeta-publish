@@ -7,6 +7,7 @@ __pycache__/
 # ---- 下载/缓存数据（可重新获取） ----
 cbeta_ebooks/
 cbeta_xml/
+cbeta_ebooks_xml/
 mulu/cache/
 
 # ---- 合成产物 / 临时文件 ----
