@@ -34,8 +34,9 @@ DEFAULT_CONFIG = {
     "pdf": {"split_pages": 5000},
     "epub": {"split_items": 500},
     "merge": {"by_volume": False},
-    "xml2pdf": {"path": "E:/dev/cbeta/xml2pdf", "cbeta_ebook": "", "preset": "",
-                "regen": "missing"},
+    "xml2pdf": {"path": "E:/dev/cbeta/xml2pdf",
+                "cbeta_ebook": str(PROJECT_ROOT / "cbeta_xml"),
+                "preset": "", "regen": "missing"},
     "catalog": {"filters": {"tripitaka": {"hidden": []}, "dynasty": {"hidden": []}, "vol": {"hidden": []}}},
     "cover": {
         "organizer": "CBETA 整理",
@@ -201,14 +202,15 @@ class SettingsDialog(QDialog):
         self.cb_default_source.setToolTip("合并时电子书的默认来源")
         self.ed_x2p = QLineEdit(self._cfg.get("xml2pdf", {}).get("path", ""))
         self.ed_x2p_ebook = QLineEdit(
-            (self._cfg.get("xml2pdf", {}) or {}).get("cbeta_ebook", ""))
-        self.ed_x2p_ebook.setPlaceholderText("XML 工作根（传 --cbeta-ebook）；留空=由预设/对面默认")
+            (self._cfg.get("xml2pdf", {}) or {}).get("cbeta_ebook")
+            or str(PROJECT_ROOT / "cbeta_xml"))
+        self.ed_x2p_ebook.setPlaceholderText("CBETA XML 目录（不可为空；空则用默认 cbeta_xml）")
         self.ed_xmlbooks = QLineEdit()
         self.cb_preset = self._no_wheel_until_focused(QComboBox())
         self._reload_preset_combo()
         x2p_form.addRow("默认来源", self.cb_default_source)
         x2p_form.addRow("自制程序路径", self._dir_row(self.ed_x2p))
-        x2p_form.addRow("XML 工作根", self._dir_row(self.ed_x2p_ebook))
+        x2p_form.addRow("CBETA XML 目录", self._dir_row(self.ed_x2p_ebook))
         x2p_form.addRow("自制电子书", self._dir_row(self.ed_xmlbooks))
         x2p_form.addRow("默认预设", self.cb_preset)
         hint = QLabel("自制：电子书由程序根据官方 XML 制作。默认预设用于来源选自制、且未另选预设时。")
@@ -470,7 +472,8 @@ class SettingsDialog(QDialog):
         self.cb_default_source.setCurrentIndex(i if i >= 0 else 0)
         x2p = c.get("xml2pdf", {}) or {}
         self.ed_x2p.setText(self._native_path(x2p.get("path", "")))
-        self.ed_x2p_ebook.setText(self._native_path(x2p.get("cbeta_ebook", "")))
+        self.ed_x2p_ebook.setText(self._native_path(
+            x2p.get("cbeta_ebook") or str(PROJECT_ROOT / "cbeta_xml")))
         self._reload_preset_combo(keep=x2p.get("preset", ""))
         cover = c.setdefault("cover", {})
         self._migrate_series_imprint(cover)
@@ -540,9 +543,11 @@ class SettingsDialog(QDialog):
         w = QWidget()
         form = QFormLayout(w)
         self._cache_rows = {}
+        from cbeta_publish.books import xml2pdf_bridge
         specs = [
             ("ebooks", "官方电子书缓存", lambda: self._cfg.get("official_ebooks_dir", "")),
-            ("xmlbooks", "自制电子书", lambda: self._cfg.get("xml_to_ebooks_dir", "")),
+            # 自制电子书：用 bridge 默认兜底（配置缺省也有值），保证能统计/清理
+            ("xmlbooks", "自制电子书", lambda: str(xml2pdf_bridge.xml_books_dir(self._cfg))),
         ]
         for key, label, getter in specs:
             row = QWidget()
@@ -961,7 +966,8 @@ class SettingsDialog(QDialog):
             c["xml2pdf"].pop(_k, None)
         c["xml2pdf"].update({
             "path": self._native_path(self.ed_x2p.text().strip()),
-            "cbeta_ebook": self._native_path(self.ed_x2p_ebook.text().strip()),
+            "cbeta_ebook": self._native_path(self.ed_x2p_ebook.text().strip())
+            or str(PROJECT_ROOT / "cbeta_xml"),
             "preset": self.cb_preset.currentData() or "",
         })
         # 封面/版式

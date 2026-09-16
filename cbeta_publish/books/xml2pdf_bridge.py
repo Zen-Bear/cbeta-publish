@@ -18,6 +18,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 X2P_DEFAULT_DIR = "E:/dev/cbeta/xml2pdf"
 XML_BOOKS_DEFAULT_DIR = str(PROJECT_ROOT / "cbeta_ebooks_xml")
+XML_WORK_DEFAULT_DIR = str(PROJECT_ROOT / "cbeta_xml")   # CBETA XML 目录（默认工作根，不可空）
 
 
 def _abs(p, base=None):
@@ -35,6 +36,11 @@ def _cfg(config):
 
 def _x2p_root(config):
     return Path(_cfg(config).get("path") or X2P_DEFAULT_DIR)
+
+
+def xml_work_dir(config) -> Path:
+    """CBETA XML 目录（xml2pdf 的 `--cbeta-ebook` 工作根；空则用默认，不可空）。"""
+    return _abs(_cfg(config).get("cbeta_ebook") or XML_WORK_DEFAULT_DIR)
 
 
 def _ensure_path(x2p):
@@ -84,9 +90,8 @@ def convert(work_id: str, xml_path, out_file, config: dict, fmt: str = "pdf",
     argv = ["-i", src, "-f", fmt, "-o", str(out_file)]
     if preset:
         argv += ["--config", str(preset)]
-    ebook = (_cfg(config).get("cbeta_ebook") or "").strip()
-    if ebook:
-        argv += ["--cbeta-ebook", str(_abs(ebook))]
+    # CBETA XML 目录（工作根）：不可空，空则用默认
+    argv += ["--cbeta-ebook", str(xml_work_dir(config))]
     buf = io.StringIO()
     try:
         with contextlib.redirect_stdout(buf):

@@ -251,6 +251,41 @@ class SettingsDialogTest(unittest.TestCase):
         self.assertNotIn("/", out["official_ebooks_dir"])
         self.assertNotIn("/", out["xml_to_ebooks_dir"])
 
+    def test_xml_dir_defaults_and_not_empty(self):
+        # 「CBETA XML 目录」：默认 cbeta_xml、不可为空（空则回落默认）；旧空值也回落
+        from cbeta_publish.books import xml2pdf_bridge as b
+        dlg = self._dlg()
+        default = str(Path(b.PROJECT_ROOT) / "cbeta_xml")
+        self.assertEqual(dlg.ed_x2p_ebook.text().replace("\\", "/"),
+                         default.replace("\\", "/"))
+        dlg.ed_x2p_ebook.setText("")
+        out = dlg._collect()
+        self.assertEqual(out["xml2pdf"]["cbeta_ebook"].replace("\\", "/"),
+                         default.replace("\\", "/"))
+        # 旧配置空值 → 显示默认
+        cfg = copy.deepcopy(DEFAULT_CONFIG)
+        cfg["xml2pdf"]["cbeta_ebook"] = ""
+        d2 = SettingsDialog(cfg, None)
+        self.assertTrue(d2.ed_x2p_ebook.text())
+        # 标签名
+        from PySide6.QtWidgets import QFormLayout
+        labels = []
+        for f in d2.findChildren(QFormLayout):
+            for i in range(f.rowCount()):
+                it = f.itemAt(i, QFormLayout.LabelRole)
+                if it is not None and it.widget() is not None and hasattr(it.widget(), "text"):
+                    labels.append(it.widget().text())
+        self.assertIn("CBETA XML 目录", labels)
+        self.assertNotIn("XML 工作根", labels)
+
+    def test_cache_xmlbooks_row_wired(self):
+        # 缓存页「自制电子书」用 bridge 默认兜底 → 未配置也有值（可统计/清理）
+        dlg = self._dlg()
+        getter, lbl = dlg._cache_rows["xmlbooks"]
+        self.assertTrue(getter())
+        self.assertEqual(lbl.text(), "（未配置）" if not getter() else lbl.text())
+        self.assertNotEqual(lbl.text(), "（未配置）")
+
 
 if __name__ == "__main__":
     unittest.main()

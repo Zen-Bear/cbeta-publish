@@ -32,7 +32,8 @@
   "xml2pdf": {
     "path": "E:/dev/cbeta/xml2pdf",
     "preset_dir": "",
-    "preset": ""
+    "preset": "",
+    "regen": "missing"
   },
   "catalog": {
     "filters": {

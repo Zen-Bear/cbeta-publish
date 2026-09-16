@@ -74,7 +74,7 @@ def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=No
   "xml_to_ebooks_dir": "E:/dev/cbeta/publish/cbeta_ebooks_xml",   // 自制书输出根（可配，绝对路径）
   "xml2pdf": {
     "path": "E:/dev/cbeta/xml2pdf",                    // 自制程序仓库（预设目录=其 presets/）
-    "cbeta_ebook": "",                                // XML 工作根；传 --cbeta-ebook（可空=对面自身配置）
+    "cbeta_ebook": "E:/dev/cbeta/publish/cbeta_xml",   // CBETA XML 目录（--cbeta-ebook；不可空，空则用默认）
     "preset": "",                                     // 默认预设名（presets/ 下 stem）；空=对面默认
     "regen": "missing"                                // 生成策略：missing=仅缺｜all=全部重生成
   }
