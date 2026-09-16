@@ -258,6 +258,38 @@ class RightPanelTest(unittest.TestCase):
             self.assertNotEqual(str(p).startswith(str(xb)), True)
         win.config["default_source"] = "xml"
 
+    def test_open_ebook_rules(self):
+        # 双击书名：先 PDF 再 epub，都没有则无反应；双击图标：只开该格式
+        import tempfile
+        from pathlib import Path as _P
+        from PySide6.QtGui import QDesktopServices
+        win = self.win
+        opened = []
+        real = QDesktopServices.openUrl
+        QDesktopServices.openUrl = staticmethod(lambda url: opened.append(url.toLocalFile()))
+        xb = _P(tempfile.mkdtemp())
+        win.config["xml_to_ebooks_dir"] = str(xb)
+        win.config["default_source"] = "xml"
+        try:
+            # 无文件：双击书名无反应（返回 False，不打开）
+            self.assertFalse(win._open_ebook("T0200", "pdf"))
+            self.assertEqual(opened, [])
+            # 只有 epub：双击书名打开 epub；双击 pdf 图标无反应
+            (xb / "T0200.epub").write_bytes(b"x")
+            self.assertFalse(win._open_ebook("T0200", "pdf", only_prefer=True))
+            self.assertEqual(opened, [])
+            self.assertTrue(win._open_ebook("T0200", "pdf"))
+            self.assertTrue(opened[-1].endswith("T0200.epub"))
+            # pdf + epub 都有：双击书名优先 pdf；图标各自打开
+            (xb / "T0200.pdf").write_bytes(b"x")
+            self.assertTrue(win._open_ebook("T0200", "pdf"))
+            self.assertTrue(opened[-1].endswith("T0200.pdf"))
+            self.assertTrue(win._open_ebook("T0200", "epub", only_prefer=True))
+            self.assertTrue(opened[-1].endswith("T0200.epub"))
+        finally:
+            QDesktopServices.openUrl = real
+            win.config["default_source"] = "official"
+
     def test_preset_dialog_opens(self):
         # 上游 XmlOptionsDialog 可实例化（调整入口不断链）
         # 注意：xml2pdf 可能处于编辑中间态，此跨仓检查失败时跳过（不阻断 publish）

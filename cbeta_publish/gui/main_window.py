@@ -3518,7 +3518,7 @@ class MainWindow(QMainWindow):
         local=row.mapFrom(self.coll_list.viewport(), pos)
         for lab in row.findChildren(QLabel):
             if lab.isVisible() and lab.geometry().contains(local) and hasattr(lab,"fmt"):
-                self._open_ebook(item.data(Qt.UserRole), prefer=lab.fmt)
+                self._open_ebook(item.data(Qt.UserRole), prefer=lab.fmt, only_prefer=True)
                 return True
         return False
 
@@ -3578,28 +3578,36 @@ class MainWindow(QMainWindow):
         self._on_coll_reordered()
 
     def _on_coll_double_open(self, item):
+        # 双击书名：打开存在的格式（先 PDF 再 epub）；都没有则无反应
         if not item:
             return
         w=item.data(Qt.UserRole)
-        self._open_ebook(w, prefer="pdf")
+        self._open_ebook(w, prefer="pdf", only_prefer=False)
 
     def _on_icon_clicked(self, work, fmt):
-        self._open_ebook(work, prefer=fmt)
+        # 双击格式图标：只打开该格式；该格式不存在则无反应
+        self._open_ebook(work, prefer=fmt, only_prefer=True)
 
-    def _open_ebook(self, work, prefer="pdf"):
-        base=Path(self.config.get("cbeta_ebooks_dir", self.config.get("official_ebooks_dir","./cbeta_ebooks")))
-        for fmt in [prefer] + [f for f in ["pdf","epub"] if f!=prefer]:
-            dest=official_ebook_source.local_path(work, fmt, base)
-            if dest.exists():
+    def _open_ebook(self, work, prefer="pdf", only_prefer=False):
+        """打开电子书（按当前来源取路径：官方 cbeta_ebooks／自制 xml_to_ebooks_dir）。
+
+        only_prefer=True：只尝试 prefer 这一种格式（图标双击）；
+        False：依次尝试 prefer → 其它格式（双击书名）。
+        没有任何可用文件时不弹窗、不提示，仅返回 False。
+        """
+        from PySide6.QtGui import QDesktopServices
+        from PySide6.QtCore import QUrl
+        fmts=[prefer] if only_prefer else [prefer] + [f for f in ("pdf","epub") if f!=prefer]
+        for fmt in fmts:
+            dest=self._ebook_path(work, fmt)
+            if dest is not None and Path(dest).exists():
                 try:
-                    from PySide6.QtGui import QDesktopServices
-                    from PySide6.QtCore import QUrl
-                    QDesktopServices.openUrl(QUrl.fromLocalFile(str(dest.resolve())))
-                    self.detail.setText(f"已打开 {dest}")
+                    QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(dest).resolve())))
+                    self.detail.setText(f"已打开 {Path(dest).name}")
                 except Exception as e:
                     self.detail.setText(f"打开失败 {e}")
-                return
-        self.detail.setText(f"未找到 {work} 的 {prefer}，请先下载")
+                return True
+        return False
 
     def _on_coll_reordered(self, *args):
         data=self.coll_combo.currentData()
