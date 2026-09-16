@@ -119,16 +119,15 @@ class RightPanelTest(unittest.TestCase):
         win._sync_source_preset_ui()
         _ensure_app().processEvents()
         self.assertFalse(win.rb_regen_all.isEnabled())
-        # 自制/重制与「仅缺/全部」都在来源行：紧跟 rb_made 之后
-        lay = win.rb_official.parent().layout()
-        self.assertGreater(lay.indexOf(win.btn_make), lay.indexOf(win.rb_made))
-        self.assertGreater(lay.indexOf(win.regen_box), lay.indexOf(win.btn_make))
-        self.assertGreater(lay.indexOf(win.btn_remake), lay.indexOf(win.regen_box))
-        # 发布按钮行只留 合并/ZIP/导出/下载；不再放自制相关
+        # 「仅缺/全部」留在来源行（自制单选之后）；自制/重制按钮在发布行
+        slay = win.rb_official.parent().layout()
+        self.assertGreater(slay.indexOf(win.regen_box), slay.indexOf(win.rb_made))
+        self.assertEqual(slay.indexOf(win.btn_make), -1)
+        self.assertEqual(slay.indexOf(win.btn_remake), -1)
         play = win.btn_merge.parent().layout()
-        self.assertEqual(play.indexOf(win.btn_make), -1)
+        self.assertGreater(play.indexOf(win.btn_make), play.indexOf(win.btn_download))
+        self.assertGreater(play.indexOf(win.btn_remake), play.indexOf(win.btn_make))
         self.assertEqual(play.indexOf(win.regen_box), -1)
-        self.assertEqual(play.indexOf(win.btn_remake), -1)
         win.config["default_source"] = "xml"
         win._sync_source_preset_ui()
         _ensure_app().processEvents()
@@ -204,7 +203,7 @@ class RightPanelTest(unittest.TestCase):
         win = self.win
         qss = win.tree.styleSheet()
         self.assertIn("#bbdefb", qss)          # 选中（与中栏列表一致）
-        self.assertIn("#e3f2fd", qss)          # 悬停浅蓝
+        self.assertIn("#fff3c4", qss)          # 悬停（与中栏列表一致）
         self.assertIn("#90caf9", qss)          # 选中+悬停
         win.nav_combo.setCurrentText("刊本")
         _ensure_app().processEvents()
