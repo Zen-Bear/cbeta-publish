@@ -74,6 +74,27 @@ class BridgeConvertLibTest(unittest.TestCase):
         self.assertEqual(a[a.index("-i") + 1], "T0001")   # 无本地 XML 传 id
         self.assertNotIn("--config", a)
 
+    def test_argv_passes_cbeta_ebook_when_configured(self):
+        import cbeta_publish.books.xml2pdf_bridge as b
+        out = self.dir / "T0001.pdf"
+        ebook = self.dir / "ebook"
+        ebook.mkdir()
+        cfg = {"xml2pdf": {"path": str(self.x2p), "cbeta_ebook": str(ebook)}}
+        calls, restore = self._patch_run()
+        try:
+            b.convert("T0001", None, out, cfg)
+        finally:
+            restore()
+        a = calls[0]
+        self.assertEqual(a[a.index("--cbeta-ebook") + 1], str(ebook))
+        # 未配置则不传
+        calls2, restore2 = self._patch_run()
+        try:
+            b.convert("T0001", None, out, self.cfg)
+        finally:
+            restore2()
+        self.assertNotIn("--cbeta-ebook", calls2[0])
+
     def test_stop_cancels_before_run(self):
         import cbeta_publish.books.xml2pdf_bridge as b
         out = self.dir / "T0001.pdf"
@@ -107,24 +128,39 @@ class BridgePresetDirTest(unittest.TestCase):
 
     def setUp(self):
         self.dir = Path(tempfile.mkdtemp())
-        (self.dir / "a.json").write_text("{}", encoding="utf-8")
-        (self.dir / "run.json").write_text('// c\n{"k": 1}', encoding="utf-8")
-        (self.dir / "bad.json").write_text("{oops", encoding="utf-8")
-        (self.dir / "note.txt").write_text("x", encoding="utf-8")
-        self.cfg = {"xml2pdf": {"path": "E:/dev/cbeta/xml2pdf", "preset_dir": str(self.dir)}}
+        # 预设目录固定在 xml2pdf 仓库下 presets/：用临时仓库根模拟
+        self.root = self.dir / "x2p"
+        (self.root / "presets").mkdir(parents=True)
+        (self.root / "presets" / "a.json").write_text("{}", encoding="utf-8")
+        (self.root / "presets" / "run.json").write_text('// c\n{"k": 1}', encoding="utf-8")
+        (self.root / "presets" / "note.txt").write_text("x", encoding="utf-8")
+        self.cfg = {"xml2pdf": {"path": str(self.root)}}
 
     def tearDown(self):
         shutil.rmtree(self.dir, ignore_errors=True)
 
     def test_list_presets(self):
+        # 上游 API 不可用（临时仓库根无 pycbeta）时回退本地扫描：stem 名
         import cbeta_publish.books.xml2pdf_bridge as b
-        self.assertEqual(b.list_presets(self.cfg), ["a.json", "run.json"])
+        self.assertEqual(b.list_presets(self.cfg), ["a", "run"])
 
     def test_resolve_preset(self):
         import cbeta_publish.books.xml2pdf_bridge as b
+        d = self.root / "presets"
         self.assertIsNone(b.resolve_preset(self.cfg, ""))
-        self.assertEqual(b.resolve_preset(self.cfg, "a.json"), self.dir / "a.json")
-        self.assertIsNone(b.resolve_preset(self.cfg, "nope.json"))
+        self.assertEqual(b.resolve_preset(self.cfg, "a"), d / "a.json")
+        self.assertEqual(b.resolve_preset(self.cfg, "a.json"), d / "a.json")
+        self.assertIsNone(b.resolve_preset(self.cfg, "nope"))
+
+    def test_load_and_save_preset(self):
+        # load/save 走上游 API（不可用时回退本地读写）
+        import cbeta_publish.books.xml2pdf_bridge as b
+        self.assertEqual(b.load_preset_dict("a.json", self.cfg), {})
+        p = b.save_preset(self.cfg, "我的配置", {"default_page": "a4"})
+        self.assertIsNotNone(p)
+        self.assertEqual(p, self.root / "presets" / "我的配置.json")
+        self.assertEqual(b.load_preset_dict("我的配置", self.cfg), {"default_page": "a4"})
+        self.assertIn("我的配置", b.list_presets(self.cfg))
 
     def test_flat_dest_and_find_built(self):
         import cbeta_publish.books.xml2pdf_bridge as b
@@ -161,8 +197,9 @@ class BridgePresetDirTest(unittest.TestCase):
                          b.PROJECT_ROOT / "rel" / "xb")
         abs_p = self.dir / "xb2"
         self.assertEqual(b.xml_books_dir({"xml_to_ebooks_dir": str(abs_p)}), abs_p)
-        self.assertEqual(b.preset_dir({"xml2pdf": {"path": "E:/x", "preset_dir": "rel/p"}}),
-                         b.PROJECT_ROOT / "rel" / "p")
+        # 预设目录固定在仓库下 presets/
+        self.assertEqual(b.presets_dir({"xml2pdf": {"path": "E:/x"}}),
+                         Path("E:/x") / "presets")
 
 
 if __name__ == "__main__":

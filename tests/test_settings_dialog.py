@@ -158,27 +158,29 @@ class SettingsDialogTest(unittest.TestCase):
         import tempfile
         tmp = Path(tempfile.mkdtemp())
         try:
-            (tmp / "a.json").write_text("{}", encoding="utf-8")
+            root = tmp / "x2p"
+            (root / "presets").mkdir(parents=True)
+            (root / "presets" / "a.json").write_text("{}", encoding="utf-8")
             cfg = copy.deepcopy(DEFAULT_CONFIG)
-            cfg["xml2pdf"]["preset_dir"] = str(tmp)
-            cfg["xml2pdf"]["preset"] = "a.json"
+            cfg["xml2pdf"]["path"] = str(root)
+            cfg["xml2pdf"]["preset"] = "a"
             cfg["default_source"] = "xml"
             cfg["xml_to_ebooks_dir"] = str(tmp / "xb")
             dlg = SettingsDialog(cfg, None)
-            self.assertEqual(dlg.ed_preset_dir.text(), str(tmp))
-            self.assertEqual(dlg.cb_preset.currentData(), "a.json")
+            self.assertEqual(dlg.cb_preset.currentData(), "a")
             i = dlg.cb_default_source.findData("xml")
             self.assertGreaterEqual(i, 0)
             self.assertEqual(dlg.cb_default_source.currentIndex(), i)
             self.assertEqual(dlg.ed_xmlbooks.text(), str(tmp / "xb"))
             out = dlg._collect()
-            self.assertEqual(out["xml2pdf"]["preset_dir"], str(tmp))
-            self.assertEqual(out["xml2pdf"]["preset"], "a.json")
+            self.assertEqual(out["xml2pdf"]["preset"], "a")
+            self.assertEqual(out["xml2pdf"]["path"], str(root))
             self.assertEqual(out["default_source"], "xml")
             self.assertEqual(out["xml_to_ebooks_dir"], str(tmp / "xb"))
-            for k in ("page", "font_lang", "engine", "vertical"):
+            for k in ("page", "font_lang", "engine", "vertical", "preset_dir"):
                 self.assertNotIn(k, out["xml2pdf"])
             self.assertFalse(hasattr(dlg, "cb_x2p_page"))
+            self.assertFalse(hasattr(dlg, "ed_preset_dir"))
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
@@ -208,8 +210,8 @@ class SettingsDialogTest(unittest.TestCase):
         groups = [g for g in dlg.findChildren(QGroupBox) if g.title() == "自制"]
         self.assertEqual(len(groups), 1)
         box = groups[0]
-        for w in (dlg.cb_default_source, dlg.ed_x2p, dlg.ed_xmlbooks,
-                  dlg.ed_preset_dir, dlg.cb_preset):
+        for w in (dlg.cb_default_source, dlg.ed_x2p, dlg.ed_x2p_ebook,
+                  dlg.ed_xmlbooks, dlg.cb_preset):
             self.assertTrue(box.isAncestorOf(w), w)
         labels = []
 

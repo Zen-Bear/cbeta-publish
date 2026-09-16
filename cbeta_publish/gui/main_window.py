@@ -1719,65 +1719,56 @@ class MainWindow(QMainWindow):
         self._save_config()
 
     def _edit_preset(self):
-        # 打开上游 XmlOptionsDialog 调整预设：覆盖保存或另存为到预设目录
+        # 打开上游 XmlOptionsDialog 调整预设：覆盖当前，或另存为新预设。
+        # 全程走上游公开 API：get_preset（合并结果）+ save_config_preset（写入 presets/）。
         from cbeta_publish.books import xml2pdf_bridge as _b
+        from PySide6.QtWidgets import QDialog as _QD, QInputDialog
         try:
             _b._ensure_path(str(_b._x2p_root(self.config)))
             from pycbeta.gui.panel import XmlOptionsDialog
         except Exception as e:
             QMessageBox.warning(self, "失败", f"载入 xml2pdf 选项对话框失败：{e}")
             return
-        cur_name=self.cb_preset.currentData() or ""
-        cur_path=_b.resolve_preset(self.config, cur_name)
-        presets=_b.load_preset_dict(cur_path, self.config) if cur_path else {}
-        dlg=XmlOptionsDialog(presets or None, self)
-        from PySide6.QtWidgets import QDialog as _QD
-        if dlg.exec()!=_QD.Accepted:
+        cur_name = self.cb_preset.currentData() or ""
+        cur_path = _b.resolve_preset(self.config, cur_name)
+        base = _b.load_preset_dict(cur_path, self.config) if cur_path else {}
+        dlg = XmlOptionsDialog(base or None, self)
+        if dlg.exec() != _QD.Accepted:
             return
-        try:
-            panel=dlg.panel
-            base=dict(presets) if isinstance(presets, dict) else {}
-            merged=panel._presets_merged(base)
-        except Exception as e:
-            QMessageBox.warning(self, "失败", f"读取调整结果失败：{e}")
+        merged = dlg.get_preset(base if isinstance(base, dict) else None)
+        if not isinstance(merged, dict):
             return
-        import json as _json
-        pdir=_b.preset_dir(self.config)
-        try:
-            pdir.mkdir(parents=True, exist_ok=True)
-        except Exception:
-            pass
-        from PySide6.QtWidgets import QFileDialog
-        if cur_path:
-            from PySide6.QtWidgets import QMessageBox as _MB
-            ret=_MB.question(self, "保存预设", f"覆盖 {Path(cur_path).name}，还是另存为新文件？",
-                             _MB.Save | _MB.Discard | _MB.Cancel)
-            if ret==_MB.Cancel:
+        name = cur_name
+        if cur_name:
+            box = QMessageBox(self)
+            box.setWindowTitle("保存预设")
+            box.setText(f"覆盖「{cur_name}」，还是另存为新预设？")
+            b_save = box.addButton("覆盖", QMessageBox.AcceptRole)
+            b_as = box.addButton("另存为…", QMessageBox.ActionRole)
+            box.addButton("取消", QMessageBox.RejectRole)
+            box.exec()
+            clicked = box.clickedButton()
+            if clicked is b_save:
+                pass
+            elif clicked is b_as:
+                name = None
+            else:
                 return
-            if ret==_MB.Save:
-                try:
-                    Path(cur_path).write_text(_json.dumps(merged, ensure_ascii=False, indent=2), encoding="utf-8")
-                except Exception as e:
-                    QMessageBox.warning(self, "失败", f"写入预设失败：{e}")
-                    return
-                self._refresh_preset_combo()
-                self.detail.setText(f"预设已保存：{Path(cur_path).name}")
+        if not name:
+            name, ok = QInputDialog.getText(self, "另存为新预设", "预设名：")
+            name = (name or "").strip()
+            if not ok or not name:
                 return
-        fp, _=QFileDialog.getSaveFileName(self, "另存为新预设", str(pdir), "预设 (*.json)")
-        if not fp:
-            return
-        if not fp.lower().endswith(".json"):
-            fp+=".json"
-        try:
-            Path(fp).write_text(_json.dumps(merged, ensure_ascii=False, indent=2), encoding="utf-8")
-        except Exception as e:
-            QMessageBox.warning(self, "失败", f"写入预设失败：{e}")
+        path = _b.save_preset(self.config, name, merged)
+        if path is None:
+            QMessageBox.warning(self, "失败", "写入预设失败（预设名是否为空/非法？）")
             return
         self._refresh_preset_combo()
-        i=self.cb_preset.findData(Path(fp).name)
-        if i>=0:
+        i = self.cb_preset.findData(path.stem)
+        if i >= 0:
             self.cb_preset.setCurrentIndex(i)
-        self.detail.setText(f"预设已保存：{Path(fp).name}")
+        self.detail.setText(f"预设已保存：{path.name}")
+
 
     def _persist_last_collection(self, path):
         # 记住上次工作的丛书，下次启动直接应用

@@ -84,6 +84,9 @@ def convert(work_id: str, xml_path, out_file, config: dict, fmt: str = "pdf",
     argv = ["-i", src, "-f", fmt, "-o", str(out_file)]
     if preset:
         argv += ["--config", str(preset)]
+    ebook = (_cfg(config).get("cbeta_ebook") or "").strip()
+    if ebook:
+        argv += ["--cbeta-ebook", str(_abs(ebook))]
     buf = io.StringIO()
     try:
         with contextlib.redirect_stdout(buf):
@@ -98,68 +101,121 @@ def convert(work_id: str, xml_path, out_file, config: dict, fmt: str = "pdf",
     return out_file if out_file.exists() else None
 
 
-# ---------- 预设目录 ----------
+# ---------- 预设（xml2pdf 仓库下 presets/，用上游公开 API） ----------
 
-def preset_dir(config) -> Path:
-    """预设目录：配置 preset_dir；缺省为 xml2pdf 仓库下 presets 子目录
-    （相对路径按工程根解析）。"""
-    d = _cfg(config).get("preset_dir") or ""
-    return _abs(d) if d else _x2p_root(config) / "presets"
+def presets_dir(config) -> Path:
+    """配置预设目录：xml2pdf 仓库下 presets/（随仓库发布；名称=文件名 stem）。"""
+    return _x2p_root(config) / "presets"
 
 
 def list_presets(config) -> list:
-    """预设目录下所有合法预设文件名（可解析为 JSON 对象的 *.json；
-    run bundle 与纯 presets 均可，对面两种都认；坏文件静默跳过）。"""
-    import json
-    import re
-    d = preset_dir(config)
-    out = []
-    if not d.exists():
-        return out
+    """预设名列表（presets/*.json 的 stem，按名排序）。
+
+    走上游公开 API `list_config_presets(root)`；上游不可用时回退本地扫描。
+    """
+    root = _x2p_root(config)
     try:
-        files = sorted(d.glob("*.json"), key=lambda p: p.name.lower())
+        _ensure_path(str(root))
+        from pycbeta.gui.panel import list_config_presets
+        return [stem for stem, _p in list_config_presets(str(root))]
     except Exception:
-        return out
-    for p in files:
-        try:
-            text = p.read_text(encoding="utf-8-sig")
-            # run.json 含整行 // 注释：去注释行再解析（行内 URL 不受影响）
-            text = re.sub(r"(?m)^\s*//.*$", "", text)
-            if isinstance(json.loads(text), dict):
-                out.append(p.name)
-        except Exception:
-            continue
-    return out
+        pass
+    d = presets_dir(config)
+    try:
+        return [p.stem for p in sorted(d.glob("*.json"), key=lambda x: x.name.lower())]
+    except Exception:
+        return []
 
 
 def resolve_preset(config, name=None):
-    """预设名（下拉框存的值）→ 完整路径；空名/不存在返回 None（=对面默认）。"""
+    """预设名 → 完整路径；空/不存在返回 None（=对面默认）。
+
+    名称可为 presets/ 下的 stem、`x.json` 文件名、或绝对/相对路径。
+    """
     if name is None:
         name = _cfg(config).get("preset", "")
     if not name:
         return None
     p = Path(name)
-    if p.is_absolute():
-        return p if p.exists() else None
-    cand = preset_dir(config) / name
-    return cand if cand.exists() else None
+    if p.is_absolute() or p.parent != Path("."):
+        cand = p if p.is_absolute() else (PROJECT_ROOT / p)
+        return cand if cand.exists() else None
+    d = presets_dir(config)
+    for cand in (d / name, d / f"{name}.json"):
+        if cand.exists():
+            return cand
+    return None
 
 
-def load_preset_dict(path, config=None):
-    """读预设文件为 dict（供 XmlOptionsDialog 预填；失败返回 {}）。"""
+def load_preset_dict(path_or_name, config=None):
+    """读预设为 dict（供 XmlOptionsDialog 预填；失败返回 {}）。
+
+    走上游公开 API `load_config_preset`；上游不可用时回退本地读 JSON。
+    """
+    root = _x2p_root(config)
     try:
-        _ensure_path(str(_x2p_root(config)))
-        from pycbeta.theme import load_effective_presets
-        d = load_effective_presets(str(path))
+        _ensure_path(str(root))
+        from pycbeta.gui.panel import load_config_preset
+        d = load_config_preset(str(path_or_name), str(root))
         return d if isinstance(d, dict) else {}
     except Exception:
         pass
     try:
         import json
-        d = json.loads(Path(path).read_text(encoding="utf-8-sig"))
-        return d if isinstance(d, dict) else {}
+        import re
+        p = Path(path_or_name)
+        cands = []
+        if p.is_absolute():
+            cands = [p]
+        else:
+            if p.exists():
+                cands.append(p)
+            pd = root / "presets"
+            cands += [pd / p, pd / f"{str(path_or_name)}.json"]
+        for cand in cands:
+            if not cand.is_file():
+                continue
+            text = re.sub(r"(?m)^\s*//.*$", "", cand.read_text(encoding="utf-8-sig"))
+            d = json.loads(text)
+            return d if isinstance(d, dict) else {}
+        return {}
     except Exception:
         return {}
+
+
+def _safe_stem(name):
+    """预设名 → 安全文件名 stem（与上游 safe_preset_stem 同规则；空则 ""）。"""
+    import re
+    stem = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "", (name or "").strip())
+    return stem.strip().strip(".")
+
+
+def save_preset(config, name, data) -> Path | None:
+    """保存预设 dict 到 presets/<name>.json（同名覆盖）；返回路径或 None。
+
+    走上游公开 API `save_config_preset`（内部净化文件名，空名抛错）；
+    上游不可用时回退本地写入（同规则净化）。
+    """
+    root = _x2p_root(config)
+    try:
+        _ensure_path(str(root))
+        from pycbeta.gui.panel import save_config_preset
+        return Path(save_config_preset(name, data, str(root)))
+    except Exception:
+        pass
+    try:
+        import json
+        stem = _safe_stem(name)
+        if not stem:
+            return None
+        d = root / "presets"
+        d.mkdir(parents=True, exist_ok=True)
+        p = d / f"{stem}.json"
+        p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        return p
+    except Exception as e:
+        print("save preset fail", e)
+        return None
 
 
 # ---------- 自制书输出目录（完全平展） ----------
