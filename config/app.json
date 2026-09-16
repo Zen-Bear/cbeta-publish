@@ -150,15 +150,6 @@
         ],
         "ratio": 1.0
       },
-      "series": {
-        "font": "C:\\Windows\\Fonts\\simfang.ttf",
-        "color": [
-          51,
-          51,
-          51
-        ],
-        "ratio": 0.9
-      },
       "toc_title": {
         "font": "C:\\Windows\\Fonts\\msyhbd.ttc",
         "color": [

@@ -23,7 +23,7 @@ CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "app.json"
 
 class _PanelHandle(QSplitterHandle):
     # 分隔条上的收起/恢复按钮（操作其左侧的那一栏）
-    def __init__(self, orientation, parent, panel_index=0):
+    def __init__(self, orientation, parent):
         super().__init__(orientation, parent)
         self._saved = None
         self._pidx = None      # 缓存本分隔条左侧栏索引（判定一次后固定）
@@ -627,13 +627,6 @@ class MainWindow(QMainWindow):
             self._authors_pinyin_sorted=_all
         except Exception as e:
             print("pinyin cache fail", e)
-        # 作者别名索引：正式名 -> 别名列表（用于详情/悬停显示）
-        self._author_aliases={}
-        try:
-            for _aid, _info in self.creator.alias.items():
-                self._author_aliases[_info.get("regular_name","")]=_info.get("aliases_all",[])
-        except Exception as e:
-            print("alias index fail", e)
         self._on_nav_changed(self.nav_combo.currentText())
         self._apply_layout()          # 布局：三栏/二栏（ui.layout）
         # 目录更新：按 update_interval 到期后台静默检查（不阻塞启动）
