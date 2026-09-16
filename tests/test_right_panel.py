@@ -119,14 +119,21 @@ class RightPanelTest(unittest.TestCase):
         win._sync_source_preset_ui()
         _ensure_app().processEvents()
         self.assertFalse(win.rb_regen_all.isEnabled())
-        # 右侧 raido 在按钮行：自制 之后、重制 之前；随来源显隐
-        lay = win.btn_merge.parent().layout()
+        # 自制/重制与「仅缺/全部」都在来源行：紧跟 rb_made 之后
+        lay = win.rb_official.parent().layout()
+        self.assertGreater(lay.indexOf(win.btn_make), lay.indexOf(win.rb_made))
         self.assertGreater(lay.indexOf(win.regen_box), lay.indexOf(win.btn_make))
-        self.assertLess(lay.indexOf(win.regen_box), lay.indexOf(win.btn_remake))
+        self.assertGreater(lay.indexOf(win.btn_remake), lay.indexOf(win.regen_box))
+        # 发布按钮行只留 合并/ZIP/导出/下载；不再放自制相关
+        play = win.btn_merge.parent().layout()
+        self.assertEqual(play.indexOf(win.btn_make), -1)
+        self.assertEqual(play.indexOf(win.regen_box), -1)
+        self.assertEqual(play.indexOf(win.btn_remake), -1)
         win.config["default_source"] = "xml"
         win._sync_source_preset_ui()
         _ensure_app().processEvents()
         self.assertTrue(win.regen_box.isVisibleTo(win))
+        self.assertTrue(win.btn_make.isVisibleTo(win))
 
     def test_make_buttons_switch_with_source(self):
         # 来源=自制 → 显示「自制/重制」，隐藏「下载/更新」；来源=官方反之
