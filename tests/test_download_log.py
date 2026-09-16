@@ -305,10 +305,13 @@ class MergeXmlSourceTest(unittest.TestCase):
         self._select_coll(["T0001"])
         win.config["default_source"] = "xml"
         win.config["xml_to_ebooks_dir"] = str(self.tmp / "xb")
-        preset = self.tmp / "my.json"
+        # 预设目录固定在 xml2pdf 仓库 presets/：用临时仓库根模拟
+        root = self.tmp / "x2p"
+        (root / "presets").mkdir(parents=True, exist_ok=True)
+        preset = root / "presets" / "my.json"
         preset.write_text("{}", encoding="utf-8")
-        win.config.setdefault("xml2pdf", {})["preset"] = "my.json"
-        win.config["xml2pdf"]["preset_dir"] = str(self.tmp)
+        win.config["xml2pdf"]["path"] = str(root)
+        win.config["xml2pdf"]["preset"] = "my"
         win.chk_pdf.setChecked(True)
         win.chk_epub.setChecked(False)
         calls = []

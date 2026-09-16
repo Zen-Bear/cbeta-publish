@@ -19,21 +19,29 @@
 ```py
 # cbeta_publish/books/xml2pdf_bridge.py
 def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=None) -> Path | None
-# 内部：进程内 pycbeta.cli.main(["-i", work_id, "-f", fmt, "-o", out_file, "--config", preset])
+# 内部：进程内 pycbeta.cli.main(["-i", work_id, "-f", fmt, "-o", out_file,
+#                              "--config", preset, "--cbeta-ebook", <工作根>])
 ```
 
 - **库调用**，不起子进程：省每本一次 python 启动；进度/取消/错误是直接对象
   （`stop()` 在本与本之间生效；单本内部无更细进度，对面只在完成时落一行）。
 - `-i` **只传 work id**：XML 源由 xml2pdf 的 `materialize_work` 解析
-  （本地候选源 → 官方下载）。publish 侧**不**自行定位 XML——CBReader
+  （工作根 → 本地候选源 → 官方下载）。publish 侧**不**自行定位 XML——CBReader
   书库是 P5a（按卷切分），不是对面要的 P5（整部经），拿它去找只会喂错文件。
-- `--config` = 预设文件（run.json 组合单或纯 presets；`None` = 对面默认）。
+- `--cbeta-ebook` = XML 工作根，**publish 显式传入**（配置键
+  `xml2pdf.cbeta_ebook`；为空则不传，由对面自身配置决定）。这样 xml2pdf 也能
+  脱离 publish 独立运行，互不干扰。（契约术语里"XML 源"专指 `source.xml_dir`
+  本地候选源，那项 publish 不配。）
+- `--config` = **run.json 组合单或基础配置 JSON**（`config.user.json`/`presets/*.json`
+  快照，对面 `theme.resolve_config_arg` 自动分流：含 RUN_KEYS 当 run.json，
+  否则当 `config-json` 槽）；`None` = 对面默认。
 - `-o` = publish 定名的完整产物路径（平展，见 §4）。
 
 **辅助函数**（同在 `xml2pdf_bridge.py`）：
 `_x2p_root` / `_abs`（目录统一绝对，相对按工程根）/
-`preset_dir`（缺省 `<仓库>/presets`）/ `list_presets` / `resolve_preset` /
-`load_preset_dict`（供 `XmlOptionsDialog` 预填）/
+`presets_dir`（= `<仓库>/presets`，由 xml2pdf 决定，publish 不另配）/
+`list_presets` / `resolve_preset` / `load_preset_dict` / `save_preset`
+（预设读写；优先走上游公开 API，不可用时回退本地）/
 `xml_books_dir` / `xml_dest` / `find_built` / `is_fresh`。
 
 ## 3. 可复用 UI 组件 `pycbeta.gui`
@@ -47,7 +55,13 @@ def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=No
 - publish 以 `sys.path` 引入（`bridge._ensure_path`）：
   `from pycbeta.gui.panel import XmlOptionsDialog`。
 - publish 的**预设[调整…]**入口即调 `XmlOptionsDialog`：读取当前预设 →
-  编辑 → 覆盖保存或另存为到预设目录 → 刷新预设下拉。
+  编辑 → `exec()` Accepted 后取 `dlg.get_preset(base)`（合并后的预设 dict）→
+  覆盖保存或另存为（写盘经 xml2pdf 公开函数 `save_config_preset`，见下）。
+- **公开 API（不碰私有名）**：`XmlOptionsPanel.get_options()/set_options()`、
+  `XmlOptionsPanel.merged_preset(base=None)`（面板值+base → 预设 dict）、
+  `XmlOptionsDialog.get_options()/get_preset(base=None)`、
+  `list_config_presets/load_config_preset/save_config_preset/delete_config_preset`
+  （`presets/` 读写；非法名/越界删除抛 `ValueError`）。
 - `XmlOptions` dataclass 仍是 xml2pdf 内部模型；publish 不直接构造它，
   只传预设文件路径。
 
@@ -59,15 +73,17 @@ def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=No
   "default_source": "official",                        // official | xml（右栏来源单选，sticky）
   "xml_to_ebooks_dir": "E:/dev/cbeta/publish/cbeta_ebooks_xml",   // 自制书输出根（可配，绝对路径）
   "xml2pdf": {
-    "path": "E:/dev/cbeta/xml2pdf",                    // 自制程序仓库
-    "preset_dir": "",                                 // 预设目录；空=仓库下 presets
-    "preset": ""                                      // 默认预设文件名；空=对面默认
+    "path": "E:/dev/cbeta/xml2pdf",                    // 自制程序仓库（预设目录=其 presets/）
+    "cbeta_ebook": "",                                // XML 工作根；传 --cbeta-ebook（可空=对面自身配置）
+    "preset": ""                                      // 默认预设名（presets/ 下 stem）；空=对面默认
   }
 }
 ```
 - 目录一律绝对路径；显示与落盘用本地分隔符（Windows 反斜杠）。
+- 预设目录固定在 xml2pdf 仓库 `presets/`（上游 `user_presets_dir`），
+  publish 不再单独配置目录；`xml2pdf.preset` 存**预设名（stem）**。
 - 已删除：`book_dir`、`local_xml_root`（XML 源归 xml2pdf）、
-  `xml2pdf.{page,font_lang,engine,vertical}`（preset 为准）。
+  `xml2pdf.{page,font_lang,engine,vertical}`（preset 为准）、`xml2pdf.preset_dir`。
 
 **`collections/<cat>/<slug>.json`**（只读兼容，不参与决策）
 ```json
@@ -93,10 +109,15 @@ def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=No
 
 ## 6. 实施清单
 
-- [x] `publish`：`xml2pdf_bridge.py`（库调用＋预设目录＋平展输出＋复用规则）
-- [x] `publish`：右栏来源单选＋预设下拉＋[调整…]；设置页「自制」组（来源/程序路径/自制电子书/预设目录/默认预设）
+- [x] `publish`：`xml2pdf_bridge.py`（库调用＋预设（上游 API）＋平展输出＋复用规则）
+- [x] `publish`：右栏来源单选＋预设下拉＋[调整…]；设置页「自制」组（来源/程序路径/XML 工作根/自制电子书/默认预设）
 - [x] `publish`：`[合并]` 整批同源、平展目录、说明页注明
 - [x] `xml2pdf`：`pycbeta.gui` 面板/对话框/独立入口（已存在，publish 直接复用）
+- [x] `xml2pdf`：`--config` 兼容 run.json 与基础配置 JSON（`theme.resolve_config_arg`）；
+  `--html-epub-user-theme` 占位开关；公开 `merged_preset`/`get_preset`/`*_config_preset`
+- [x] `publish`：`convert` 传 `--cbeta-ebook`（配置键 `xml2pdf.cbeta_ebook`，设置页「XML 工作根」行）
+- [x] `publish`：预设读写改用公开 API（`list_config_presets`/`load_config_preset`/
+  `save_config_preset`；`[调整…]` 用 `get_preset`），不再碰私有名或自写盘
 - [x] 文档：本契约 + 《链路B-UI设计.md》
 
 ## 7. 备注
