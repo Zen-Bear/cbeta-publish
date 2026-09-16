@@ -20,20 +20,20 @@ class UiFontsTest(unittest.TestCase):
         _ensure_app()
 
     def test_apply_changes_app_font_live(self):
-        apply_ui_fonts({"app_font": "Microsoft YaHei", "app_font_size": 11,
+        apply_ui_fonts({"app_font": "SimSun", "app_font_size": 11,
                         "supplement_ttf": ""})
         f = QApplication.instance().font()
         self.assertEqual(f.pointSize(), 11)
-        self.assertEqual(f.family(), "Microsoft YaHei")
+        self.assertEqual(f.family(), "SimSun")
 
     def test_bad_values_fall_back(self):
         apply_ui_fonts({"app_font": "", "app_font_size": "xx",
                         "supplement_ttf": "Z:/no/such.ttf"})
         f = QApplication.instance().font()
         self.assertEqual(f.pointSize(), 9)
-        self.assertEqual(f.family(), "Microsoft YaHei")
+        self.assertEqual(f.family(), "SimSun")
         # 恢复默认，避免影响其它测试
-        apply_ui_fonts({"app_font": "Microsoft YaHei", "app_font_size": 9,
+        apply_ui_fonts({"app_font": "SimSun", "app_font_size": 9,
                         "supplement_ttf": ""})
 
 
