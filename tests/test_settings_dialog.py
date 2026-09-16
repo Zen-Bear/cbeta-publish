@@ -143,6 +143,45 @@ class SettingsDialogTest(unittest.TestCase):
         self.assertIn("PDF 合并模式", labels)
         self.assertNotIn("发布模式", labels)
 
+    def test_default_source_shows_chinese(self):
+        # 默认来源下拉显示官方/自制，存值 official/xml
+        dlg = self._dlg()
+        self.assertEqual([dlg.cb_default_source.itemText(i)
+                          for i in range(dlg.cb_default_source.count())],
+                         ["官方", "自制"])
+        self.assertEqual([dlg.cb_default_source.itemData(i)
+                          for i in range(dlg.cb_default_source.count())],
+                         ["official", "xml"])
+
+    def test_preset_rows_and_collect(self):
+        import shutil
+        import tempfile
+        tmp = Path(tempfile.mkdtemp())
+        try:
+            (tmp / "a.json").write_text("{}", encoding="utf-8")
+            cfg = copy.deepcopy(DEFAULT_CONFIG)
+            cfg["xml2pdf"]["preset_dir"] = str(tmp)
+            cfg["xml2pdf"]["preset"] = "a.json"
+            cfg["default_source"] = "xml"
+            cfg["xml_to_ebooks_dir"] = str(tmp / "xb")
+            dlg = SettingsDialog(cfg, None)
+            self.assertEqual(dlg.ed_preset_dir.text(), str(tmp))
+            self.assertEqual(dlg.cb_preset.currentData(), "a.json")
+            i = dlg.cb_default_source.findData("xml")
+            self.assertGreaterEqual(i, 0)
+            self.assertEqual(dlg.cb_default_source.currentIndex(), i)
+            self.assertEqual(dlg.ed_xmlbooks.text(), str(tmp / "xb"))
+            out = dlg._collect()
+            self.assertEqual(out["xml2pdf"]["preset_dir"], str(tmp))
+            self.assertEqual(out["xml2pdf"]["preset"], "a.json")
+            self.assertEqual(out["default_source"], "xml")
+            self.assertEqual(out["xml_to_ebooks_dir"], str(tmp / "xb"))
+            for k in ("page", "font_lang", "engine", "vertical"):
+                self.assertNotIn(k, out["xml2pdf"])
+            self.assertFalse(hasattr(dlg, "cb_x2p_page"))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
     def test_collect_roundtrip_after_restructure(self):
         # 子页签拆分后，控件仍在 _collect 覆盖范围内
         cfg = copy.deepcopy(DEFAULT_CONFIG)
@@ -161,6 +200,54 @@ class SettingsDialogTest(unittest.TestCase):
         self.assertEqual(cv["styles"]["background"]["color"], [1, 2, 3])
         self.assertFalse(cv["images"]["buddha"]["enabled"])
         self.assertIn("font", cv["styles"]["title"])
+
+    def test_dirs_tab_groups_and_browse(self):
+        # 数据/输出：目录行都有浏览按钮；自制相关框成一组；路径标签叫自制程序路径
+        from PySide6.QtWidgets import QGroupBox, QPushButton
+        dlg = self._dlg()
+        groups = [g for g in dlg.findChildren(QGroupBox) if g.title() == "自制"]
+        self.assertEqual(len(groups), 1)
+        box = groups[0]
+        for w in (dlg.cb_default_source, dlg.ed_x2p, dlg.ed_xmlbooks,
+                  dlg.ed_preset_dir, dlg.cb_preset):
+            self.assertTrue(box.isAncestorOf(w), w)
+        labels = []
+
+        def _labels_of(form):
+            from PySide6.QtWidgets import QFormLayout
+            out = []
+            for i in range(form.rowCount()):
+                it = form.itemAt(i, QFormLayout.LabelRole)
+                if it is not None and it.widget() is not None and hasattr(it.widget(), "text"):
+                    out.append(it.widget().text())
+            return out
+
+        for f in dlg.findChildren(QFormLayout):
+            labels.extend(_labels_of(f))
+        self.assertIn("自制程序路径", labels)
+        self.assertNotIn("xml2pdf 路径", labels)
+        self.assertNotIn("链路B", "".join(labels))
+        # 每个目录行都有浏览按钮
+        browses = [b for b in dlg.findChildren(QPushButton) if b.text() == "浏览…"]
+        self.assertGreaterEqual(len(browses), 6)
+        self.assertTrue(hasattr(dlg, "_pick_dir"))
+        self.assertTrue(hasattr(dlg, "_dir_row"))
+        self.assertFalse(hasattr(dlg, "ed_book"))
+        self.assertFalse(hasattr(dlg, "ed_xmlroot"))
+
+    def test_paths_use_native_separator(self):
+        # 路径统一本地分隔符显示与落盘（Windows 反斜杠）
+        from pathlib import Path as _P
+        cfg = copy.deepcopy(DEFAULT_CONFIG)
+        cfg["official_ebooks_dir"] = "E:/x/y"
+        cfg["xml_to_ebooks_dir"] = "E:/x/xb"
+        cfg["mulu_dir"] = "E:/x/mulu"
+        d2 = SettingsDialog(cfg, None)
+        self.assertEqual(d2.ed_ebooks.text(), str(_P("E:/x/y")))
+        self.assertEqual(d2.ed_xmlbooks.text(), str(_P("E:/x/xb")))
+        out = d2._collect()
+        self.assertNotIn("/", out["official_ebooks_dir"])
+        self.assertNotIn("/", out["xml_to_ebooks_dir"])
 
 
 if __name__ == "__main__":

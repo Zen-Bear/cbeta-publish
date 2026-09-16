@@ -431,6 +431,35 @@ class MainWindow(QMainWindow):
         fh.addWidget(self.chk_pdf); fh.addWidget(self.chk_epub)
         fh.addStretch()
         pg.addWidget(fmt_box)
+        # 来源 + 预设：一套丛书可按官方或自制合并，整批统一
+        src_box=QWidget()
+        sh=QHBoxLayout(src_box)
+        sh.setContentsMargins(0,0,0,0)
+        sh.addWidget(QLabel("来源:"))
+        self.src_group=QButtonGroup(src_box)
+        self.rb_official=QRadioButton("官方")
+        self.rb_official.setToolTip("从 CBETA 官方下载成品电子书后合并")
+        self.rb_made=QRadioButton("自制")
+        self.rb_made.setToolTip("电子书由程序根据官方 XML 制作（经 xml2pdf 生成）后再合并")
+        for _i, _rb in enumerate((self.rb_official, self.rb_made)):
+            sh.addWidget(_rb)
+            self.src_group.addButton(_rb, _i)
+        sh.addStretch()
+        pg.addWidget(src_box)
+        preset_box=QWidget()
+        ph=QHBoxLayout(preset_box)
+        ph.setContentsMargins(0,0,0,0)
+        ph.addWidget(QLabel("预设:"))
+        self.cb_preset=QComboBox()
+        self.cb_preset.setToolTip("自制书的 xml2pdf 预设（预设目录下的 *.json，出厂默认=对面默认）")
+        self.cb_preset.setMinimumWidth(140)
+        ph.addWidget(self.cb_preset, 1)
+        self.btn_preset_edit=QPushButton("调整…")
+        self.btn_preset_edit.setToolTip("打开 xml2pdf 选项对话框调整，可覆盖保存或另存为新预设")
+        self.btn_preset_edit.setFixedWidth(64)
+        ph.addWidget(self.btn_preset_edit)
+        pg.addWidget(preset_box)
+        self._sync_source_preset_ui()
         publish_box=QWidget()
         hb2=QHBoxLayout(publish_box)
         hb2.setContentsMargins(0,0,0,0)
@@ -569,6 +598,9 @@ class MainWindow(QMainWindow):
         self.btn_merge.clicked.connect(self._merge)
         self.btn_zip.clicked.connect(self._zip)
         self.btn_export.clicked.connect(self._export)
+        self.src_group.buttonClicked.connect(self._on_source_changed)
+        self.cb_preset.currentIndexChanged.connect(self._on_preset_changed)
+        self.btn_preset_edit.clicked.connect(self._edit_preset)
         self.search.textChanged.connect(self._on_search)
         self.search.returnPressed.connect(lambda: self._on_search(self.search.text()))
         self.coll_combo.currentTextChanged.connect(self._on_combo_changed)
@@ -1613,6 +1645,139 @@ class MainWindow(QMainWindow):
             p.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
         except Exception as e:
             print("persist layout fail", e)
+
+    def _save_config(self):
+        # 运行期改动（来源/预设）写回磁盘配置
+        try:
+            p=Path(self._config_path)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(json.dumps(self.config, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception as e:
+            print("save config fail", e)
+
+    def _run_source(self):
+        # 本次合并来源：右栏单选（全局 default_source），显示官方/自制
+        return self.config.get("default_source", "official") or "official"
+
+    def _run_preset(self):
+        # 本次合并预设：右栏下拉（全局 xml2pdf.preset），返回完整路径或 None
+        from cbeta_publish.books import xml2pdf_bridge as _b
+        return _b.resolve_preset(self.config)
+
+    def _sync_source_preset_ui(self):
+        # 右栏来源单选 + 预设下拉与配置同步（启动/设置页保存后调用）
+        try:
+            src=self._run_source()
+            (self.rb_made if src=="xml" else self.rb_official).setChecked(True)
+        except Exception:
+            pass
+        self._refresh_preset_combo()
+
+    def _refresh_preset_combo(self):
+        # 预设下拉：预设目录下合法 *.json + 首项"出厂默认"；保持当前选择
+        from cbeta_publish.books import xml2pdf_bridge as _b
+        try:
+            cur=self.cb_preset.currentData()
+        except Exception:
+            cur=None
+        if cur is None:
+            cur=(self.config.get("xml2pdf", {}) or {}).get("preset", "")
+        try:
+            names=_b.list_presets(self.config)
+        except Exception:
+            names=[]
+        self.cb_preset.blockSignals(True)
+        self.cb_preset.clear()
+        self.cb_preset.addItem("出厂默认", "")
+        for n in names:
+            self.cb_preset.addItem(n, n)
+        i=self.cb_preset.findData(cur)
+        self.cb_preset.setCurrentIndex(i if i>=0 else 0)
+        self.cb_preset.blockSignals(False)
+        self._update_preset_enabled()
+
+    def _update_preset_enabled(self):
+        # 仅来源=自制时启用预设行
+        on=self._run_source()=="xml"
+        self.cb_preset.setEnabled(on)
+        self.btn_preset_edit.setEnabled(on)
+
+    def _on_source_changed(self, *_):
+        # 右栏来源切换：sticky 写回全局，下次默认上次的选择
+        btn=self.src_group.checkedButton()
+        self.config["default_source"]="xml" if btn is self.rb_made else "official"
+        self._save_config()
+        self._update_preset_enabled()
+
+    def _on_preset_changed(self, *_):
+        # 右栏预设切换：sticky 写回全局默认预设
+        try:
+            name=self.cb_preset.currentData() or ""
+        except Exception:
+            name=""
+        self.config.setdefault("xml2pdf", {})["preset"]=name
+        self._save_config()
+
+    def _edit_preset(self):
+        # 打开上游 XmlOptionsDialog 调整预设：覆盖保存或另存为到预设目录
+        from cbeta_publish.books import xml2pdf_bridge as _b
+        try:
+            _b._ensure_path(str(_b._x2p_root(self.config)))
+            from pycbeta.gui.panel import XmlOptionsDialog
+        except Exception as e:
+            QMessageBox.warning(self, "失败", f"载入 xml2pdf 选项对话框失败：{e}")
+            return
+        cur_name=self.cb_preset.currentData() or ""
+        cur_path=_b.resolve_preset(self.config, cur_name)
+        presets=_b.load_preset_dict(cur_path, self.config) if cur_path else {}
+        dlg=XmlOptionsDialog(presets or None, self)
+        from PySide6.QtWidgets import QDialog as _QD
+        if dlg.exec()!=_QD.Accepted:
+            return
+        try:
+            panel=dlg.panel
+            base=dict(presets) if isinstance(presets, dict) else {}
+            merged=panel._presets_merged(base)
+        except Exception as e:
+            QMessageBox.warning(self, "失败", f"读取调整结果失败：{e}")
+            return
+        import json as _json
+        pdir=_b.preset_dir(self.config)
+        try:
+            pdir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+        from PySide6.QtWidgets import QFileDialog
+        if cur_path:
+            from PySide6.QtWidgets import QMessageBox as _MB
+            ret=_MB.question(self, "保存预设", f"覆盖 {Path(cur_path).name}，还是另存为新文件？",
+                             _MB.Save | _MB.Discard | _MB.Cancel)
+            if ret==_MB.Cancel:
+                return
+            if ret==_MB.Save:
+                try:
+                    Path(cur_path).write_text(_json.dumps(merged, ensure_ascii=False, indent=2), encoding="utf-8")
+                except Exception as e:
+                    QMessageBox.warning(self, "失败", f"写入预设失败：{e}")
+                    return
+                self._refresh_preset_combo()
+                self.detail.setText(f"预设已保存：{Path(cur_path).name}")
+                return
+        fp, _=QFileDialog.getSaveFileName(self, "另存为新预设", str(pdir), "预设 (*.json)")
+        if not fp:
+            return
+        if not fp.lower().endswith(".json"):
+            fp+=".json"
+        try:
+            Path(fp).write_text(_json.dumps(merged, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception as e:
+            QMessageBox.warning(self, "失败", f"写入预设失败：{e}")
+            return
+        self._refresh_preset_combo()
+        i=self.cb_preset.findData(Path(fp).name)
+        if i>=0:
+            self.cb_preset.setCurrentIndex(i)
+        self.detail.setText(f"预设已保存：{Path(fp).name}")
 
     def _persist_last_collection(self, path):
         # 记住上次工作的丛书，下次启动直接应用
@@ -3724,6 +3889,8 @@ class MainWindow(QMainWindow):
             self._apply_layout()
             # 目录过滤等即时刷新当前视图
             self._on_nav_changed(self.nav_combo.currentText())
+            # 设置可能改了来源/预设目录/默认预设：刷新右栏
+            self._sync_source_preset_ui()
             if saved:
                 self.detail.setText("设置已保存（界面字体即时生效；封面字体下次合并生效）")
             else:
@@ -3800,7 +3967,7 @@ class MainWindow(QMainWindow):
             g["ok"].append(f); g["titles"].append(t); g["works"].append(w)
         return sorted(buckets.values(), key=lambda g: g["sortkey"])
 
-    def _intro_for(self, ok_works, cover_cfg):
+    def _intro_for(self, ok_works, cover_cfg, made_by_xml=False):
         intro=None
         intro_cfg=(cover_cfg.get("intro",{}) or {})
         if ok_works and cover_cfg.get("enabled", True) and intro_cfg.get("enabled", True):
@@ -3811,6 +3978,9 @@ class MainWindow(QMainWindow):
                     intro["title"]=intro_cfg["title"]
                 if not intro_cfg.get("list", True):
                     intro["sections"]=[]
+                if made_by_xml:
+                    # 自制来源整页一句注明（官方不加）
+                    intro.setdefault("summary", []).append("电子书由程序根据官方XML制作。")
             except Exception as e:
                 print("intro build fail", e)
                 intro=None
@@ -3972,12 +4142,16 @@ class MainWindow(QMainWindow):
         from cbeta_publish.books import xml2pdf_bridge
         from cbeta_publish.books import official_ebook_source
         dest_dir=Path(self.config.get("cbeta_ebooks_dir", self.config.get("official_ebooks_dir","./cbeta_ebooks")))
-        src_default=d.get("source") or self.config.get("default_source","official")
-        work_sources=d.get("work_sources",{}) or {}
+        # 本次来源：右栏单选（整批统一；丛书不绑定来源）
+        run_source=self._run_source()
+        run_preset=self._run_preset() if run_source=="xml" else None
+        xml_out=xml2pdf_bridge.xml_books_dir(self.config)
+        try:
+            xml_out.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
         def _src(w):
-            return work_sources.get(w, src_default)
-        xml_cache=self._out_dir()/"_xml_convert"/(d.get("name") or "book")
-        xml_opts=(d.get("xml_options") or self.config.get("xml2pdf",{}) or {})
+            return run_source
         def _official_dest(fmt, w):
             return official_ebook_source.dest_path(w, fmt, dest_dir)
         # 官方源缺书检查（xml 源不走此提示）
@@ -4022,16 +4196,25 @@ class MainWindow(QMainWindow):
             ok_works=[]
             for w in works:
                 if _src(w)=="xml":
-                    out=xml_cache/f"{w}.{fmt}"
-                    if not out.exists():
-                        xml=xml2pdf_bridge.find_xml(w, self.config, mapping=self.mapping)
-                        if xml:
-                            xml2pdf_bridge.convert(w, xml, xml_cache, self.config, fmt=fmt, opts=xml_opts)
+                    out=xml2pdf_bridge.xml_dest(w, fmt, xml_out)
+                    reused=False
+                    hit=xml2pdf_bridge.find_built(w, fmt, xml_out)
+                    if hit is not None and xml2pdf_bridge.is_fresh(hit, run_preset):
+                        out=hit
+                        reused=True
+                    else:
+                        # 只传 work id：XML 源解析归 xml2pdf（本地候选源→官方下载）。
+                        # 注意 CBReader 书库是 P5a（按卷切分），不是 xml2pdf 要的
+                        # P5（整部经），publish 侧不再自行定位 XML 文件。
+                        got=xml2pdf_bridge.convert(w, None, out,
+                                                   self.config, fmt=fmt, preset=run_preset)
+                        if got is not None and got.exists():
+                            out=got
                     if out.exists():
                         ok.append(out); ok_titles.append(self.sutra.title_of(w)); ok_works.append(w)
                     else:
                         failed.append(f"{w}.{fmt} XML转换失败")
-                    if not bump(f"[{fmt}] 转换 {out.name}"):
+                    if not bump(f"[{fmt}] {'复用' if reused else '生成'} {out.name}"):
                         cancelled=True
                         break
                     continue
@@ -4081,7 +4264,7 @@ class MainWindow(QMainWindow):
                         cname=f"{d['name']}｜{glabel}"
                         out=out_dir/f"{self._safe_name(stem)}.{fmt}"
                         update(100*gbase/total_units, f"[{fmt}] 分册「{glabel}」 → {out.name}（{len(gok)} 部）")
-                    intro=self._intro_for(gworks, cover_cfg)
+                    intro=self._intro_for(gworks, cover_cfg, made_by_xml=(run_source=="xml"))
                     gfiles=[]
                     if fmt=="pdf":
                         parts=merge_pdfs(gok, out, titles=gtitles, collection_name=cname, organizer=organizer, cover_config=cover_cfg, intro=intro, progress=gprog, split_pages=split_pages)

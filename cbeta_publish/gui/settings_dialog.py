@@ -19,14 +19,13 @@ IMAGES_DIR = PROJECT_ROOT / "assets" / "images"
 DEFAULT_IMAGES_DIR = IMAGES_DIR / "default"
 
 DEFAULT_CONFIG = {
-    "book_dir": str(PROJECT_ROOT / "cbeta_xml"),
     "official_ebooks_dir": str(PROJECT_ROOT / "cbeta_ebooks"),
+    "xml_to_ebooks_dir": str(PROJECT_ROOT / "cbeta_ebooks_xml"),
     "mulu_dir": str(PROJECT_ROOT / "mulu"),
     "collections_dir": str(PROJECT_ROOT / "collections"),
     "theme": {"mode": "system", "accent": "#8B4513"},
     "language": "zh-Hans",
     "update_interval": "weekly",
-    "local_xml_root": "E:/CBETA/CBReader2X/Bookcase/CBETA/XML",
     "output_dir": "my_books",
     "ui": {"tree_expand": {"mode": "depth", "depth": 2}, "layout": "three",
            "app_font": "SimSun", "app_font_size": 9,
@@ -35,7 +34,7 @@ DEFAULT_CONFIG = {
     "pdf": {"split_pages": 5000},
     "epub": {"split_items": 500},
     "merge": {"by_volume": False},
-    "xml2pdf": {"path": "E:/dev/cbeta/xml2pdf", "page": "a4", "font_lang": "zh-Hant", "engine": "docx2pdf", "vertical": False},
+    "xml2pdf": {"path": "E:/dev/cbeta/xml2pdf", "preset_dir": "", "preset": ""},
     "catalog": {"filters": {"tripitaka": {"hidden": []}, "dynasty": {"hidden": []}, "vol": {"hidden": []}}},
     "cover": {
         "organizer": "CBETA 整理",
@@ -151,47 +150,71 @@ class SettingsDialog(QDialog):
         return super().eventFilter(obj, event)
 
     # ---------- 页签：数据/输出 ----------
+    def _dir_row(self, edit):
+        # 目录行：输入框 + 浏览按钮（打开目录为当前值所在目录）
+        row = QWidget()
+        h = QHBoxLayout(row)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.addWidget(edit, 1)
+        btn = QPushButton("浏览…")
+        btn.setFixedWidth(64)
+        btn.clicked.connect(lambda: self._pick_dir(edit))
+        h.addWidget(btn)
+        return row
+
+    def _pick_dir(self, edit):
+        from pathlib import Path as _P
+        start = (edit.text() or "").strip()
+        if not _P(start).is_dir():
+            start = str(_P(start).parent) if start else ""
+        if not _P(start).is_dir():
+            start = str(PROJECT_ROOT)
+        d = QFileDialog.getExistingDirectory(self, "选择目录", start)
+        if d:
+            edit.setText(d)
+
     def _tab_dirs(self):
         w = QWidget()
         form = QFormLayout(w)
         self.ed_mulu = QLineEdit(self._cfg.get("mulu_dir", ""))
         self.ed_collections = QLineEdit(self._cfg.get("collections_dir", ""))
-        self.ed_book = QLineEdit(self._cfg.get("book_dir", ""))
         self.ed_ebooks = QLineEdit(self._cfg.get("official_ebooks_dir", ""))
-        self.ed_xmlroot = QLineEdit(self._cfg.get("local_xml_root", ""))
         self.ed_output = QLineEdit(self._cfg.get("output_dir", "my_books"))
         self.cb_interval = self._no_wheel_until_focused(QComboBox())
         self.cb_interval.addItems(["daily", "weekly", "monthly", "manual"])
         cur = self._cfg.get("update_interval", "weekly")
         if cur in ["daily", "weekly", "monthly", "manual"]:
             self.cb_interval.setCurrentText(cur)
-        form.addRow("目录数据", self.ed_mulu)
-        form.addRow("丛书数据", self.ed_collections)
-        form.addRow("XML 缓存", self.ed_book)
-        form.addRow("官方电子书", self.ed_ebooks)
-        form.addRow("本地 CBReader XML", self.ed_xmlroot)
-        form.addRow("输出目录", self.ed_output)
+        form.addRow("目录数据", self._dir_row(self.ed_mulu))
+        form.addRow("丛书数据", self._dir_row(self.ed_collections))
+        form.addRow("官方电子书", self._dir_row(self.ed_ebooks))
+        form.addRow("输出目录", self._dir_row(self.ed_output))
         form.addRow("更新频率", self.cb_interval)
-        # 链路 B
+        # 自制一组：来源 + 程序路径 + 输出目录 + 预设
+        # （自制书由程序根据官方 XML 制作）
+        x2p_box = QGroupBox("自制")
+        x2p_form = QFormLayout(x2p_box)
         self.cb_default_source = self._no_wheel_until_focused(QComboBox())
-        self.cb_default_source.addItems(["official", "xml"])
+        self.cb_default_source.addItem("官方", "official")
+        self.cb_default_source.addItem("自制", "xml")
+        self.cb_default_source.setToolTip("合并时电子书的默认来源")
         self.ed_x2p = QLineEdit(self._cfg.get("xml2pdf", {}).get("path", ""))
-        self.cb_x2p_page = self._no_wheel_until_focused(QComboBox())
-        self.cb_x2p_page.addItems(["a4", "a5", "16k", "32k", "book", "letter"])
-        self.cb_x2p_font = self._no_wheel_until_focused(QComboBox())
-        self.cb_x2p_font.addItems(["zh-Hant", "zh-Hans"])
-        self.ed_x2p_engine = QLineEdit(self._cfg.get("xml2pdf", {}).get("engine", "docx2pdf"))
-        self.chk_x2p_v = QCheckBox("竖排")
-        form.addRow("默认来源（新建丛书）", self.cb_default_source)
-        form.addRow("xml2pdf 路径", self.ed_x2p)
-        form.addRow("链路B 纸张", self.cb_x2p_page)
-        form.addRow("链路B 字库语言", self.cb_x2p_font)
-        form.addRow("链路B 引擎", self.ed_x2p_engine)
-        form.addRow("链路B", self.chk_x2p_v)
-        hint = QLabel("链路B：丛书来源选 xml 时，用 cbeta_xml 经 xml2pdf 生成后再合并（见 docs/链路B-设计契约.md）。")
+        self.ed_xmlbooks = QLineEdit()
+        self.ed_preset_dir = QLineEdit((self._cfg.get("xml2pdf", {}) or {}).get("preset_dir", ""))
+        self.ed_preset_dir.setPlaceholderText("缺省=自制程序仓库下 presets 目录")
+        self.cb_preset = self._no_wheel_until_focused(QComboBox())
+        self.ed_preset_dir.editingFinished.connect(lambda: self._reload_preset_combo())
+        self._reload_preset_combo()
+        x2p_form.addRow("默认来源", self.cb_default_source)
+        x2p_form.addRow("自制程序路径", self._dir_row(self.ed_x2p))
+        x2p_form.addRow("自制电子书", self._dir_row(self.ed_xmlbooks))
+        x2p_form.addRow("预设目录", self._dir_row(self.ed_preset_dir))
+        x2p_form.addRow("默认预设", self.cb_preset)
+        hint = QLabel("自制：电子书由程序根据官方 XML 制作。默认预设用于来源选自制、且未另选预设时。")
         hint.setWordWrap(True)
         hint.setStyleSheet("color: gray;")
-        form.addRow(hint)
+        x2p_form.addRow(hint)
+        form.addRow(x2p_box)
         # 分册：0=不分册
         split_box = QGroupBox("分册（0=不分册）")
         split_form = QFormLayout(split_box)
@@ -211,6 +234,24 @@ class SettingsDialog(QDialog):
         self.chk_by_volume.setChecked(bool((self._cfg.get("merge", {}) or {}).get("by_volume", False)))
         form.addRow(self.chk_by_volume)
         return w
+
+    def _reload_preset_combo(self, keep=None):
+        # 预设下拉：预设目录下合法 *.json + 首项"出厂默认"（空值）
+        from cbeta_publish.books import xml2pdf_bridge as _b
+        cfg = dict(self._cfg)
+        cfg.setdefault("xml2pdf", {})["preset_dir"] = self.ed_preset_dir.text().strip()
+        names = _b.list_presets(cfg)
+        cur = self.cb_preset.currentData() if self.cb_preset.count() else (keep if keep is not None else None)
+        if cur is None:
+            cur = (self._cfg.get("xml2pdf", {}) or {}).get("preset", "")
+        self.cb_preset.blockSignals(True)
+        self.cb_preset.clear()
+        self.cb_preset.addItem("出厂默认", "")
+        for n in names:
+            self.cb_preset.addItem(n, n)
+        i = self.cb_preset.findData(cur)
+        self.cb_preset.setCurrentIndex(i if i >= 0 else 0)
+        self.cb_preset.blockSignals(False)
 
     def _set_mode(self, mode):
         # 单选按钮与 cover.mode（"print"/"reading"）互转
@@ -416,23 +457,22 @@ class SettingsDialog(QDialog):
     def _sync_from_cfg(self):
         """恢复默认/原始后，将 self._cfg 的值重新填充到所有控件。"""
         c = self._cfg
-        self.ed_mulu.setText(c.get("mulu_dir", ""))
-        self.ed_collections.setText(c.get("collections_dir", ""))
-        self.ed_book.setText(c.get("book_dir", ""))
-        self.ed_ebooks.setText(c.get("official_ebooks_dir", ""))
-        self.ed_xmlroot.setText(c.get("local_xml_root", ""))
-        self.ed_output.setText(c.get("output_dir", "my_books"))
+        self.ed_mulu.setText(self._native_path(c.get("mulu_dir", "")))
+        self.ed_collections.setText(self._native_path(c.get("collections_dir", "")))
+        self.ed_ebooks.setText(self._native_path(c.get("official_ebooks_dir", "")))
+        self.ed_xmlbooks.setText(self._native_path(
+            c.get("xml_to_ebooks_dir", str(PROJECT_ROOT / "cbeta_ebooks_xml"))))
+        self.ed_output.setText(self._native_path(c.get("output_dir", "my_books")))
         iv = c.get("update_interval", "weekly")
         if iv in ["daily", "weekly", "monthly", "manual"]:
             self.cb_interval.setCurrentText(iv)
-        self.cb_default_source.setCurrentText(c.get("default_source", "official"))
+        src = c.get("default_source", "official")
+        i = self.cb_default_source.findData(src)
+        self.cb_default_source.setCurrentIndex(i if i >= 0 else 0)
         x2p = c.get("xml2pdf", {}) or {}
-        self.ed_x2p.setText(x2p.get("path", ""))
-        if x2p.get("page", "a4") in [self.cb_x2p_page.itemText(i) for i in range(self.cb_x2p_page.count())]:
-            self.cb_x2p_page.setCurrentText(x2p.get("page", "a4"))
-        self.cb_x2p_font.setCurrentText(x2p.get("font_lang", "zh-Hant"))
-        self.ed_x2p_engine.setText(x2p.get("engine", "docx2pdf"))
-        self.chk_x2p_v.setChecked(bool(x2p.get("vertical", False)))
+        self.ed_x2p.setText(self._native_path(x2p.get("path", "")))
+        self.ed_preset_dir.setText(self._native_path(x2p.get("preset_dir", "")))
+        self._reload_preset_combo(keep=x2p.get("preset", ""))
         cover = c.setdefault("cover", {})
         self._migrate_series_imprint(cover)
         self.ed_organizer.setText(cover.get("organizer", "CBETA 整理"))
@@ -503,8 +543,7 @@ class SettingsDialog(QDialog):
         self._cache_rows = {}
         specs = [
             ("ebooks", "官方电子书缓存", lambda: self._cfg.get("official_ebooks_dir", "")),
-            ("xml", "XML 缓存", lambda: self._cfg.get("book_dir", "")),
-            ("convert", "输出中间文件", lambda: str(Path(self._cfg.get("output_dir", "my_books")) / "_xml_convert")),
+            ("xmlbooks", "自制电子书", lambda: self._cfg.get("xml_to_ebooks_dir", "")),
         ]
         for key, label, getter in specs:
             row = QWidget()
@@ -908,22 +947,23 @@ class SettingsDialog(QDialog):
 
     def _collect(self):
         c = self._cfg
-        # 数据目录
-        c["mulu_dir"] = self.ed_mulu.text().strip()
-        c["collections_dir"] = self.ed_collections.text().strip()
-        c["book_dir"] = self.ed_book.text().strip()
-        c["official_ebooks_dir"] = self.ed_ebooks.text().strip()
-        c["local_xml_root"] = self.ed_xmlroot.text().strip()
+        # 数据目录（统一本地分隔符落盘）
+        c["mulu_dir"] = self._native_path(self.ed_mulu.text().strip())
+        c["collections_dir"] = self._native_path(self.ed_collections.text().strip())
+        c["official_ebooks_dir"] = self._native_path(self.ed_ebooks.text().strip())
+        c["xml_to_ebooks_dir"] = self._native_path(self.ed_xmlbooks.text().strip()) \
+            or str(PROJECT_ROOT / "cbeta_ebooks_xml")
         c["output_dir"] = self.ed_output.text().strip()
         c["update_interval"] = self.cb_interval.currentText()
-        c["default_source"] = self.cb_default_source.currentText()
+        c["default_source"] = self.cb_default_source.currentData() or "official"
         c.setdefault("xml2pdf", {})
+        # 旧逐项（page/font_lang/engine/vertical）照读兼容，不再写入/使用，preset 为准
+        for _k in ("page", "font_lang", "engine", "vertical"):
+            c["xml2pdf"].pop(_k, None)
         c["xml2pdf"].update({
-            "path": self.ed_x2p.text().strip(),
-            "page": self.cb_x2p_page.currentText(),
-            "font_lang": self.cb_x2p_font.currentText(),
-            "engine": self.ed_x2p_engine.text().strip(),
-            "vertical": self.chk_x2p_v.isChecked(),
+            "path": self._native_path(self.ed_x2p.text().strip()),
+            "preset_dir": self._native_path(self.ed_preset_dir.text().strip()),
+            "preset": self.cb_preset.currentData() or "",
         })
         # 封面/版式
         cover = c.setdefault("cover", {})

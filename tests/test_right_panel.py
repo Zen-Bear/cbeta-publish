@@ -64,6 +64,52 @@ class RightPanelTest(unittest.TestCase):
         texts = [lb.text() for lb in g.findChildren(QLabel)]
         self.assertNotIn("发布:", texts)
 
+    def test_source_preset_row(self):
+        # 来源单选（官方/自制）+ 预设下拉在发布分组框内；切换写回全局
+        import json
+        win = self.win
+        win.config["default_source"] = "official"
+        win._sync_source_preset_ui()
+        _ensure_app().processEvents()
+        groups = [g for g in win.findChildren(QGroupBox) if g.title() == "发布"]
+        g = groups[0]
+        for w in (win.rb_official, win.rb_made, win.cb_preset, win.btn_preset_edit):
+            self.assertTrue(g.isAncestorOf(w), w)
+        self.assertEqual([win.rb_official.text(), win.rb_made.text()], ["官方", "自制"])
+        # 默认 official：预设行置灰
+        self.assertTrue(win.rb_official.isChecked())
+        self.assertFalse(win.cb_preset.isEnabled())
+        # 切自制：写回配置并落盘，预设行启用
+        win.rb_made.setChecked(True)
+        win.src_group.buttonClicked.emit(win.rb_made)
+        _ensure_app().processEvents()
+        self.assertEqual(win.config["default_source"], "xml")
+        disk = json.loads(Path(win._config_path).read_text(encoding="utf-8"))
+        self.assertEqual(disk["default_source"], "xml")
+        self.assertTrue(win.cb_preset.isEnabled())
+        # 预设下拉：首项出厂默认 + 预设目录合法项
+        self.assertEqual(win.cb_preset.itemData(0), "")
+        # 切回官方
+        win.rb_official.setChecked(True)
+        win.src_group.buttonClicked.emit(win.rb_official)
+        _ensure_app().processEvents()
+        self.assertEqual(win.config["default_source"], "official")
+        self.assertFalse(win.cb_preset.isEnabled())
+
+    def test_preset_dialog_opens(self):
+        # 上游 XmlOptionsDialog 可实例化（调整入口不断链）
+        import sys
+        sys.path.insert(0, "E:/dev/cbeta/xml2pdf")
+        from pycbeta.gui.panel import XmlOptionsDialog
+        from cbeta_publish.books import xml2pdf_bridge as b
+        presets = b.load_preset_dict("E:/dev/cbeta/xml2pdf/run.json", {})
+        self.assertIsInstance(presets, dict)
+        dlg = XmlOptionsDialog(presets or None, self.win)
+        try:
+            self.assertIsNotNone(dlg.panel)
+        finally:
+            dlg.close()
+
     def test_download_button_label(self):
         self.assertEqual(self.win.btn_download.text(), "下载/更新")
 
