@@ -306,11 +306,11 @@ class MainWindow(QMainWindow):
         self.tree.mimeData = self._tree_mimeData   # 提供 text/plain（默认只有内部模型格式）
         self.tree.setSelectionMode(QTreeWidget.ExtendedSelection)
         self.tree.setMinimumWidth(260)
-        # 选中/悬停浅蓝（与中栏列表一致）；书叶文字黑色见 _expand_tree
+        # 选中/悬停（与中栏书籍列表完全一致）；书叶文字黑色见 _expand_tree
         self.tree.setMouseTracking(True)
         self.tree.setStyleSheet(
             "QTreeWidget::item:selected { background: #bbdefb; color: #000; }"
-            "QTreeWidget::item:hover { background: #e3f2fd; }"
+            "QTreeWidget::item:hover { background: #fff3c4; }"
             "QTreeWidget::item:selected:hover { background: #90caf9; color: #000; }")
         lv.addWidget(self.tree)
         # 工作区面板：与目录树二选一显示（二栏时显示；三栏时中栏就是工作区，按钮隐藏）
@@ -355,7 +355,7 @@ class MainWindow(QMainWindow):
         self.ws_tree.setMouseTracking(True)
         self.ws_tree.setStyleSheet(
             "QTreeWidget::item:selected { background: #bbdefb; color: #000; }"
-            "QTreeWidget::item:hover { background: #e3f2fd; }"
+            "QTreeWidget::item:hover { background: #fff3c4; }"
             "QTreeWidget::item:selected:hover { background: #90caf9; color: #000; }")
         wv.addWidget(self.ws_tree)
         self.ws_page.setVisible(False)
@@ -553,13 +553,11 @@ class MainWindow(QMainWindow):
         self.btn_export=QPushButton("导出")
         self.btn_export.setToolTip("拷贝到指定目录")
         hb2.addWidget(self.btn_merge); hb2.addWidget(self.btn_zip); hb2.addWidget(self.btn_export)
-        hb2.addWidget(self.btn_download)
+        hb2.addWidget(self.btn_download); hb2.addWidget(self.btn_make); hb2.addWidget(self.btn_remake)
         hb2.addStretch()
         pg.addWidget(publish_box)
-        # 自制/重制按钮紧跟「来源：○官方 ○自制」中的「自制」之后（括号内为生成策略单选）
-        sh.addWidget(self.btn_make)
+        # 「仅缺/全部」留在来源行、紧跟「自制」单选之后（自制/重制按钮在发布行）
         sh.addWidget(self.regen_box)
-        sh.addWidget(self.btn_remake)
         sh.addStretch()
         self._sync_source_preset_ui()   # 依赖上面按钮存在（来源=自制时换按钮）
         rv.addWidget(publish_group)
