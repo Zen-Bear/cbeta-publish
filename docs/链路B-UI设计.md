@@ -45,6 +45,9 @@
   取消则什么都不改。
 - 来源=官方时预设行整行置灰（含 tooltip 说明原因）。
 - 预设名不存在（被删/改名）时：下拉回退到"出厂默认"并红字提示。
+- **右栏书单的「已有」标志随来源**：`_ebook_path()` 按当前来源取路径——官方查
+  `cbeta_ebooks`，自制查 `xml_to_ebooks_dir`（含 GUI 命名的 `{id 书名}.pdf`）；
+  切换来源即时刷新书单（`_load_coll_works`）。
 - 丛书 JSON 的 `source` / `work_sources` / `xml_options` 只读兼容，
   不再写入、不参与合并决策。
 

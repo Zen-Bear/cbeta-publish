@@ -1,6 +1,6 @@
 ﻿# -*- coding: utf-8 -*-
 from PySide6.QtWidgets import QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QTreeWidget, QTreeWidgetItem, QListWidget, QListWidgetItem, QSplitter, QSplitterHandle, QLabel, QPushButton, QToolButton, QLineEdit, QComboBox, QInputDialog, QMessageBox, QApplication, QTabWidget, QTextBrowser, QSizePolicy, QProgressDialog, QScrollArea, QGroupBox, QRadioButton, QButtonGroup
-from PySide6.QtCore import Qt, QEvent, QTimer
+from PySide6.QtCore import Qt, QEvent, QTimer, Signal
 from PySide6.QtGui import QShortcut, QKeySequence
 from pathlib import Path
 import json, os, re
@@ -156,6 +156,49 @@ def apply_ui_fonts(ui: dict):
             pass
 
 
+class _RadioBar(QWidget):
+    """一排互斥单选，接口仿 QComboBox（currentText / currentTextChanged / setCurrentText）。
+
+    便于把原来的下拉框原地换成单选按钮，调用方（含既有测试）无需改动。
+    """
+    currentTextChanged = Signal(str)
+
+    def __init__(self, items, parent=None):
+        super().__init__(parent)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(8)
+        self._group = QButtonGroup(self)
+        self._btns = []
+        for i, name in enumerate(items):
+            rb = QRadioButton(str(name))
+            lay.addWidget(rb)
+            self._group.addButton(rb, i)
+            self._btns.append(rb)
+        lay.addStretch()
+        if self._btns:
+            self._btns[0].setChecked(True)
+        self._group.buttonClicked.connect(self._on_clicked)
+
+    def _on_clicked(self, btn):
+        if not self.signalsBlocked():
+            self.currentTextChanged.emit(btn.text())
+
+    def currentText(self):
+        b = self._group.checkedButton()
+        return b.text() if b is not None else ""
+
+    def setCurrentText(self, text):
+        for rb in self._btns:
+            if rb.text() == text:
+                was = rb.isChecked()
+                rb.setChecked(True)
+                if not was and not self.signalsBlocked():
+                    self.currentTextChanged.emit(text)
+                return True
+        return False
+
+
 class MainWindow(QMainWindow):
     def __init__(self, config):
         super().__init__()
@@ -192,8 +235,7 @@ class MainWindow(QMainWindow):
         splitter=_Splitter(Qt.Horizontal)
         left=QWidget()
         lv=QVBoxLayout(left)
-        self.nav_combo=QComboBox()
-        self.nav_combo.addItems(["部类","三藏","刊本","朝代","作者","丛书"])
+        self.nav_combo=_RadioBar(["部类","三藏","刊本","朝代","作者","丛书"])
         lv.addWidget(self.nav_combo)
         self.bulei_filter=QComboBox()
         self.bulei_filter.setEditable(True)
@@ -1759,6 +1801,7 @@ class MainWindow(QMainWindow):
         self.config["default_source"]="xml" if btn is self.rb_made else "official"
         self._save_config()
         self._update_preset_enabled()
+        self._load_coll_works()   # 已有标志随来源（官方/自制目录）刷新
 
     def _on_regen_changed(self, *_):
         # 右栏生成策略切换：sticky 写回全局
@@ -3307,6 +3350,16 @@ class MainWindow(QMainWindow):
         except Exception as e:
             print(e)
 
+    def _ebook_path(self, w, fmt):
+        """按当前来源返回该书的电子书路径（不存在则 None）：
+        官方 → cbeta_ebooks；自制 → xml_to_ebooks_dir（含 GUI 命名的平展产物）。"""
+        from cbeta_publish.books import xml2pdf_bridge
+        if self._run_source()=="xml":
+            return xml2pdf_bridge.find_built(w, fmt, xml2pdf_bridge.xml_books_dir(self.config))
+        base=Path(self.config.get("cbeta_ebooks_dir", self.config.get("official_ebooks_dir","./cbeta_ebooks")))
+        dest=official_ebook_source.local_path(w, fmt, base)
+        return dest if dest.exists() else None
+
     def _render_coll_rows(self, works):
         fmts=[]
         if self.chk_pdf.isChecked(): fmts.append("pdf")
@@ -3320,11 +3373,10 @@ class MainWindow(QMainWindow):
             if title==w:
                 m=self.mapping.resolve(w)
                 if m: title=m["name"]
-            base=Path(self.config.get("cbeta_ebooks_dir", self.config.get("official_ebooks_dir","./cbeta_ebooks")))
             fmts_status=[]
             for fmt in fmts:
-                dest=official_ebook_source.local_path(w, fmt, base)
-                exists=dest.exists()
+                # 已有标志随来源：官方查 cbeta_ebooks，自制查 xml_to_ebooks_dir
+                exists=self._ebook_path(w, fmt) is not None
                 fmts_status.append((fmt, exists))
             item=QListWidgetItem()
             item.setData(Qt.UserRole, w)
