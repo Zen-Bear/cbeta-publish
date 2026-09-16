@@ -459,6 +459,20 @@ class MainWindow(QMainWindow):
         self.btn_preset_edit.setFixedWidth(64)
         ph.addWidget(self.btn_preset_edit)
         pg.addWidget(preset_box)
+        regen_box=QWidget()
+        rg_h=QHBoxLayout(regen_box)
+        rg_h.setContentsMargins(0,0,0,0)
+        rg_h.addWidget(QLabel("生成:"))
+        self.regen_group=QButtonGroup(regen_box)
+        self.rb_regen_missing=QRadioButton("仅缺")
+        self.rb_regen_missing.setToolTip("已有自制书直接复用，只生成缺少的（推荐）")
+        self.rb_regen_all=QRadioButton("全部")
+        self.rb_regen_all.setToolTip("忽略已有自制书，全部重新生成（改过预设/选项后用）")
+        for _i, _rb in enumerate((self.rb_regen_missing, self.rb_regen_all)):
+            rg_h.addWidget(_rb)
+            self.regen_group.addButton(_rb, _i)
+        rg_h.addStretch()
+        pg.addWidget(regen_box)
         self._sync_source_preset_ui()
         publish_box=QWidget()
         hb2=QHBoxLayout(publish_box)
@@ -599,6 +613,7 @@ class MainWindow(QMainWindow):
         self.btn_zip.clicked.connect(self._zip)
         self.btn_export.clicked.connect(self._export)
         self.src_group.buttonClicked.connect(self._on_source_changed)
+        self.regen_group.buttonClicked.connect(self._on_regen_changed)
         self.cb_preset.currentIndexChanged.connect(self._on_preset_changed)
         self.btn_preset_edit.clicked.connect(self._edit_preset)
         self.search.textChanged.connect(self._on_search)
@@ -1664,11 +1679,20 @@ class MainWindow(QMainWindow):
         from cbeta_publish.books import xml2pdf_bridge as _b
         return _b.resolve_preset(self.config)
 
+    def _run_regen(self):
+        # 自制书生成策略（右栏「生成」单选）：missing=仅生成缺少（默认）；all=全部重新生成
+        v=(self.config.get("xml2pdf", {}) or {}).get("regen", "missing")
+        return "all" if v=="all" else "missing"
+
     def _sync_source_preset_ui(self):
-        # 右栏来源单选 + 预设下拉与配置同步（启动/设置页保存后调用）
+        # 右栏来源单选 + 预设下拉 + 生成策略与配置同步（启动/设置页保存后调用）
         try:
             src=self._run_source()
             (self.rb_made if src=="xml" else self.rb_official).setChecked(True)
+        except Exception:
+            pass
+        try:
+            (self.rb_regen_all if self._run_regen()=="all" else self.rb_regen_missing).setChecked(True)
         except Exception:
             pass
         self._refresh_preset_combo()
@@ -1697,10 +1721,12 @@ class MainWindow(QMainWindow):
         self._update_preset_enabled()
 
     def _update_preset_enabled(self):
-        # 仅来源=自制时启用预设行
+        # 仅来源=自制时启用预设行与「生成」策略行
         on=self._run_source()=="xml"
         self.cb_preset.setEnabled(on)
         self.btn_preset_edit.setEnabled(on)
+        self.rb_regen_missing.setEnabled(on)
+        self.rb_regen_all.setEnabled(on)
 
     def _on_source_changed(self, *_):
         # 右栏来源切换：sticky 写回全局，下次默认上次的选择
@@ -1708,6 +1734,12 @@ class MainWindow(QMainWindow):
         self.config["default_source"]="xml" if btn is self.rb_made else "official"
         self._save_config()
         self._update_preset_enabled()
+
+    def _on_regen_changed(self, *_):
+        # 右栏生成策略切换：sticky 写回全局
+        btn=self.regen_group.checkedButton()
+        self.config.setdefault("xml2pdf", {})["regen"]="all" if btn is self.rb_regen_all else "missing"
+        self._save_config()
 
     def _on_preset_changed(self, *_):
         # 右栏预设切换：sticky 写回全局默认预设
@@ -4092,6 +4124,65 @@ class MainWindow(QMainWindow):
         st["finish"]=finish
         return dlg, update, st
 
+    def _confirm_regen(self, works, fmts, xml_out):
+        """「全部重新生成」确认：已有 N 部自制书会被重跑（较耗时）。返回是否继续。"""
+        from cbeta_publish.books import xml2pdf_bridge
+        n=0
+        for fmt in fmts:
+            for w in works:
+                if xml2pdf_bridge.find_built(w, fmt, xml_out) is not None:
+                    n+=1
+        if n<=0:
+            return True
+        ret=QMessageBox.question(
+            self, "全部重新生成",
+            f"「生成」选了「全部」：已有 {n} 部自制电子书会被重新生成（需要重跑 xml2pdf，较耗时）。\n继续？",
+            QMessageBox.Yes | QMessageBox.No)
+        return ret==QMessageBox.Yes
+
+    def _ensure_xml_batch(self, works, fmts, title="生成（自制）"):
+        """确保 works×fmts 的自制书存在（按右栏「生成」策略）。
+
+        返回 (ok_map, failed, cancelled)：ok_map = {fmt: {work: Path}}。
+        """
+        from cbeta_publish.books import xml2pdf_bridge
+        xml_out=xml2pdf_bridge.xml_books_dir(self.config)
+        try:
+            xml_out.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+        preset=self._run_preset()
+        regen_all=(self._run_regen()=="all")
+        ok_map={f: {} for f in fmts}
+        failed=[]
+        if regen_all and not self._confirm_regen(works, fmts, xml_out):
+            return ok_map, failed, True
+        total=max(1, len(works)*len(fmts))
+        done=[0]
+        dlg, update, pstate = self._make_progress(title, total)
+        if fmts:
+            update(0, f"来源：自制｜生成：{'全部重新生成' if regen_all else '仅生成缺少'}"
+                      f"｜预设：{Path(preset).name if preset else '出厂默认'}")
+        cancelled=False
+        for fmt in fmts:
+            for w in works:
+                out, reused = xml2pdf_bridge.ensure_one(
+                    w, fmt, xml_out, self.config, preset=preset, regen_all=regen_all)
+                done[0]+=1
+                if out is not None and out.exists():
+                    ok_map[fmt][w]=out
+                else:
+                    failed.append(f"{w}.{fmt} XML转换失败")
+                if not update(done[0], f"[{fmt}] {'复用' if reused else '生成'} "
+                                          f"{(out.name if out is not None else f'{w}.{fmt}')}"):
+                    cancelled=True
+                    break
+            if cancelled:
+                break
+        pstate["finish"]([f"完成 {sum(len(v) for v in ok_map.values())}/{total}"
+                          + (f"，失败 {len(failed)}" if failed else "")])
+        return ok_map, failed, cancelled
+
     def _merge(self):
         fmts=[]
         if self.chk_pdf.isChecked(): fmts.append("pdf")
@@ -4167,6 +4258,11 @@ class MainWindow(QMainWindow):
                 missing=[f"{w}.{fmt}" for fmt in fmts for w in works
                          if _src(w)=="official" and not _official_dest(fmt, w).exists()]
         skip_missing = (ret == QMessageBox.No) if missing else False
+        # 自制：全部重新生成前确认（会重跑 xml2pdf，较耗时）
+        regen_all = (run_source=="xml" and self._run_regen()=="all")
+        if regen_all and not self._confirm_regen(works, fmts, xml_out):
+            self.detail.setText("已取消合成（未重新生成）")
+            return
         self.btn_merge.setEnabled(False)
         success=[]
         skipped=[]
@@ -4187,25 +4283,17 @@ class MainWindow(QMainWindow):
             ok_works=[]
             for w in works:
                 if _src(w)=="xml":
-                    out=xml2pdf_bridge.xml_dest(w, fmt, xml_out)
-                    reused=False
-                    hit=xml2pdf_bridge.find_built(w, fmt, xml_out)
-                    if hit is not None and xml2pdf_bridge.is_fresh(hit, run_preset):
-                        out=hit
-                        reused=True
-                    else:
-                        # 只传 work id：XML 源解析归 xml2pdf（本地候选源→官方下载）。
-                        # 注意 CBReader 书库是 P5a（按卷切分），不是 xml2pdf 要的
-                        # P5（整部经），publish 侧不再自行定位 XML 文件。
-                        got=xml2pdf_bridge.convert(w, None, out,
-                                                   self.config, fmt=fmt, preset=run_preset)
-                        if got is not None and got.exists():
-                            out=got
-                    if out.exists():
+                    # 只传 work id：XML 源解析归 xml2pdf（本地候选源→官方下载）。
+                    # 注意 CBReader 书库是 P5a（按卷切分），不是 xml2pdf 要的
+                    # P5（整部经），publish 侧不再自行定位 XML 文件。
+                    out, reused = xml2pdf_bridge.ensure_one(
+                        w, fmt, xml_out, self.config, preset=run_preset, regen_all=regen_all)
+                    if out is not None and out.exists():
                         ok.append(out); ok_titles.append(self.sutra.title_of(w)); ok_works.append(w)
                     else:
                         failed.append(f"{w}.{fmt} XML转换失败")
-                    if not bump(f"[{fmt}] {'复用' if reused else '生成'} {out.name}"):
+                    if not bump(f"[{fmt}] {'复用' if reused else '生成'} "
+                                f"{(out.name if out is not None else f'{w}.{fmt}')}"):
                         cancelled=True
                         break
                     continue
@@ -4348,28 +4436,42 @@ class MainWindow(QMainWindow):
         import zipfile
         from cbeta_publish.books import official_ebook_source
         dest_dir=Path(self.config.get("cbeta_ebooks_dir", self.config.get("official_ebooks_dir","./cbeta_ebooks")))
-        missing=[]
-        for fmt in fmts:
-            for w in works:
-                dest=official_ebook_source.local_path(w, fmt, dest_dir)
-                if not dest.exists():
-                    missing.append(f"{w}.{fmt}")
-        if missing:
-            _pre=", ".join(missing[:3]) + ("..." if len(missing)>3 else "")
-            ret=QMessageBox.question(self, "下载确认",
-                f"有 {len(missing)} 部未下载（{_pre}）。\n是否先下载？",
-                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel)
-            if ret!=QMessageBox.Yes:
-                self._wrap_box(QMessageBox.Warning, "未全部下载", f"有 {len(missing)} 部未下载，请先下载后再打包。")
+        # 按来源准备素材：官方=缺则下载；自制=缺则生成（改过预设可选全部重生成）
+        if self._run_source()=="xml":
+            ok_map, gen_failed, gen_cancelled = self._ensure_xml_batch(works, fmts, title="生成（ZIP 前）")
+            if gen_cancelled:
+                self._wrap_box(QMessageBox.Warning, "已取消", "已取消生成，未打包。")
                 return
-            pairs=[(w, fmt) for fmt in fmts for w in works
-                   if not official_ebook_source.local_path(w, fmt, dest_dir).exists()]
-            self._download_missing(pairs, dest_dir, title="下载（ZIP 前）", autoclose_ok=True)
-            missing=[f"{w}.{fmt}" for fmt in fmts for w in works
-                     if not official_ebook_source.local_path(w, fmt, dest_dir).exists()]
+            if gen_failed:
+                self._wrap_box(QMessageBox.Warning, "未全部生成",
+                               "有 %d 部生成失败，已取消打包：\n%s" % (len(gen_failed), "\n".join(gen_failed[:5])))
+                return
+            src_map = {fmt: dict(ok_map.get(fmt) or {}) for fmt in fmts}
+        else:
+            missing=[]
+            for fmt in fmts:
+                for w in works:
+                    dest=official_ebook_source.local_path(w, fmt, dest_dir)
+                    if not dest.exists():
+                        missing.append(f"{w}.{fmt}")
             if missing:
-                self._wrap_box(QMessageBox.Warning, "未全部下载", f"仍有 {len(missing)} 部未下载，已取消打包。")
-                return
+                _pre=", ".join(missing[:3]) + ("..." if len(missing)>3 else "")
+                ret=QMessageBox.question(self, "下载确认",
+                    f"有 {len(missing)} 部未下载（{_pre}）。\n是否先下载？",
+                    QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel)
+                if ret!=QMessageBox.Yes:
+                    self._wrap_box(QMessageBox.Warning, "未全部下载", f"有 {len(missing)} 部未下载，请先下载后再打包。")
+                    return
+                pairs=[(w, fmt) for fmt in fmts for w in works
+                       if not official_ebook_source.local_path(w, fmt, dest_dir).exists()]
+                self._download_missing(pairs, dest_dir, title="下载（ZIP 前）", autoclose_ok=True)
+                missing=[f"{w}.{fmt}" for fmt in fmts for w in works
+                         if not official_ebook_source.local_path(w, fmt, dest_dir).exists()]
+                if missing:
+                    self._wrap_box(QMessageBox.Warning, "未全部下载", f"仍有 {len(missing)} 部未下载，已取消打包。")
+                    return
+            src_map = {fmt: {w: official_ebook_source.local_path(w, fmt, dest_dir) for w in works}
+                       for fmt in fmts}
         from PySide6.QtWidgets import QFileDialog
         sel=QFileDialog.getExistingDirectory(self, "选择ZIP输出目录", str(self._out_dir()))
         if not sel:
@@ -4386,9 +4488,9 @@ class MainWindow(QMainWindow):
         for fmt in fmts:
             files=[]
             for w in works:
-                f=official_ebook_source.local_path(w, fmt, dest_dir)
-                if f.exists():
-                    files.append(f)
+                f=src_map.get(fmt, {}).get(w)
+                if f is not None and Path(f).exists():
+                    files.append(Path(f))
                 else:
                     failed.append(f"{w}.{fmt} 缺失")
                 done+=1
@@ -4471,28 +4573,42 @@ class MainWindow(QMainWindow):
         import shutil
         from cbeta_publish.books import official_ebook_source
         dest_dir=Path(self.config.get("cbeta_ebooks_dir", self.config.get("official_ebooks_dir","./cbeta_ebooks")))
-        missing=[]
-        for fmt in fmts:
-            for w in works:
-                dest=official_ebook_source.local_path(w, fmt, dest_dir)
-                if not dest.exists():
-                    missing.append(f"{w}.{fmt}")
-        if missing:
-            _pre=", ".join(missing[:3]) + ("..." if len(missing)>3 else "")
-            ret=QMessageBox.question(self, "下载确认",
-                f"有 {len(missing)} 部未下载（{_pre}）。\n是否先下载？",
-                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel)
-            if ret!=QMessageBox.Yes:
-                self._wrap_box(QMessageBox.Warning, "未全部下载", f"有 {len(missing)} 部未下载，请先下载后再导出。")
+        # 按来源准备素材：官方=缺则下载；自制=缺则生成（改过预设可选全部重生成）
+        if self._run_source()=="xml":
+            ok_map, gen_failed, gen_cancelled = self._ensure_xml_batch(works, fmts, title="生成（导出前）")
+            if gen_cancelled:
+                self._wrap_box(QMessageBox.Warning, "已取消", "已取消生成，未导出。")
                 return
-            pairs=[(w, fmt) for fmt in fmts for w in works
-                   if not official_ebook_source.local_path(w, fmt, dest_dir).exists()]
-            self._download_missing(pairs, dest_dir, title="下载（导出前）", autoclose_ok=True)
-            missing=[f"{w}.{fmt}" for fmt in fmts for w in works
-                     if not official_ebook_source.local_path(w, fmt, dest_dir).exists()]
+            if gen_failed:
+                self._wrap_box(QMessageBox.Warning, "未全部生成",
+                               "有 %d 部生成失败，已取消导出：\n%s" % (len(gen_failed), "\n".join(gen_failed[:5])))
+                return
+            src_map = {fmt: dict(ok_map.get(fmt) or {}) for fmt in fmts}
+        else:
+            missing=[]
+            for fmt in fmts:
+                for w in works:
+                    dest=official_ebook_source.local_path(w, fmt, dest_dir)
+                    if not dest.exists():
+                        missing.append(f"{w}.{fmt}")
             if missing:
-                self._wrap_box(QMessageBox.Warning, "未全部下载", f"仍有 {len(missing)} 部未下载，已取消导出。")
-                return
+                _pre=", ".join(missing[:3]) + ("..." if len(missing)>3 else "")
+                ret=QMessageBox.question(self, "下载确认",
+                    f"有 {len(missing)} 部未下载（{_pre}）。\n是否先下载？",
+                    QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel)
+                if ret!=QMessageBox.Yes:
+                    self._wrap_box(QMessageBox.Warning, "未全部下载", f"有 {len(missing)} 部未下载，请先下载后再导出。")
+                    return
+                pairs=[(w, fmt) for fmt in fmts for w in works
+                       if not official_ebook_source.local_path(w, fmt, dest_dir).exists()]
+                self._download_missing(pairs, dest_dir, title="下载（导出前）", autoclose_ok=True)
+                missing=[f"{w}.{fmt}" for fmt in fmts for w in works
+                         if not official_ebook_source.local_path(w, fmt, dest_dir).exists()]
+                if missing:
+                    self._wrap_box(QMessageBox.Warning, "未全部下载", f"仍有 {len(missing)} 部未下载，已取消导出。")
+                    return
+            src_map = {fmt: {w: official_ebook_source.local_path(w, fmt, dest_dir) for w in works}
+                       for fmt in fmts}
         from PySide6.QtWidgets import QFileDialog
         target=QFileDialog.getExistingDirectory(self, "选择导出目录")
         if not target:
@@ -4505,8 +4621,9 @@ class MainWindow(QMainWindow):
         dlg, update, pstate = self._make_progress("导出", total)
         for fmt in fmts:
             for w in works:
-                src=official_ebook_source.local_path(w, fmt, dest_dir)
-                if src.exists():
+                src=src_map.get(fmt, {}).get(w)
+                src=Path(src) if src is not None else None
+                if src is not None and src.exists():
                     try:
                         shutil.copy(src, Path(target)/src.name)
                         success.append(str(Path(target)/src.name))

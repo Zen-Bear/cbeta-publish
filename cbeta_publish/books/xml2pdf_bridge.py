@@ -244,14 +244,18 @@ def find_built(work: str, fmt: str, base_dir):
     return cands[0] if cands else None
 
 
-def is_fresh(dest, preset_path) -> bool:
-    """复用规则：文件存在且比预设新（preset 为空时只看存在）。"""
-    dest = Path(dest)
-    if not dest.exists():
-        return False
-    if not preset_path:
-        return True
-    try:
-        return dest.stat().st_mtime >= Path(preset_path).stat().st_mtime
-    except Exception:
-        return True
+def ensure_one(work: str, fmt: str, base_dir, config, preset=None,
+               regen_all: bool = False):
+    """确保一部自制书存在，返回 (产物 Path | None, reused: bool)。
+
+    regen_all=False（仅生成缺少）：已有产物直接复用（`find_built`）；
+    否则（含已有异名产物，如 GUI 的 `{id 书名}.pdf`）一律重新生成并覆盖原路径。
+    """
+    hit = find_built(work, fmt, base_dir)
+    if not regen_all and hit is not None:
+        return hit, True
+    out = hit if hit is not None else xml_dest(work, fmt, base_dir)
+    got = convert(work, None, out, config, fmt=fmt, preset=preset)
+    if got is not None and got.exists():
+        return got, False
+    return None, False

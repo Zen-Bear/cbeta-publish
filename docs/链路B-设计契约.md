@@ -75,7 +75,8 @@ def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=No
   "xml2pdf": {
     "path": "E:/dev/cbeta/xml2pdf",                    // 自制程序仓库（预设目录=其 presets/）
     "cbeta_ebook": "",                                // XML 工作根；传 --cbeta-ebook（可空=对面自身配置）
-    "preset": ""                                      // 默认预设名（presets/ 下 stem）；空=对面默认
+    "preset": "",                                     // 默认预设名（presets/ 下 stem）；空=对面默认
+    "regen": "missing"                                // 生成策略：missing=仅缺｜all=全部重生成
   }
 }
 ```
@@ -96,22 +97,25 @@ def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=No
 - 官方：`cbeta_ebooks/{fmt}/{canon}/{work}.{fmt}`（`cbeta_ebooks_dir`）。
 - 自制：`xml_to_ebooks_dir/{work}.{fmt}`（**完全平展**，pdf/epub 同目录，
   扩展名区分；`find_built` 兼容 GUI 产出的 `{id 书名}.pdf` 形式）。
-- 复用：目标存在且比预设新 → 跳过；否则重生成。两边目录互不混淆。
+- **生成策略**（`config.xml2pdf.regen`，右栏「生成」单选，用户决定）：
+  `missing`（默认）＝已有产物复用、只生成缺少（`bridge.ensure_one(regen_all=False)`）；
+  `all`＝全部重新生成、覆盖原路径（`regen_all=True`）。**不用 mtime/哈希推断过期**。
+  两边目录互不混淆；ZIP/导出同样按来源取目录。
 
-## 5. 数据流（合成时）
+## 5. 数据流（合并 / ZIP / 导出）
 
 ```
 右栏来源 = official → official_ebook_source.download_ebook → cbeta_ebooks/{fmt}/...
-右栏来源 = xml      → xml2pdf_bridge.convert(work_id, preset) → xml_to_ebooks_dir/{work}.{fmt}
-→ ebook_merger 单一格式合并（已支持分册）
+右栏来源 = xml      → xml2pdf_bridge.ensure_one(work_id, preset, regen_all) → xml_to_ebooks_dir/{work}.{fmt}
+→ ebook_merger 单一格式合并 / ZIP 打包 / 拷贝导出
 ```
 - 说明页：来源=自制时追加一句「电子书由程序根据官方XML制作。」；官方不加。
 
 ## 6. 实施清单
 
-- [x] `publish`：`xml2pdf_bridge.py`（库调用＋预设（上游 API）＋平展输出＋复用规则）
-- [x] `publish`：右栏来源单选＋预设下拉＋[调整…]；设置页「自制」组（来源/程序路径/XML 工作根/自制电子书/默认预设）
-- [x] `publish`：`[合并]` 整批同源、平展目录、说明页注明
+- [x] `publish`：`xml2pdf_bridge.py`（库调用＋预设（上游 API）＋平展输出＋`ensure_one` 生成策略）
+- [x] `publish`：右栏来源单选＋预设下拉＋生成策略（仅缺/全部）＋[调整…]
+- [x] `publish`：`[合并]` 整批同源、平展目录、说明页注明；**ZIP/导出 亦支持自制**
 - [x] `xml2pdf`：`pycbeta.gui` 面板/对话框/独立入口（已存在，publish 直接复用）
 - [x] `xml2pdf`：`--config` 兼容 run.json 与基础配置 JSON（`theme.resolve_config_arg`）；
   `--html-epub-user-theme` 占位开关；公开 `merged_preset`/`get_preset`/`*_config_preset`
