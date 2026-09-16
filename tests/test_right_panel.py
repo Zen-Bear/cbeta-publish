@@ -147,7 +147,7 @@ class RightPanelTest(unittest.TestCase):
             win.search.setText(kw)
             for _ in range(10):
                 _ensure_app().processEvents()
-            counts.append(win.list.count())
+            counts.append(len(win._search_results))
         self.assertGreater(counts[0], 0, "T0220 无结果")
         self.assertEqual(counts[0], counts[1], "大小写结果不一致")
         win.search.clear()
@@ -187,7 +187,7 @@ class RightPanelTest(unittest.TestCase):
             win.search.setText(kw)
             for _ in range(10):
                 _ensure_app().processEvents()
-            self.assertGreater(win.list.count(), 0, f"{mode} 搜索 {kw!r} 无结果")
+            self.assertGreater(len(win._search_results), 0, f"{mode} 搜索 {kw!r} 无结果")
         win.search.clear()
         for _ in range(4):
             _ensure_app().processEvents()
