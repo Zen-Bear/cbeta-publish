@@ -198,6 +198,25 @@ class RightPanelTest(unittest.TestCase):
         self.assertEqual(len(calls), 1)          # 已有产物也重新生成
         col.unlink(missing_ok=True)
 
+    def test_tree_colors(self):
+        # 目录树：选中/悬停浅蓝样式；书叶文字黑色，分组节点不变
+        from PySide6.QtCore import Qt
+        win = self.win
+        qss = win.tree.styleSheet()
+        self.assertIn("#bbdefb", qss)          # 选中（与中栏列表一致）
+        self.assertIn("#e3f2fd", qss)          # 悬停浅蓝
+        self.assertIn("#90caf9", qss)          # 选中+悬停
+        win.nav_combo.setCurrentText("刊本")
+        _ensure_app().processEvents()
+        ed = win.tree.topLevelItem(0)          # 刊本（分组节点）
+        self.assertEqual(ed.foreground(0).style(), Qt.NoBrush)   # 未設色→走主题色
+        vol = next((ed.child(i) for i in range(ed.childCount())
+                    if ed.child(i).childCount()), None)
+        self.assertIsNotNone(vol)
+        self.assertEqual(vol.foreground(0).style(), Qt.NoBrush)  # 册（分组）也不变
+        leaf = vol.child(0)                                       # 经（书叶）
+        self.assertEqual(leaf.foreground(0).color().name(), "#000000")
+
     def test_nav_is_radio_bar(self):
         # 左栏「视图」由下拉改为单选（接口仿 QComboBox，调用方不变）
         from cbeta_publish.gui.main_window import _RadioBar

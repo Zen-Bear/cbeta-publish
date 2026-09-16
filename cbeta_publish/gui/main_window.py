@@ -306,6 +306,12 @@ class MainWindow(QMainWindow):
         self.tree.mimeData = self._tree_mimeData   # 提供 text/plain（默认只有内部模型格式）
         self.tree.setSelectionMode(QTreeWidget.ExtendedSelection)
         self.tree.setMinimumWidth(260)
+        # 选中/悬停浅蓝（与中栏列表一致）；书叶文字黑色见 _expand_tree
+        self.tree.setMouseTracking(True)
+        self.tree.setStyleSheet(
+            "QTreeWidget::item:selected { background: #bbdefb; color: #000; }"
+            "QTreeWidget::item:hover { background: #e3f2fd; }"
+            "QTreeWidget::item:selected:hover { background: #90caf9; color: #000; }")
         lv.addWidget(self.tree)
         # 工作区面板：与目录树二选一显示（二栏时显示；三栏时中栏就是工作区，按钮隐藏）
         self.ws_page=QWidget()
@@ -346,6 +352,11 @@ class MainWindow(QMainWindow):
         self.ws_tree.mimeData = self._tree_mimeData   # 与目录树同格式，可拖入右栏
         self.ws_tree.setSelectionMode(QTreeWidget.ExtendedSelection)
         self.ws_tree.setMinimumWidth(260)
+        self.ws_tree.setMouseTracking(True)
+        self.ws_tree.setStyleSheet(
+            "QTreeWidget::item:selected { background: #bbdefb; color: #000; }"
+            "QTreeWidget::item:hover { background: #e3f2fd; }"
+            "QTreeWidget::item:selected:hover { background: #90caf9; color: #000; }")
         wv.addWidget(self.ws_tree)
         self.ws_page.setVisible(False)
         lv.addWidget(self.ws_page)
@@ -1026,11 +1037,25 @@ class MainWindow(QMainWindow):
         elif mode=="none":
             self.tree.collapseAll()
         else:
-            # depth=展开层数：0/1 折叠；depth>=2 -> expandToDepth(depth-1)
+            # depth=展开层数；0/1 折叠，depth>=2 -> expandToDepth(depth-1)
             if depth<=1:
                 self.tree.collapseAll()
             else:
                 self.tree.expandToDepth(depth-1)
+        self._color_tree_leaves()
+
+    def _color_tree_leaves(self, tree=None):
+        """书叶（单本作品）文字用黑色；分组节点（部类/册/朝代/作者/丛书）颜色不变。"""
+        from PySide6.QtGui import QBrush, QColor
+        tree=tree if tree is not None else self.tree
+        brush=QBrush(QColor("#000000"))
+        def walk(it):
+            if self._tree_item_work(it):
+                it.setForeground(0, brush)
+            for i in range(it.childCount()):
+                walk(it.child(i))
+        for i in range(tree.topLevelItemCount()):
+            walk(tree.topLevelItem(i))
 
     def _refresh_vol_tree(self, filter_edition=None):
         # 刊本视图：刊本→册→经（部分刊本第二层直接是经）；受 catalog.filters.vol.hidden 过滤；
@@ -2168,6 +2193,8 @@ class MainWindow(QMainWindow):
             it.setCheckState(0, Qt.Checked if w in self._selected else Qt.Unchecked)
             self.ws_tree.addTopLevelItem(it)
         self.ws_tree.blockSignals(False)
+        if self.ws_tree.topLevelItemCount():
+            self._color_tree_leaves(self.ws_tree)   # 书叶黑色（与目录树一致）
         self._refresh_sel_count()
 
     def _sync_checks(self):
