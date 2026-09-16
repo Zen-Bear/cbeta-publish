@@ -273,5 +273,79 @@ class DownloadMissingTest(unittest.TestCase):
         self.assertEqual(cap["st"]["autoclose_ms"], 0)
 
 
+class MergeXmlSourceTest(unittest.TestCase):
+    """合并来源=自制：整批走库调用生成（平展目录），说明页加一句注明。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.win, cls.tmp = _make_window()
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def _select_coll(self, work_ids):
+        win = self.win
+        col = Path(win.config["collections_dir"]) / "custom" / "合测.json"
+        col.write_text(json.dumps({"id": "m", "name": "合测", "category": "custom",
+                                   "tags": [], "work_ids": list(work_ids)},
+                                  ensure_ascii=False), encoding="utf-8")
+        self._coll_file = col
+        win._load_collections()
+        for i in range(win.coll_combo.count()):
+            if str(win.coll_combo.itemData(i)).endswith("合测.json"):
+                win.coll_combo.setCurrentIndex(i)
+                break
+        _ensure_app().processEvents()
+
+    def test_xml_merge_uses_preset_and_flat_dir(self):
+        import cbeta_publish.books.xml2pdf_bridge as b
+        import cbeta_publish.books.ebook_merger as em
+        win = self.win
+        self._select_coll(["T0001"])
+        win.config["default_source"] = "xml"
+        win.config["xml_to_ebooks_dir"] = str(self.tmp / "xb")
+        preset = self.tmp / "my.json"
+        preset.write_text("{}", encoding="utf-8")
+        win.config.setdefault("xml2pdf", {})["preset"] = "my.json"
+        win.config["xml2pdf"]["preset_dir"] = str(self.tmp)
+        win.chk_pdf.setChecked(True)
+        win.chk_epub.setChecked(False)
+        calls = []
+        real_convert, real_merge = b.convert, em.merge_pdfs
+
+        def fake_convert(w, xml, out, config, fmt="pdf", preset=None, stop=None):
+            calls.append((w, xml, fmt, preset, str(out)))
+            Path(out).write_bytes(b"x")
+            return Path(out)
+
+        def fake_merge(sources, out, **kw):
+            Path(out).write_bytes(b"PDF")
+            return [Path(out)]
+        b.convert, em.merge_pdfs = fake_convert, fake_merge
+        try:
+            win._merge()
+            _ensure_app().processEvents()
+        finally:
+            b.convert, em.merge_pdfs = real_convert, real_merge
+        self.assertEqual(len(calls), 1)
+        w, xml, fmt, preset_arg, out = calls[0]
+        self.assertEqual((w, fmt), ("T0001", "pdf"))
+        self.assertIsNone(xml)   # 只传 work id，XML 解析归 xml2pdf（P5a≠P5，不再自行定位）
+        self.assertEqual(Path(preset_arg), preset)          # 预设透传
+        self.assertEqual(out, str(self.tmp / "xb" / "T0001.pdf"))  # 平展
+        self._coll_file.unlink(missing_ok=True)
+
+    def test_intro_note_only_for_made(self):
+        win = self.win
+        cfg = {"enabled": True, "intro": {"enabled": True, "list": False}}
+        made = win._intro_for(["T0001"], cfg, made_by_xml=True)
+        self.assertIn("电子书由程序根据官方XML制作。",
+                      " ".join(made.get("summary", [])))
+        off = win._intro_for(["T0001"], cfg, made_by_xml=False)
+        self.assertNotIn("电子书由程序根据官方XML制作。",
+                         " ".join(off.get("summary", [])))
+
+
 if __name__ == "__main__":
     unittest.main()

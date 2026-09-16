@@ -1,5 +1,4 @@
 {
-  "book_dir": "E:/dev/cbeta/publish/cbeta_xml",
   "official_ebooks_dir": "E:/dev/cbeta/publish/cbeta_ebooks",
   "mulu_dir": "E:/dev/cbeta/publish/mulu",
   "collections_dir": "E:/dev/cbeta/publish/collections",
@@ -9,7 +8,6 @@
   },
   "language": "zh-Hant",
   "update_interval": "manual",
-  "local_xml_root": "E:/CBETA/CBReader2X/Bookcase/CBETA/XML",
   "output_dir": "my_books",
   "ui": {
     "tree_expand": {
@@ -19,9 +17,9 @@
     "app_font": "SimSun",
     "app_font_size": 10,
     "supplement_ttf": "E:/dev/cbeta/xml2pdf/cbeta/CBETA 補充字型/CBETASupplement.ttf",
-    "last_collection": "E:\\dev\\cbeta\\publish\\collections\\Bear\\多部类丛书.json"
+    "last_collection": "E:\\dev\\cbeta\\publish\\collections\\custom\\测试丛书1.json"
   },
-  "default_source": "official",
+  "default_source": "xml",
   "pdf": {
     "split_pages": 5000
   },
@@ -33,10 +31,8 @@
   },
   "xml2pdf": {
     "path": "E:/dev/cbeta/xml2pdf",
-    "page": "a4",
-    "font_lang": "zh-Hant",
-    "engine": "docx2pdf",
-    "vertical": false
+    "preset_dir": "",
+    "preset": ""
   },
   "catalog": {
     "filters": {
