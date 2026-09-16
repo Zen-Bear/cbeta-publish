@@ -196,10 +196,18 @@ class SettingsDialog(QDialog):
         # （自制书由程序根据官方 XML 制作）
         x2p_box = QGroupBox("自制")
         x2p_form = QFormLayout(x2p_box)
-        self.cb_default_source = self._no_wheel_until_focused(QComboBox())
-        self.cb_default_source.addItem("官方", "official")
-        self.cb_default_source.addItem("自制", "xml")
-        self.cb_default_source.setToolTip("合并时电子书的默认来源")
+        self.src_default_box = QWidget()
+        _sdb = QHBoxLayout(self.src_default_box)
+        _sdb.setContentsMargins(0, 0, 0, 0)
+        self.src_default_group = QButtonGroup(self.src_default_box)
+        self.rb_src_official = QRadioButton("官方")
+        self.rb_src_made = QRadioButton("自制")
+        self.rb_src_official.setToolTip("从 CBETA 官方下载成品电子书")
+        self.rb_src_made.setToolTip("电子书由程序根据官方 XML 制作（经 xml2pdf 生成）")
+        for _i, _rb in enumerate((self.rb_src_official, self.rb_src_made)):
+            _sdb.addWidget(_rb)
+            self.src_default_group.addButton(_rb, _i)
+        _sdb.addStretch()
         self.ed_x2p = QLineEdit(self._cfg.get("xml2pdf", {}).get("path", ""))
         self.ed_x2p_ebook = QLineEdit(
             (self._cfg.get("xml2pdf", {}) or {}).get("cbeta_ebook")
@@ -208,7 +216,7 @@ class SettingsDialog(QDialog):
         self.ed_xmlbooks = QLineEdit()
         self.cb_preset = self._no_wheel_until_focused(QComboBox())
         self._reload_preset_combo()
-        x2p_form.addRow("默认来源", self.cb_default_source)
+        x2p_form.addRow("默认来源", self.src_default_box)
         x2p_form.addRow("自制程序路径", self._dir_row(self.ed_x2p))
         x2p_form.addRow("CBETA XML 目录", self._dir_row(self.ed_x2p_ebook))
         x2p_form.addRow("自制电子书", self._dir_row(self.ed_xmlbooks))
@@ -468,8 +476,7 @@ class SettingsDialog(QDialog):
         if iv in ["daily", "weekly", "monthly", "manual"]:
             self.cb_interval.setCurrentText(iv)
         src = c.get("default_source", "official")
-        i = self.cb_default_source.findData(src)
-        self.cb_default_source.setCurrentIndex(i if i >= 0 else 0)
+        (self.rb_src_made if src == "xml" else self.rb_src_official).setChecked(True)
         x2p = c.get("xml2pdf", {}) or {}
         self.ed_x2p.setText(self._native_path(x2p.get("path", "")))
         self.ed_x2p_ebook.setText(self._native_path(
@@ -516,9 +523,9 @@ class SettingsDialog(QDialog):
         for key, ed in self.font_rows.items():
             ed.setText(self._native_path(styles.get(key, {}).get("font", "")))
         theme = c.setdefault("theme", {"mode": "system", "accent": "#8B4513"})
-        self.cb_theme.setCurrentText(theme.get("mode", "system"))
+        self._set_radio(self.theme_radios, theme.get("mode", "system"), "system")
         self.ed_accent.setText(theme.get("accent", "#8B4513"))
-        self.cb_lang.setCurrentText(c.get("language", "zh-Hans"))
+        self._set_radio(self.lang_radios, c.get("language", "zh-Hans"), "zh-Hans")
         te = c.get("ui", {}).get("tree_expand", {}) or {}
         mode = te.get("mode", "depth")
         try:
@@ -810,17 +817,50 @@ class SettingsDialog(QDialog):
         return out
 
     # ---------- 页签：外观 ----------
+    def _radio_row(self, items, cur, group_attr=None):
+        """一组互斥单选：items=[(显示, 值)]；返回 (容器, QButtonGroup, {值: 单选})。"""
+        box = QWidget()
+        lay = QHBoxLayout(box)
+        lay.setContentsMargins(0, 0, 0, 0)
+        group = QButtonGroup(box)
+        radios = {}
+        for i, (label, value) in enumerate(items):
+            rb = QRadioButton(label)
+            rb.setProperty("value", value)
+            lay.addWidget(rb)
+            group.addButton(rb, i)
+            radios[value] = rb
+        lay.addStretch()
+        for value, rb in radios.items():
+            rb.setChecked(value == cur)
+        if group_attr:
+            setattr(self, group_attr, group)
+        return box, group, radios
+
+    @staticmethod
+    def _radio_value(group, radios):
+        btn = group.checkedButton()
+        return btn.property("value") if btn is not None else ""
+
+    @staticmethod
+    def _set_radio(radios, value, default=""):
+        rb = radios.get(value) or radios.get(default)
+        if rb is None and radios:
+            rb = next(iter(radios.values()))
+        if rb is not None:
+            rb.setChecked(True)
+
     def _tab_appearance(self):
         w = QWidget()
         form = QFormLayout(w)
         theme = self._cfg.setdefault("theme", {"mode": "system", "accent": "#8B4513"})
-        self.cb_theme = self._no_wheel_until_focused(QComboBox())
-        self.cb_theme.addItems(["light", "dark", "system"])
-        self.cb_theme.setCurrentText(theme.get("mode", "system"))
+        self.theme_box, self.theme_group, self.theme_radios = self._radio_row(
+            [("浅色", "light"), ("深色", "dark"), ("跟随系统", "system")],
+            theme.get("mode", "system"))
         self.ed_accent = QLineEdit(theme.get("accent", "#8B4513"))
-        self.cb_lang = self._no_wheel_until_focused(QComboBox())
-        self.cb_lang.addItems(["zh-Hans", "zh-Hant", "en"])
-        self.cb_lang.setCurrentText(self._cfg.get("language", "zh-Hans"))
+        self.lang_box, self.lang_group, self.lang_radios = self._radio_row(
+            [("简体", "zh-Hans"), ("繁体", "zh-Hant"), ("English", "en")],
+            self._cfg.get("language", "zh-Hans"))
         self.cb_tree_expand = self._no_wheel_until_focused(QComboBox())
         self.cb_tree_expand.addItems(["不展开", "展开1层", "展开2层", "展开3层", "全部展开"])
         ui = self._cfg.setdefault("ui", {})
@@ -842,9 +882,9 @@ class SettingsDialog(QDialog):
         suph.setContentsMargins(0, 0, 0, 0)
         suph.addWidget(self.ed_supplement, 1)
         suph.addWidget(sbtn)
-        form.addRow("主题", self.cb_theme)
+        form.addRow("主题", self.theme_box)
         form.addRow("强调色", self.ed_accent)
-        form.addRow("语言", self.cb_lang)
+        form.addRow("语言", self.lang_box)
         form.addRow("导航树展开", self.cb_tree_expand)
         form.addRow("应用字体", srow)
         form.addRow("经文补充字型", sup)
@@ -959,7 +999,7 @@ class SettingsDialog(QDialog):
             or str(PROJECT_ROOT / "cbeta_ebooks_xml")
         c["output_dir"] = self.ed_output.text().strip()
         c["update_interval"] = self.cb_interval.currentText()
-        c["default_source"] = self.cb_default_source.currentData() or "official"
+        c["default_source"] = "xml" if self.rb_src_made.isChecked() else "official"
         c.setdefault("xml2pdf", {})
         # 旧逐项（page/font_lang/engine/vertical）照读兼容，不再写入/使用，preset 为准
         for _k in ("page", "font_lang", "engine", "vertical", "preset_dir"):
@@ -996,9 +1036,9 @@ class SettingsDialog(QDialog):
         c.setdefault("epub", {})["split_items"] = self.sp_split_epub.value()
         c.setdefault("merge", {})["by_volume"] = self.chk_by_volume.isChecked()
         # 外观
-        c.setdefault("theme", {})["mode"] = self.cb_theme.currentText()
+        c.setdefault("theme", {})["mode"] = self._radio_value(self.theme_group, self.theme_radios)
         c["theme"]["accent"] = self.ed_accent.text().strip()
-        c["language"] = self.cb_lang.currentText()
+        c["language"] = self._radio_value(self.lang_group, self.lang_radios)
         # 导航树展开
         idx = self.cb_tree_expand.currentIndex()
         if idx == 0:
