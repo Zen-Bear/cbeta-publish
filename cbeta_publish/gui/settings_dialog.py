@@ -962,7 +962,7 @@ class SettingsDialog(QDialog):
         c["default_source"] = self.cb_default_source.currentData() or "official"
         c.setdefault("xml2pdf", {})
         # 旧逐项（page/font_lang/engine/vertical）照读兼容，不再写入/使用，preset 为准
-        for _k in ("page", "font_lang", "engine", "vertical"):
+        for _k in ("page", "font_lang", "engine", "vertical", "preset_dir"):
             c["xml2pdf"].pop(_k, None)
         c["xml2pdf"].update({
             "path": self._native_path(self.ed_x2p.text().strip()),
