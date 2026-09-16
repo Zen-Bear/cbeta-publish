@@ -290,6 +290,70 @@ class RightPanelTest(unittest.TestCase):
             QDesktopServices.openUrl = real
             win.config["default_source"] = "official"
 
+    def test_transient_preset_from_adjust(self):
+        # 「调整…」确定即临时生效（不保存）：自制用临时预设、强制重生成、原预设不变
+        import json as _json
+        import tempfile
+        from pathlib import Path as _P
+        import cbeta_publish.books.xml2pdf_bridge as b
+        win = self.win
+        root = _P(tempfile.mkdtemp())
+        (root / "presets").mkdir(parents=True)
+        (root / "presets" / "a5.json").write_text('{"default_page": "a5"}', encoding="utf-8")
+        win.config["xml2pdf"]["path"] = str(root)
+        win.config["xml2pdf"]["preset"] = "a5"
+        win.config["default_source"] = "xml"
+        win.config["xml_to_ebooks_dir"] = str(root / "out")
+        (root / "out").mkdir()
+        # 已有产物（旧预设生成）→ 一般情况下"仅缺"会跳过
+        (root / "out" / "T0001.pdf").write_bytes(b"old")
+        # 拟「调整…」结果：纸张 A4
+        win._set_transient_preset({"default_page": "a4"})
+        self.assertIsNotNone(win._tmp_preset)
+        self.assertIn("本次", win.lbl_preset.text())
+        self.assertEqual(win._run_preset(), win._tmp_preset)
+        self.assertEqual(_json.loads(win._tmp_preset.read_text(encoding="utf-8")),
+                         {"default_page": "a4"})
+        self.assertEqual(_json.loads((root / "presets" / "a5.json").read_text(encoding="utf-8")),
+                         {"default_page": "a5"})          # 原预设未变
+        # 「自制」→ 用临时预设，且强制重新生成（否则旧产物被跳过）
+        col = _P(win.config["collections_dir"]) / "custom" / "tr.json"
+        col.write_text(_json.dumps({"id": "tr", "name": "tr", "category": "custom",
+                                    "tags": [], "work_ids": ["T0001"]}, ensure_ascii=False),
+                       encoding="utf-8")
+        win._load_collections()
+        for i in range(win.coll_combo.count()):
+            if str(win.coll_combo.itemData(i)).endswith("tr.json"):
+                win.coll_combo.setCurrentIndex(i)
+                break
+        _ensure_app().processEvents()
+        win.chk_pdf.setChecked(True)
+        win.chk_epub.setChecked(False)
+        win._wrap_box = lambda *a, **k: 0
+        calls = []
+        real = b.convert
+
+        def fake(wk, xml, out, config, fmt="pdf", preset=None, stop=None):
+            calls.append(preset)
+            _P(out).write_bytes(b"new")
+            return _P(out)
+        b.convert = fake
+        try:
+            win._on_make_button(False)
+            _ensure_app().processEvents()
+        finally:
+            b.convert = real
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0], win._tmp_preset)              # 用的是临时预设
+        self.assertEqual((root / "out" / "T0001.pdf").read_bytes(), b"new")
+        # 改选预设 → 放弃临时预设（临时文件删除、标签复原）
+        tmp_path = win._tmp_preset
+        win.cb_preset.setCurrentIndex(0)
+        win._on_preset_changed()
+        self.assertIsNone(win._tmp_preset)
+        self.assertFalse(_P(tmp_path).exists())
+        self.assertNotIn("本次", win.lbl_preset.text())
+
     def test_preset_dialog_opens(self):
         # 上游 XmlOptionsDialog 可实例化（调整入口不断链）
         # 注意：xml2pdf 可能处于编辑中间态，此跨仓检查失败时跳过（不阻断 publish）

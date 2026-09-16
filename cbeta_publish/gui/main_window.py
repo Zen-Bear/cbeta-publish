@@ -231,6 +231,7 @@ class MainWindow(QMainWindow):
         self._work_groups={}   # {work_id: 册标签}（从刊本树拖入时记录，供「按册分册」）
         self._left_search_active=False   # 左栏当前是否显示「搜索结果」（导航树被暂存）
         self._nav_stash=None   # 搜索结果占用左栏时暂存的导航树顶层项（供搜索/恢复）
+        self._tmp_preset=None  # 「调整…」本次临时预设文件（不落盘；作用于 自制/合并 等）
 
         splitter=_Splitter(Qt.Horizontal)
         left=QWidget()
@@ -513,7 +514,8 @@ class MainWindow(QMainWindow):
         preset_box=QWidget()
         ph=QHBoxLayout(preset_box)
         ph.setContentsMargins(0,0,0,0)
-        ph.addWidget(QLabel("预设:"))
+        self.lbl_preset=QLabel("预设:")
+        ph.addWidget(self.lbl_preset)
         self.cb_preset=QComboBox()
         self.cb_preset.setToolTip("自制书的 xml2pdf 预设（预设目录下的 *.json，出厂默认=对面默认）")
         self.cb_preset.setMinimumWidth(140)
@@ -1764,9 +1766,40 @@ class MainWindow(QMainWindow):
         return self.config.get("default_source", "official") or "official"
 
     def _run_preset(self):
-        # 本次合并预设：右栏下拉（全局 xml2pdf.preset），返回完整路径或 None
+        # 本次生成/合并预设：有「调整…」临时预设则优先用它（不落盘），否则用下拉选中项
+        if getattr(self, "_tmp_preset", None) is not None:
+            return self._tmp_preset
         from cbeta_publish.books import xml2pdf_bridge as _b
         return _b.resolve_preset(self.config)
+
+    def _set_transient_preset(self, data):
+        """保存「调整…」结果到临时预设（仅本次运行生效，不落盘为命名预设）。"""
+        from cbeta_publish.books import xml2pdf_bridge as _b
+        self._clear_transient_preset()
+        p=_b.write_temp_preset(self.config, data)
+        if p is None:
+            self.detail.setText("临时预设写入失败")
+            return None
+        self._tmp_preset=p
+        try:
+            self.lbl_preset.setText("预设(本次):")
+            self.lbl_preset.setToolTip("已应用「调整…」的本次改动（未保存为预设）；改选预设即放弃")
+        except Exception:
+            pass
+        self.detail.setText("已应用本次临时调整（未保存为预设）")
+        return p
+
+    def _clear_transient_preset(self):
+        if getattr(self, "_tmp_preset", None) is None:
+            return
+        from cbeta_publish.books import xml2pdf_bridge as _b
+        _b.remove_temp_preset(self._tmp_preset)
+        self._tmp_preset=None
+        try:
+            self.lbl_preset.setText("预设:")
+            self.lbl_preset.setToolTip("")
+        except Exception:
+            pass
 
     def _run_regen(self):
         # 自制书生成策略（右栏「生成」单选）：missing=仅生成缺少（默认）；all=全部重新生成
@@ -1843,10 +1876,15 @@ class MainWindow(QMainWindow):
             name=""
         self.config.setdefault("xml2pdf", {})["preset"]=name
         self._save_config()
+        # 改选预设 = 放弃「调整…」的临时预设
+        self._clear_transient_preset()
 
     def _edit_preset(self):
-        # 打开上游 XmlOptionsDialog 调整预设：覆盖当前，或另存为新预设。
-        # 全程走上游公开 API：get_preset（合并结果）+ save_config_preset（写入 presets/）。
+        """打开上游 XmlOptionsDialog 调整选项。
+
+        点「确定」= 调整结果**立即生效**（存成临时预设，仅本次运行、不落盘），
+        随后再问是否保存为命名预设（覆盖/另存为/不保存）。取消则什么都不改。
+        """
         from cbeta_publish.books import xml2pdf_bridge as _b
         from PySide6.QtWidgets import QDialog as _QD, QInputDialog
         try:
@@ -1864,37 +1902,44 @@ class MainWindow(QMainWindow):
         merged = dlg.get_preset(base if isinstance(base, dict) else None)
         if not isinstance(merged, dict):
             return
-        name = cur_name
-        if cur_name:
-            box = QMessageBox(self)
-            box.setWindowTitle("保存预设")
-            box.setText(f"覆盖「{cur_name}」，还是另存为新预设？")
-            b_save = box.addButton("覆盖", QMessageBox.AcceptRole)
-            b_as = box.addButton("另存为…", QMessageBox.ActionRole)
-            box.addButton("取消", QMessageBox.RejectRole)
-            box.exec()
-            clicked = box.clickedButton()
-            if clicked is b_save:
-                pass
-            elif clicked is b_as:
-                name = None
-            else:
-                return
-        if not name:
+        # 确定即本次生效（临时预设，不落盘）
+        if self._set_transient_preset(merged) is None:
+            return
+        # 再问是否保存为命名预设
+        box = QMessageBox(self)
+        box.setWindowTitle("保存为预设？")
+        box.setText("本次调整已生效（仅本次运行）。要保存为预设吗？")
+        b_save = box.addButton("覆盖当前预设" if cur_name else "保存为预设", QMessageBox.AcceptRole)
+        b_as = box.addButton("另存为…", QMessageBox.ActionRole)
+        box.addButton("不保存", QMessageBox.RejectRole)
+        box.exec()
+        clicked = box.clickedButton()
+        name = None
+        if clicked is b_save:
+            name = cur_name
+            if not name:
+                name, ok = QInputDialog.getText(self, "保存预设", "预设名：")
+                name = (name or "").strip()
+                if not ok or not name:
+                    return
+        elif clicked is b_as:
             name, ok = QInputDialog.getText(self, "另存为新预设", "预设名：")
             name = (name or "").strip()
             if not ok or not name:
                 return
+        else:
+            return   # 不保存：保留临时预设（本次运行有效）
         path = _b.save_preset(self.config, name, merged)
         if path is None:
             QMessageBox.warning(self, "失败", "写入预设失败（预设名是否为空/非法？）")
             return
+        # 已保存为命名预设 → 临时预设不再需要
+        self._clear_transient_preset()
         self._refresh_preset_combo()
         i = self.cb_preset.findData(path.stem)
         if i >= 0:
             self.cb_preset.setCurrentIndex(i)
         self.detail.setText(f"预设已保存：{path.name}")
-
 
     def _persist_last_collection(self, path):
         # 记住上次工作的丛书，下次启动直接应用
@@ -4307,6 +4352,10 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         preset=self._run_preset()
+        # 「调整…」临时预设（本次有效）：已有产物是旧预设生成的，必须重新生成才算生效
+        if getattr(self, "_tmp_preset", None) is not None:
+            regen_all=True
+            confirm=False
         if regen_all is None:
             regen_all=(self._run_regen()=="all")
         ok_map={f: {} for f in fmts}
@@ -4317,8 +4366,9 @@ class MainWindow(QMainWindow):
         done=[0]
         dlg, update, pstate = self._make_progress(title, total)
         if fmts:
+            _ptag="（本次临时）" if getattr(self, "_tmp_preset", None) is not None else ""
             update(0, f"来源：自制｜生成：{'全部重新生成' if regen_all else '仅生成缺少'}"
-                      f"｜预设：{Path(preset).name if preset else '出厂默认'}")
+                      f"｜预设：{(Path(preset).name if preset else '出厂默认')}{_ptag}")
         cancelled=False
         for fmt in fmts:
             for w in works:
@@ -4416,7 +4466,10 @@ class MainWindow(QMainWindow):
         skip_missing = (ret == QMessageBox.No) if missing else False
         # 自制：全部重新生成前确认（会重跑 xml2pdf，较耗时）
         regen_all = (run_source=="xml" and self._run_regen()=="all")
-        if regen_all and not self._confirm_regen(works, fmts, xml_out):
+        if getattr(self, "_tmp_preset", None) is not None:
+            regen_all = True          # 临时预设：必须重生成才算生效
+        if regen_all and getattr(self, "_tmp_preset", None) is None \
+                and not self._confirm_regen(works, fmts, xml_out):
             self.detail.setText("已取消合成（未重新生成）")
             return
         self.btn_merge.setEnabled(False)

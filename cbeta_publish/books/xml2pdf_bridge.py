@@ -223,6 +223,35 @@ def save_preset(config, name, data) -> Path | None:
         return None
 
 
+def write_temp_preset(config, data) -> Path | None:
+    """把预设 dict 写成**临时**文件（系统临时目录），供 `--config` 用一次。
+
+    用于「调整…」后仅本次生效、不落盘为命名预设的场景；调用方负责用
+    `remove_temp_preset` 删除。（上游 panel.write_temp_presets 是等价实现，
+    但输入是 XmlOptions；这里直接写合并后的 dict。）
+    """
+    import json
+    import tempfile
+    try:
+        fd, path = tempfile.mkstemp(prefix="cbeta-publish-preset-", suffix=".json")
+        import os
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data or {}, f, ensure_ascii=False, indent=2)
+        return Path(path)
+    except Exception as e:
+        print("write temp preset fail", e)
+        return None
+
+
+def remove_temp_preset(path):
+    """删除临时预设文件（尽力，失败忽略）。"""
+    try:
+        if path:
+            Path(path).unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
 # ---------- 自制书输出目录（完全平展） ----------
 
 def xml_books_dir(config) -> Path:
