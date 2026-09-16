@@ -10,7 +10,7 @@ from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtWidgets import QApplication, QFormLayout  # noqa: E402
 
 from cbeta_publish.gui.settings_dialog import DEFAULT_CONFIG, SettingsDialog  # noqa: E402
 
@@ -106,6 +106,42 @@ class SettingsDialogTest(unittest.TestCase):
         dlg = SettingsDialog(cfg, None)
         self.assertEqual(dlg.ed_imprint.text(), "太虛大師全書")
         self.assertNotIn("series", dlg._cfg["cover"])
+
+    def test_mode_is_radio_buttons(self):
+        # PDF 合并模式：单选按钮（打印模式/阅读模式），round-trip 到 cover.mode
+        cfg = copy.deepcopy(DEFAULT_CONFIG)
+        cfg["cover"]["mode"] = "reading"
+        dlg = SettingsDialog(cfg, None)
+        self.assertEqual([dlg.rb_print.text(), dlg.rb_reading.text()],
+                         ["打印模式", "阅读模式"])
+        self.assertTrue(dlg.rb_reading.isChecked())
+        self.assertFalse(dlg.rb_print.isChecked())
+        dlg.rb_print.setChecked(True)
+        self.assertEqual(dlg._collect()["cover"]["mode"], "print")
+        dlg.rb_reading.setChecked(True)
+        self.assertEqual(dlg._collect()["cover"]["mode"], "reading")
+
+    def test_restore_buttons_have_tooltips(self):
+        dlg = self._dlg()
+        self.assertTrue(dlg._btn_default.toolTip())
+        self.assertTrue(dlg._btn_original.toolTip())
+
+    def test_by_volume_label_mentions_file_naming(self):
+        dlg = self._dlg()
+        self.assertIn("每册一个文件", dlg.chk_by_volume.text())
+        self.assertTrue(dlg.chk_by_volume.toolTip())
+
+    def test_cover_labels_renamed(self):
+        # 「发布模式」→「PDF 合并模式」
+        dlg = self._dlg()
+        labels = []
+        form = dlg._cover_form
+        for i in range(form.rowCount()):
+            it = form.itemAt(i, QFormLayout.LabelRole)
+            if it is not None and it.widget() is not None and hasattr(it.widget(), "text"):
+                labels.append(it.widget().text())
+        self.assertIn("PDF 合并模式", labels)
+        self.assertNotIn("发布模式", labels)
 
     def test_collect_roundtrip_after_restructure(self):
         # 子页签拆分后，控件仍在 _collect 覆盖范围内

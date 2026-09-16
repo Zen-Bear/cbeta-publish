@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
     QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QCheckBox, QPushButton,
     QLabel, QFileDialog, QColorDialog, QMessageBox, QGroupBox,
     QTableWidget, QTableWidgetItem, QHeaderView, QApplication,
-    QListWidget, QListWidgetItem,
+    QListWidget, QListWidgetItem, QRadioButton, QButtonGroup,
 )
 from PySide6.QtCore import Qt, QEvent
 from PySide6.QtGui import QColor
@@ -28,8 +28,8 @@ DEFAULT_CONFIG = {
     "update_interval": "weekly",
     "local_xml_root": "E:/CBETA/CBReader2X/Bookcase/CBETA/XML",
     "output_dir": "my_books",
-    "ui": {"tree_expand": {"mode": "depth", "depth": 2},
-           "app_font": "Microsoft YaHei", "app_font_size": 9,
+    "ui": {"tree_expand": {"mode": "depth", "depth": 2}, "layout": "three",
+           "app_font": "SimSun", "app_font_size": 9,
            "supplement_ttf": "E:/dev/cbeta/xml2pdf/cbeta/CBETA 補充字型/CBETASupplement.ttf"},
     "default_source": "official",
     "pdf": {"split_pages": 5000},
@@ -119,7 +119,9 @@ class SettingsDialog(QDialog):
         self._btn_apply = QPushButton("确定")
         self._btn_save = QPushButton("保存")
         self._btn_default = QPushButton("恢复默认")
+        self._btn_default.setToolTip("恢复为内置默认设置（仅改动本窗口控件，需点「确定/保存」才生效）")
         self._btn_original = QPushButton("恢复原始")
+        self._btn_original.setToolTip("从 mulu/backup/original/app.json 恢复初始配置（仅改动本窗口控件，需点「确定/保存」才生效）")
         self._btn_cancel = QPushButton("取消")
         # 确定=默认按钮（回车触发）；恢复默认/恢复原始靠左，其余靠右
         self._btn_apply.setDefault(True)
@@ -202,11 +204,22 @@ class SettingsDialog(QDialog):
         self.sp_split_epub.setValue(int((self._cfg.get("epub", {}) or {}).get("split_items", 500) or 0))
         split_form.addRow("EPUB 分册文档数", self.sp_split_epub)
         form.addRow(split_box)
-        # 按册分册：来自 mulu/vol.json 的册（原书分卷）归属
-        self.chk_by_volume = QCheckBox("按册分册（按原书分卷各一个文件，如 法藏/制藏/論藏/雜藏）")
+        # 按册分册：按 mulu/vol.json 的刊本分册归属，每册输出一个文件
+        self.chk_by_volume = QCheckBox("按册分册（每册一个文件，文件名=刊本名 序号 显示名）")
+        self.chk_by_volume.setToolTip("按 mulu/vol.json 的刊本分册（册=原书分卷，如 法藏/制藏/論藏/雜藏）；\n"
+                                     "手动在丛书中设定的册标签优先于自动归属；不勾选则整部丛书合并为一个文件")
         self.chk_by_volume.setChecked(bool((self._cfg.get("merge", {}) or {}).get("by_volume", False)))
         form.addRow(self.chk_by_volume)
         return w
+
+    def _set_mode(self, mode):
+        # 单选按钮与 cover.mode（"print"/"reading"）互转
+        _m = (mode or "print").strip()
+        self.rb_reading.setChecked(_m == "reading")
+        self.rb_print.setChecked(not self.rb_reading.isChecked())
+
+    def _mode(self):
+        return "reading" if self.rb_reading.isChecked() else "print"
 
     @staticmethod
     def _migrate_series_imprint(cover: dict):
@@ -228,12 +241,24 @@ class SettingsDialog(QDialog):
         self.ed_organizer = QLineEdit(cover.get("organizer", "CBETA 整理"))
         self.ed_imprint = QLineEdit(cover.get("imprint", "CBETA 電子佛典自選叢書"))
         self.ed_imprint.setToolTip("封面左上角文字；可填系列名（如太虛大師全書）或落款；留空则不绘制")
-        self.cb_mode = self._no_wheel_until_focused(QComboBox())
-        self.cb_mode.addItems(["print", "reading"])
-        self.cb_mode.setCurrentText(cover.get("mode", "print"))
+        # PDF 合并模式：打印模式（补空白页）/ 阅读模式（去空白）
+        self.cb_mode = QWidget()
+        _mh = QHBoxLayout(self.cb_mode)
+        _mh.setContentsMargins(0, 0, 0, 0)
+        self.rb_print = QRadioButton("打印模式")
+        self.rb_reading = QRadioButton("阅读模式")
+        self.rb_print.setToolTip("补空白页：封面/佛像/目录/正文/韦陀/封底按页序对齐")
+        self.rb_reading.setToolTip("去空白：去掉空白页，适合屏幕阅读")
+        self.mode_group = QButtonGroup(self)
+        self.mode_group.addButton(self.rb_print)
+        self.mode_group.addButton(self.rb_reading)
+        _mh.addWidget(self.rb_print)
+        _mh.addWidget(self.rb_reading)
+        _mh.addStretch()
+        self._set_mode(cover.get("mode", "print"))
         form.addRow("整理者署名", self.ed_organizer)
         form.addRow("左上角系列名", self.ed_imprint)
-        form.addRow("发布模式", self.cb_mode)
+        form.addRow("PDF 合并模式", self.cb_mode)
         form.addRow(QLabel("打印=补空白页（封面/佛像/目录/正文/韦陀/封底）；阅读=去空白"))
         self.chk_cover_enabled = QCheckBox("合并时使用封面/封底页")
         self.chk_cover_enabled.setChecked(bool(cover.get("enabled", True)))
@@ -412,7 +437,7 @@ class SettingsDialog(QDialog):
         self._migrate_series_imprint(cover)
         self.ed_organizer.setText(cover.get("organizer", "CBETA 整理"))
         self.ed_imprint.setText(cover.get("imprint", "CBETA 電子佛典自選叢書"))
-        self.cb_mode.setCurrentText(cover.get("mode", "print"))
+        self._set_mode(cover.get("mode", "print"))
         self.chk_cover_enabled.setChecked(bool(cover.get("enabled", True)))
         intro = cover.setdefault("intro", {})
         self.chk_intro_enabled.setChecked(bool(intro.get("enabled", True)))
@@ -466,7 +491,7 @@ class SettingsDialog(QDialog):
             idx = min(3, max(1, depth))
         self.cb_tree_expand.setCurrentIndex(idx)
         ui = c.setdefault("ui", {})
-        self.ed_app_font.setText(ui.get("app_font", "Microsoft YaHei"))
+        self.ed_app_font.setText(ui.get("app_font", "SimSun"))
         self.sp_app_font_size.setValue(int(ui.get("app_font_size") or 9))
         self.ed_supplement.setText(ui.get("supplement_ttf", ""))
         self._populate_filter_lists()
@@ -756,7 +781,7 @@ class SettingsDialog(QDialog):
         self.cb_tree_expand = self._no_wheel_until_focused(QComboBox())
         self.cb_tree_expand.addItems(["不展开", "展开1层", "展开2层", "展开3层", "全部展开"])
         ui = self._cfg.setdefault("ui", {})
-        self.ed_app_font = QLineEdit(ui.get("app_font", "Microsoft YaHei"))
+        self.ed_app_font = QLineEdit(ui.get("app_font", "SimSun"))
         self.sp_app_font_size = self._no_wheel_until_focused(QSpinBox())
         self.sp_app_font_size.setRange(6, 24)
         self.sp_app_font_size.setValue(int(ui.get("app_font_size") or 9))
@@ -905,7 +930,7 @@ class SettingsDialog(QDialog):
         cover["organizer"] = self.ed_organizer.text().strip()
         cover["imprint"] = self.ed_imprint.text().strip()
         cover.pop("series", None)
-        cover["mode"] = self.cb_mode.currentText()
+        cover["mode"] = self._mode()
         cover["enabled"] = self.chk_cover_enabled.isChecked()
         cover.setdefault("intro", {})["enabled"] = self.chk_intro_enabled.isChecked()
         cover["intro"]["title"] = self.ed_intro_title.text().strip() or "说明"
@@ -939,7 +964,7 @@ class SettingsDialog(QDialog):
             te = {"mode": "depth", "depth": idx}
         c.setdefault("ui", {})["tree_expand"] = te
         ui = c.setdefault("ui", {})
-        ui["app_font"] = self.ed_app_font.text().strip() or "Microsoft YaHei"
+        ui["app_font"] = self.ed_app_font.text().strip() or "SimSun"
         ui["app_font_size"] = self.sp_app_font_size.value()
         ui["supplement_ttf"] = self.ed_supplement.text().strip()
         # 目录过滤

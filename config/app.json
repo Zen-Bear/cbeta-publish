@@ -15,8 +15,9 @@
     "tree_expand": {
       "mode": "none"
     },
-    "app_font": "Microsoft YaHei",
-    "app_font_size": 9,
+    "layout": "two",
+    "app_font": "SimSun",
+    "app_font_size": 10,
     "supplement_ttf": "E:/dev/cbeta/xml2pdf/cbeta/CBETA 補充字型/CBETASupplement.ttf",
     "last_collection": "E:\\dev\\cbeta\\publish\\collections\\Bear\\多部类丛书.json"
   },
@@ -67,11 +68,11 @@
     "images": {
       "buddha": {
         "file": "assets/images/buddha.jpg",
-        "enabled": true
+        "enabled": false
       },
       "weituo": {
         "file": "assets/images/weituo.jpg",
-        "enabled": true
+        "enabled": false
       }
     },
     "sizes": {
@@ -123,7 +124,7 @@
         "ratio": 1.0
       },
       "title": {
-        "font": "E:/软件/6、字体/3、汇文系列、京华老宋体/標題明朝體/朝華標題B.ttf",
+        "font": "E:\\软件\\6、字体\\3、汇文系列、京华老宋体\\標題明朝體\\朝華標題B.ttf",
         "color": [
           0,
           0,
