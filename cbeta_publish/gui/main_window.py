@@ -140,8 +140,20 @@ def apply_ui_fonts(ui: dict):
     except (TypeError, ValueError):
         font_size = 9
     app = QApplication.instance()
-    if app is not None:
-        app.setFont(QFont(str(ui.get("app_font") or "SimSun"), font_size))
+    if app is None:
+        return
+    font = QFont(str(ui.get("app_font") or "SimSun"), font_size)
+    app.setFont(font)
+    # 已存在的控件（尤其 QAbstractItemView 的 viewport：列表/表格/树/表头）
+    # 不一定跟随 app 字体变化 → 显式刷新一遍（本工程无逐控件自定义字体，安全）
+    for w in app.allWidgets():
+        try:
+            w.setFont(font)
+            vp = w.viewport() if hasattr(w, "viewport") else None
+            if vp is not None:
+                vp.setFont(font)
+        except Exception:
+            pass
 
 
 class MainWindow(QMainWindow):
@@ -459,20 +471,20 @@ class MainWindow(QMainWindow):
         self.btn_preset_edit.setFixedWidth(64)
         ph.addWidget(self.btn_preset_edit)
         pg.addWidget(preset_box)
-        regen_box=QWidget()
-        rg_h=QHBoxLayout(regen_box)
-        rg_h.setContentsMargins(0,0,0,0)
-        rg_h.addWidget(QLabel("生成:"))
-        self.regen_group=QButtonGroup(regen_box)
         self.rb_regen_missing=QRadioButton("仅缺")
         self.rb_regen_missing.setToolTip("合并/ZIP/导出 时：已有自制书直接复用，只生成缺少的（推荐）")
         self.rb_regen_all=QRadioButton("全部")
         self.rb_regen_all.setToolTip("合并/ZIP/导出 时：忽略已有自制书，全部重新生成（改过预设后用）")
+        self.regen_box=QWidget()
+        self.regen_group=QButtonGroup(self.regen_box)
+        rg_h=QHBoxLayout(self.regen_box)
+        rg_h.setContentsMargins(0,0,0,0)
+        rg_h.setSpacing(2)
+        rg_h.addWidget(QLabel("（"))
         for _i, _rb in enumerate((self.rb_regen_missing, self.rb_regen_all)):
             rg_h.addWidget(_rb)
             self.regen_group.addButton(_rb, _i)
-        rg_h.addStretch()
-        pg.addWidget(regen_box)
+        rg_h.addWidget(QLabel("）"))
         publish_box=QWidget()
         hb2=QHBoxLayout(publish_box)
         hb2.setContentsMargins(0,0,0,0)
@@ -489,7 +501,8 @@ class MainWindow(QMainWindow):
         self.btn_export=QPushButton("导出")
         self.btn_export.setToolTip("拷贝到指定目录")
         hb2.addWidget(self.btn_merge); hb2.addWidget(self.btn_zip); hb2.addWidget(self.btn_export)
-        hb2.addWidget(self.btn_download); hb2.addWidget(self.btn_make); hb2.addWidget(self.btn_remake)
+        hb2.addWidget(self.btn_download); hb2.addWidget(self.btn_make); hb2.addWidget(self.regen_box)
+        hb2.addWidget(self.btn_remake)
         hb2.addStretch()
         pg.addWidget(publish_box)
         self._sync_source_preset_ui()   # 依赖上面按钮存在（来源=自制时换按钮）
@@ -1735,6 +1748,7 @@ class MainWindow(QMainWindow):
         self.btn_preset_edit.setEnabled(on)
         self.rb_regen_missing.setEnabled(on)
         self.rb_regen_all.setEnabled(on)
+        self.regen_box.setVisible(on)
         self.btn_download.setVisible(not on)
         self.btn_make.setVisible(on)
         self.btn_remake.setVisible(on)

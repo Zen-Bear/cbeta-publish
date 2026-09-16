@@ -143,15 +143,38 @@ class SettingsDialogTest(unittest.TestCase):
         self.assertIn("PDF 合并模式", labels)
         self.assertNotIn("发布模式", labels)
 
-    def test_default_source_shows_chinese(self):
-        # 默认来源下拉显示官方/自制，存值 official/xml
+    def test_default_source_is_radio(self):
+        # 默认来源=单选（官方/自制），存值 official/xml
         dlg = self._dlg()
-        self.assertEqual([dlg.cb_default_source.itemText(i)
-                          for i in range(dlg.cb_default_source.count())],
+        self.assertEqual([dlg.rb_src_official.text(), dlg.rb_src_made.text()],
                          ["官方", "自制"])
-        self.assertEqual([dlg.cb_default_source.itemData(i)
-                          for i in range(dlg.cb_default_source.count())],
-                         ["official", "xml"])
+        self.assertTrue(dlg.rb_src_official.isChecked())
+        dlg.rb_src_made.setChecked(True)
+        self.assertEqual(dlg._collect()["default_source"], "xml")
+        cfg = copy.deepcopy(DEFAULT_CONFIG)
+        cfg["default_source"] = "xml"
+        d2 = SettingsDialog(cfg, None)
+        self.assertTrue(d2.rb_src_made.isChecked())
+
+    def test_theme_language_are_radio(self):
+        # 外观：主题（浅色/深色/跟随系统）与语言（简体/繁体/English）单选
+        dlg = self._dlg()
+        self.assertEqual([r.text() for r in dlg.theme_radios.values()],
+                         ["浅色", "深色", "跟随系统"])
+        self.assertEqual([r.text() for r in dlg.lang_radios.values()],
+                         ["简体", "繁体", "English"])
+        self.assertTrue(dlg.theme_radios["system"].isChecked())
+        dlg.theme_radios["dark"].setChecked(True)
+        dlg.lang_radios["zh-Hant"].setChecked(True)
+        out = dlg._collect()
+        self.assertEqual(out["theme"]["mode"], "dark")
+        self.assertEqual(out["language"], "zh-Hant")
+        cfg = copy.deepcopy(DEFAULT_CONFIG)
+        cfg["theme"]["mode"] = "light"
+        cfg["language"] = "en"
+        d2 = SettingsDialog(cfg, None)
+        self.assertTrue(d2.theme_radios["light"].isChecked())
+        self.assertTrue(d2.lang_radios["en"].isChecked())
 
     def test_preset_rows_and_collect(self):
         import shutil
@@ -168,9 +191,7 @@ class SettingsDialogTest(unittest.TestCase):
             cfg["xml_to_ebooks_dir"] = str(tmp / "xb")
             dlg = SettingsDialog(cfg, None)
             self.assertEqual(dlg.cb_preset.currentData(), "a")
-            i = dlg.cb_default_source.findData("xml")
-            self.assertGreaterEqual(i, 0)
-            self.assertEqual(dlg.cb_default_source.currentIndex(), i)
+            self.assertTrue(dlg.rb_src_made.isChecked())
             self.assertEqual(dlg.ed_xmlbooks.text(), str(tmp / "xb"))
             out = dlg._collect()
             self.assertEqual(out["xml2pdf"]["preset"], "a")
@@ -210,7 +231,7 @@ class SettingsDialogTest(unittest.TestCase):
         groups = [g for g in dlg.findChildren(QGroupBox) if g.title() == "自制"]
         self.assertEqual(len(groups), 1)
         box = groups[0]
-        for w in (dlg.cb_default_source, dlg.ed_x2p, dlg.ed_x2p_ebook,
+        for w in (dlg.src_default_box, dlg.ed_x2p, dlg.ed_x2p_ebook,
                   dlg.ed_xmlbooks, dlg.cb_preset):
             self.assertTrue(box.isAncestorOf(w), w)
         labels = []
