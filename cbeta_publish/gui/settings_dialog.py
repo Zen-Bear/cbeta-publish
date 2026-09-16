@@ -542,7 +542,7 @@ class SettingsDialog(QDialog):
         ui = c.setdefault("ui", {})
         self.ed_app_font.setText(ui.get("app_font", "SimSun"))
         self.sp_app_font_size.setValue(int(ui.get("app_font_size") or 9))
-        self.ed_supplement.setText(ui.get("supplement_ttf", ""))
+        self.ed_supplement.setText(self._native_path(ui.get("supplement_ttf", "")))
         self._populate_filter_lists()
 
     # ---------- 页签：缓存 ----------
@@ -874,7 +874,7 @@ class SettingsDialog(QDialog):
         sfh.addWidget(self.ed_app_font, 1)
         sfh.addWidget(QLabel("字号"))
         sfh.addWidget(self.sp_app_font_size)
-        self.ed_supplement = QLineEdit(ui.get("supplement_ttf", ""))
+        self.ed_supplement = QLineEdit(self._native_path(ui.get("supplement_ttf", "")))
         sbtn = QPushButton("浏览…")
         sbtn.clicked.connect(lambda: self._pick_supplement())
         sup = QWidget()
@@ -1051,7 +1051,7 @@ class SettingsDialog(QDialog):
         ui = c.setdefault("ui", {})
         ui["app_font"] = self.ed_app_font.text().strip() or "SimSun"
         ui["app_font_size"] = self.sp_app_font_size.value()
-        ui["supplement_ttf"] = self.ed_supplement.text().strip()
+        ui["supplement_ttf"] = self._native_path(self.ed_supplement.text().strip())
         # 目录过滤
         filters = c.setdefault("catalog", {}).setdefault("filters", {})
         filters.setdefault("tripitaka", {})["hidden"] = self._gather_hidden(self.lst_bulei)

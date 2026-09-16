@@ -498,7 +498,6 @@ class MainWindow(QMainWindow):
         for _i, _rb in enumerate((self.rb_official, self.rb_made)):
             sh.addWidget(_rb)
             self.src_group.addButton(_rb, _i)
-        sh.addStretch()
         pg.addWidget(src_box)
         preset_box=QWidget()
         ph=QHBoxLayout(preset_box)
@@ -543,10 +542,14 @@ class MainWindow(QMainWindow):
         self.btn_export=QPushButton("导出")
         self.btn_export.setToolTip("拷贝到指定目录")
         hb2.addWidget(self.btn_merge); hb2.addWidget(self.btn_zip); hb2.addWidget(self.btn_export)
-        hb2.addWidget(self.btn_download); hb2.addWidget(self.btn_make); hb2.addWidget(self.regen_box)
-        hb2.addWidget(self.btn_remake)
+        hb2.addWidget(self.btn_download)
         hb2.addStretch()
         pg.addWidget(publish_box)
+        # 自制/重制按钮紧跟「来源：○官方 ○自制」中的「自制」之后（括号内为生成策略单选）
+        sh.addWidget(self.btn_make)
+        sh.addWidget(self.regen_box)
+        sh.addWidget(self.btn_remake)
+        sh.addStretch()
         self._sync_source_preset_ui()   # 依赖上面按钮存在（来源=自制时换按钮）
         rv.addWidget(publish_group)
         cache_box=QWidget()
