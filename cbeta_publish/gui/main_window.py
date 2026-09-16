@@ -465,28 +465,34 @@ class MainWindow(QMainWindow):
         rg_h.addWidget(QLabel("生成:"))
         self.regen_group=QButtonGroup(regen_box)
         self.rb_regen_missing=QRadioButton("仅缺")
-        self.rb_regen_missing.setToolTip("已有自制书直接复用，只生成缺少的（推荐）")
+        self.rb_regen_missing.setToolTip("合并/ZIP/导出 时：已有自制书直接复用，只生成缺少的（推荐）")
         self.rb_regen_all=QRadioButton("全部")
-        self.rb_regen_all.setToolTip("忽略已有自制书，全部重新生成（改过预设/选项后用）")
+        self.rb_regen_all.setToolTip("合并/ZIP/导出 时：忽略已有自制书，全部重新生成（改过预设后用）")
         for _i, _rb in enumerate((self.rb_regen_missing, self.rb_regen_all)):
             rg_h.addWidget(_rb)
             self.regen_group.addButton(_rb, _i)
         rg_h.addStretch()
         pg.addWidget(regen_box)
-        self._sync_source_preset_ui()
         publish_box=QWidget()
         hb2=QHBoxLayout(publish_box)
         hb2.setContentsMargins(0,0,0,0)
         self.btn_download=QPushButton("下载/更新")
+        self.btn_download.setToolTip("下载/更新官方电子书（来源=官方时）")
+        self.btn_make=QPushButton("自制")
+        self.btn_make.setToolTip("生成缺失的自制电子书（已有产物直接复用）")
+        self.btn_remake=QPushButton("重制")
+        self.btn_remake.setToolTip("重新生成全部自制电子书（忽略已有产物）")
         self.btn_merge=QPushButton("合并")
         self.btn_merge.setToolTip("PDF/ePub合并成一个文件（单一格式，允许分册）")
         self.btn_zip=QPushButton("ZIP")
         self.btn_zip.setToolTip("ZIP 打包")
         self.btn_export=QPushButton("导出")
         self.btn_export.setToolTip("拷贝到指定目录")
-        hb2.addWidget(self.btn_merge); hb2.addWidget(self.btn_zip); hb2.addWidget(self.btn_export); hb2.addWidget(self.btn_download)
+        hb2.addWidget(self.btn_merge); hb2.addWidget(self.btn_zip); hb2.addWidget(self.btn_export)
+        hb2.addWidget(self.btn_download); hb2.addWidget(self.btn_make); hb2.addWidget(self.btn_remake)
         hb2.addStretch()
         pg.addWidget(publish_box)
+        self._sync_source_preset_ui()   # 依赖上面按钮存在（来源=自制时换按钮）
         rv.addWidget(publish_group)
         cache_box=QWidget()
         ch=QHBoxLayout(cache_box)
@@ -609,6 +615,8 @@ class MainWindow(QMainWindow):
         sc_down.setContext(Qt.WidgetWithChildrenShortcut)
         sc_down.activated.connect(lambda: self._move_coll_selection(1))
         self.btn_download.clicked.connect(self._on_download_button)
+        self.btn_make.clicked.connect(lambda: self._on_make_button(False))
+        self.btn_remake.clicked.connect(lambda: self._on_make_button(True))
         self.btn_merge.clicked.connect(self._merge)
         self.btn_zip.clicked.connect(self._zip)
         self.btn_export.clicked.connect(self._export)
@@ -1721,12 +1729,15 @@ class MainWindow(QMainWindow):
         self._update_preset_enabled()
 
     def _update_preset_enabled(self):
-        # 仅来源=自制时启用预设行与「生成」策略行
+        # 仅来源=自制时启用预设/生成行，并把「下载/更新」换成「自制/重制」
         on=self._run_source()=="xml"
         self.cb_preset.setEnabled(on)
         self.btn_preset_edit.setEnabled(on)
         self.rb_regen_missing.setEnabled(on)
         self.rb_regen_all.setEnabled(on)
+        self.btn_download.setVisible(not on)
+        self.btn_make.setVisible(on)
+        self.btn_remake.setVisible(on)
 
     def _on_source_changed(self, *_):
         # 右栏来源切换：sticky 写回全局，下次默认上次的选择
@@ -3638,6 +3649,45 @@ class MainWindow(QMainWindow):
             self.detail.setText(f"下载完成 {st.get('ok',0)}/{st.get('total',len(pairs))}")
         self._prompt_save_collection("下载完成，", str(data))
 
+    def _on_make_button(self, regen_all):
+        # 右栏「自制」/「重制」：为当前丛书生成自制电子书（整批）
+        #   自制 = 仅生成缺少（复用已有）；重制 = 全部重新生成
+        fmts=[]
+        if self.chk_pdf.isChecked(): fmts.append("pdf")
+        if self.chk_epub.isChecked(): fmts.append("epub")
+        if not fmts:
+            QMessageBox.warning(self, "失败", "请至少选择一种格式 pdf/epub")
+            return
+        data=self.coll_combo.currentData()
+        if self._is_coll_placeholder(data):
+            QMessageBox.warning(self, "失败", "请选择一个丛书")
+            return
+        d=self._coll_dict(data)
+        if d is None:
+            try:
+                d=self._read_coll(Path(data))
+            except Exception as e:
+                QMessageBox.warning(self, "失败", f"读取丛书失败 {e}")
+                return
+        works=d.get("work_ids", [])
+        if not works:
+            QMessageBox.warning(self, "失败", "丛书为空")
+            return
+        title="重新生成全部自制电子书" if regen_all else "生成自制电子书"
+        from cbeta_publish.books import xml2pdf_bridge
+        ok_map, failed, cancelled = self._ensure_xml_batch(
+            works, fmts, title=title, regen_all=bool(regen_all), confirm=False)
+        n=sum(len(v) for v in ok_map.values())
+        if cancelled:
+            self.detail.setText(f"已取消（已完成 {n} 部）")
+        elif failed:
+            self._wrap_box(QMessageBox.Warning, "部分失败",
+                           f"完成 {n} 部，失败 {len(failed)}：\n" + "\n".join(failed[:10]))
+            self.detail.setText(f"生成完成 {n} 部，失败 {len(failed)}")
+        else:
+            self.detail.setText(f"{'重制' if regen_all else '生成'}完成 {n} 部 → {xml2pdf_bridge.xml_books_dir(self.config)}")
+        self._load_coll_works()
+
     def _on_download_button(self):
         self._download()
 
@@ -4140,9 +4190,12 @@ class MainWindow(QMainWindow):
             QMessageBox.Yes | QMessageBox.No)
         return ret==QMessageBox.Yes
 
-    def _ensure_xml_batch(self, works, fmts, title="生成（自制）"):
-        """确保 works×fmts 的自制书存在（按右栏「生成」策略）。
+    def _ensure_xml_batch(self, works, fmts, title="生成（自制）",
+                          regen_all=None, confirm=True):
+        """确保 works×fmts 的自制书存在。
 
+        regen_all=None 时按右栏「生成」策略；True/False 为显式指定（「重制」/「自制」按钮）。
+        confirm=True 且需要全部重生成时，先确认一次。
         返回 (ok_map, failed, cancelled)：ok_map = {fmt: {work: Path}}。
         """
         from cbeta_publish.books import xml2pdf_bridge
@@ -4152,10 +4205,11 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         preset=self._run_preset()
-        regen_all=(self._run_regen()=="all")
+        if regen_all is None:
+            regen_all=(self._run_regen()=="all")
         ok_map={f: {} for f in fmts}
         failed=[]
-        if regen_all and not self._confirm_regen(works, fmts, xml_out):
+        if regen_all and confirm and not self._confirm_regen(works, fmts, xml_out):
             return ok_map, failed, True
         total=max(1, len(works)*len(fmts))
         done=[0]

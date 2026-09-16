@@ -87,13 +87,15 @@ class BridgeConvertLibTest(unittest.TestCase):
             restore()
         a = calls[0]
         self.assertEqual(a[a.index("--cbeta-ebook") + 1], str(ebook))
-        # 未配置则不传
+        # 未配置 → 用默认 CBETA XML 目录（不可空，仍会传）
         calls2, restore2 = self._patch_run()
         try:
             b.convert("T0001", None, out, self.cfg)
         finally:
             restore2()
-        self.assertNotIn("--cbeta-ebook", calls2[0])
+        self.assertEqual(calls2[0][calls2[0].index("--cbeta-ebook") + 1],
+                         str(b.xml_work_dir(self.cfg)))
+        self.assertEqual(b.xml_work_dir({}), b.PROJECT_ROOT / "cbeta_xml")
 
     def test_stop_cancels_before_run(self):
         import cbeta_publish.books.xml2pdf_bridge as b
