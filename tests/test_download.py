@@ -103,6 +103,16 @@ class SourceMetaTest(unittest.TestCase):
         self.assertFalse(is_unchanged({"url": "u", "size": 100, "mtime": 1.0, "etag": None},
                                       self.dir / "no.pdf"))
 
+    def test_txt_endpoint_is_dir_type(self):
+        # 纯 txt（一部一档 text/{id}.txt.zip）走 publish 自有扩展（vendor 不动），目录型落盘
+        from cbeta_publish.books import official_ebook_source as oes
+        self.assertTrue(ebook_url("txt", "T", "T0001").endswith("/text/T0001.txt.zip"))
+        self.assertIn("txt", oes._ZIP_FORMATS)
+        self.assertEqual(oes.local_path("T0001", "txt", self.dir),
+                         self.dir / "txt" / "T" / "T0001")
+        with self.assertRaises(ValueError):
+            ebook_url("bogus", "T", "T0001")
+
 
 class DownloadWorkerTest(unittest.TestCase):
     def setUp(self):
