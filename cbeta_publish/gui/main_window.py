@@ -406,7 +406,10 @@ class MainWindow(QMainWindow):
         mv.addWidget(self.list)
         self.detail=QLabel("")
         self.detail.setWordWrap(True)
-        self.detail.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard)
+        self.detail.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        self.detail.setTextInteractionFlags(
+            Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard
+            | Qt.LinksAccessibleByMouse | Qt.LinksAccessibleByKeyboard)
         self.detail.linkActivated.connect(self._open_publish_link)
         splitter.addWidget(mid)
 
@@ -571,14 +574,13 @@ class MainWindow(QMainWindow):
         ch=QHBoxLayout(cache_box)
         ch.setContentsMargins(0,0,0,0)
         from cbeta_publish.books import xml2pdf_bridge as _xb
-        def _dir_label(getter):
-            # 目录短名显示，悬停看全路径，点击打开（路径经 getter 动态取，设置改后刷新）
-            lb=QLabel()
+        def _dir_label(text, getter):
+            # 标签文字固定（官方/自制/丛书），悬停看全路径，点击打开（路径动态取）
+            lb=QLabel(text)
             lb.setStyleSheet("color:#0645AD; text-decoration:underline;")
             lb.setCursor(Qt.PointingHandCursor)
             def _refresh():
                 p=Path(getter())
-                lb.setText(Path(p).name or str(p))
                 lb.setToolTip(f"{p}\n点击在文件浏览器中打开")
             lb.refresh=_refresh
             def _open(e):
@@ -592,15 +594,12 @@ class MainWindow(QMainWindow):
             _refresh()
             return lb
         ch.addWidget(QLabel("E书目录:"))
-        ch.addWidget(QLabel("官方"))
-        self.lbl_cache_dir=_dir_label(lambda: official_ebook_source.official_books_dir(self.config))
-        ch.addWidget(self.lbl_cache_dir)
-        ch.addWidget(QLabel("自制"))
-        self.lbl_xml_dir=_dir_label(lambda: _xb.xml_books_dir(self.config))
-        ch.addWidget(self.lbl_xml_dir)
-        ch.addWidget(QLabel("丛书"))
-        self.lbl_out_dir=_dir_label(lambda: self._out_dir())
-        ch.addWidget(self.lbl_out_dir)
+        self.lbl_cache_dir=_dir_label("官方", lambda: official_ebook_source.official_books_dir(self.config))
+        self.lbl_xml_dir=_dir_label("自制", lambda: _xb.xml_books_dir(self.config))
+        self.lbl_out_dir=_dir_label("丛书", lambda: self._out_dir())
+        for _lb in (self.lbl_cache_dir, self.lbl_xml_dir, self.lbl_out_dir):
+            ch.addWidget(_lb)
+            ch.addSpacing(16)
         ch.addStretch()
         rv.addWidget(cache_box)
         # 右下页签：① 书籍信息 ② 丛书信息（原「下载记录」页签删除，下载改为弹窗进度）
@@ -3416,10 +3415,10 @@ class MainWindow(QMainWindow):
         except Exception as e:
             print(e)
 
-    def _show_made_books(self, header, entries, summary):
+    def _show_made_books(self, header, entries, summary, out_dir=None):
         """在「书籍信息」页签列出刚下载/自制的书籍（每项可点击打开），末行给总结。
 
-        entries: [(work, fmt, path)]；summary: 末行纯文本（如「生成完成 3 部 → …」）。
+        entries: [(work, fmt, path)]；summary: 末行文本；out_dir: 末行附目录链接（可点开）。
         """
         import html as _html
         from PySide6.QtCore import QUrl as _QU
@@ -3432,9 +3431,23 @@ class MainWindow(QMainWindow):
                 parts.append(f'<a href="{href}">{_html.escape(label)}</a>')
             except Exception:
                 continue
-        parts.append(_html.escape(summary))
+        line=_html.escape(summary)
+        if out_dir is not None:
+            try:
+                dp=Path(out_dir)
+                href=_QU.fromLocalFile(str(dp.resolve())).toString()
+                line+=f' <a href="{href}">{_html.escape(str(dp))}</a>'
+            except Exception:
+                pass
+        parts.append(line)
         self.detail.setText("<br>".join(parts))
         self.tab_bottom.setCurrentIndex(0)
+        # 回到第一行（不然滚到末尾）
+        try:
+            self.detail_scroll.verticalScrollBar().setValue(0)
+            self.detail_scroll.horizontalScrollBar().setValue(0)
+        except Exception:
+            pass
 
     def _load_coll_works(self):
         data=self.coll_combo.currentData()
@@ -3857,10 +3870,10 @@ class MainWindow(QMainWindow):
             failed=st.get("failed") or []
             if failed:
                 QMessageBox.warning(self, "下载失败", f"{len(failed)} 个文件下载失败：\n" + "\n".join(failed[:10]) + (f"\n...共 {len(failed)} 个" if len(failed)>10 else ""))
-            summary=f"下载未全部完成 {st.get('ok',0)}/{st.get('total',len(pairs))} → {dest_dir}"
+            summary=f"下载未全部完成 {st.get('ok',0)}/{st.get('total',len(pairs))} →"
         else:
-            summary=f"下载完成 {st.get('ok',0)}/{st.get('total',len(pairs))} → {dest_dir}"
-        self._show_made_books("下载完成", entries, summary)
+            summary=f"下载完成 {st.get('ok',0)}/{st.get('total',len(pairs))} →"
+        self._show_made_books("下载完成", entries, summary, out_dir=dest_dir)
         self._prompt_save_collection("下载完成，", str(data))
 
     def _on_make_button(self, regen_all):
@@ -3897,10 +3910,11 @@ class MainWindow(QMainWindow):
         elif failed:
             self._wrap_box(QMessageBox.Warning, "部分失败",
                            f"完成 {n} 部，失败 {len(failed)}：\n" + "\n".join(failed[:10]))
-            summary=f"生成完成 {n} 部，失败 {len(failed)} → {base}"
+            summary=f"生成完成 {n} 部，失败 {len(failed)} →"
         else:
-            summary=f"{'重制' if regen_all else '生成'}完成 {n} 部 → {base}"
-        self._show_made_books("生成完成" if not regen_all else "重制完成", entries, summary)
+            summary=f"{'重制' if regen_all else '生成'}完成 {n} 部 →"
+        self._show_made_books("生成完成" if not regen_all else "重制完成",
+                              entries, summary, out_dir=base)
         self._load_coll_works()
 
     def _on_download_button(self):
