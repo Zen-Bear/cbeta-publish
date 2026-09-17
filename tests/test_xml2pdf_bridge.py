@@ -228,5 +228,95 @@ class BridgePresetDirTest(unittest.TestCase):
                          Path("E:/x") / "presets")
 
 
+class BridgeRunWrapperTest(unittest.TestCase):
+    """临时 run.json 包装：5 槽沿用仓库 run.json，config-json 指本次预设，用后删。"""
+
+    def _real_cfg(self):
+        import cbeta_publish.books.xml2pdf_bridge as b
+        root = b.PROJECT_ROOT.parent / "xml2pdf"
+        if not (root / "pycbeta" / "theme.py").is_file():
+            self.skipTest("no real xml2pdf sibling repo")
+        return {"xml2pdf": {"path": str(root)}}, root
+
+    def test_wrapper_inherits_run_slots(self):
+        import json
+        import cbeta_publish.books.xml2pdf_bridge as b
+        cfg, _root = self._real_cfg()
+        preset = Path(tempfile.mkdtemp()) / "p.json"
+        try:
+            preset.write_text("{}", encoding="utf-8")
+            w = b.write_run_wrapper(cfg, preset)
+            self.assertIsNotNone(w)
+            try:
+                d = json.loads(Path(w).read_text(encoding="utf-8"))
+                self.assertEqual(d["config-json"], str(preset.resolve()))
+                # 5 槽齐全且沿用仓库当前 run.json（pdf 主题槽非空即证明未回出厂）
+                self.assertTrue(d.get("pdf-docx-theme"))
+                self.assertIn("html-epub-theme", d)
+            finally:
+                b.remove_temp_preset(w)
+            self.assertFalse(Path(w).exists())
+        finally:
+            shutil.rmtree(preset.parent, ignore_errors=True)
+
+    def test_convert_uses_wrapper_and_deletes_it(self):
+        import json
+        import cbeta_publish.books.xml2pdf_bridge as b
+        cfg, _root = self._real_cfg()
+        preset = Path(tempfile.mkdtemp()) / "p.json"
+        preset.write_text("{}", encoding="utf-8")
+        out = Path(tempfile.mkdtemp()) / "T0001.pdf"
+        seen = {}
+        real = b._run_cli
+
+        def fake(argv):
+            a = list(argv)
+            cp = a[a.index("--config") + 1]
+            seen["cfg"] = cp
+            seen["data"] = json.loads(Path(cp).read_text(encoding="utf-8"))
+            Path(a[a.index("-o") + 1]).write_bytes(b"x")
+            return 0
+        b._run_cli = fake
+        try:
+            got = b.convert("T0001", None, out, cfg, fmt="pdf", preset=preset)
+        finally:
+            b._run_cli = real
+            shutil.rmtree(preset.parent, ignore_errors=True)
+            shutil.rmtree(out.parent, ignore_errors=True)
+        self.assertEqual(got, out)
+        self.assertNotEqual(seen["cfg"], str(preset))   # 传的是包装，不是预设本身
+        self.assertEqual(seen["data"]["config-json"], str(preset.resolve()))
+        self.assertTrue(seen["data"].get("pdf-docx-theme"))
+        self.assertFalse(Path(seen["cfg"]).exists())    # 用后删除
+
+    def test_convert_falls_back_to_preset_without_upstream(self):
+        # 上游不可用（假仓库根）→ 回退直传预设（旧行为不断）
+        import cbeta_publish.books.xml2pdf_bridge as b
+        d = Path(tempfile.mkdtemp())
+        try:
+            fake_root = d / "x2p"
+            fake_root.mkdir()
+            cfg = {"xml2pdf": {"path": str(fake_root)}}
+            preset = d / "my.json"
+            preset.write_text("{}", encoding="utf-8")
+            out = d / "T0001.pdf"
+            calls = []
+            real = b._run_cli
+
+            def fake(argv):
+                calls.append(list(argv))
+                Path(argv[argv.index("-o") + 1]).write_bytes(b"x")
+                return 0
+            b._run_cli = fake
+            try:
+                got = b.convert("T0001", None, out, cfg, fmt="pdf", preset=preset)
+            finally:
+                b._run_cli = real
+            self.assertEqual(got, out)
+            self.assertEqual(calls[0][calls[0].index("--config") + 1], str(preset))
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+
 if __name__ == "__main__":
     unittest.main()
