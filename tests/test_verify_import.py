@@ -147,14 +147,20 @@ class VerifySendImportTest(unittest.TestCase):
         self.assertTrue(any("临时预设" in str(a) for a in boxes))
 
     def _mk_verify_tree(self):
+        # 真实上游布局：正式产物在顶层 `{id 书名}.{fmt}`；
+        # 报告与对比物在 `{id 书名}（验证）/`，报告名 stem=work id
         from cbeta_publish.books import xml2pdf_bridge as b
-        vdir = b.verify_coll_dir(win := self.win.config, "v")
+        vdir = b.verify_coll_dir(self.win.config, "v")
         vdir.mkdir(parents=True, exist_ok=True)
         (vdir / "T0001 大般若經.pdf").write_bytes(b"PDF")
-        (vdir / "T0001 大般若經_verify_report.txt").write_text(
+        vd1 = vdir / "T0001 大般若經（验证）"
+        vd1.mkdir(parents=True, exist_ok=True)
+        (vd1 / "T0001_verify_report.txt").write_text(
             "=== T0001\n  [OK]  docx 缺0 多0\n", encoding="utf-8")
         (vdir / "T0002 X.epub").write_bytes(b"EPUB")
-        (vdir / "T0002 X_verify_report.txt").write_text(
+        vd2 = vdir / "T0002 X（验证）"
+        vd2.mkdir(parents=True, exist_ok=True)
+        (vd2 / "T0002_verify_report.txt").write_text(
             "=== T0002\n  [FAIL] txt_notes 缺3 多1\n", encoding="utf-8")
         return vdir
 

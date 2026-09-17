@@ -122,19 +122,20 @@ def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=No
 右栏来源 = xml      → xml2pdf_bridge.ensure_one(work_id, preset, regen_all) → xml_to_ebooks_dir/{fmt}/{work}.{fmt}
 → ebook_merger 单一格式合并 / ZIP 打包 / 拷贝导出
 ```
-- 说明页：来源=自制时追加一句「电子书由程序根据官方XML制作。」；官方不加。
+- 说明页：来源=自制时在「说明」标题下一行居中注「E书依 CBETA XML 自制」；官方不加。
 - 打包格式（ZIP/导出点后弹窗选，独立于合并格式勾选）：官方源 7 种
  （`PACK_FORMATS`：pdf/epub 单文件＋html/docx/odt/txt/txt_notes 目录型），
   自制源仅 pdf/epub。目录型只打包不合并：
   ZIP 按 `部/相对路径` 写入 `{丛书名}_{fmt}.zip`，导出整树拷贝到 `{target}/{work}/`。
   纯 txt 端点（`text/{id}.txt.zip`，不含校注）放 publish 自有 `_EXTRA_DOWNLOADS`，
   vendor 共享层不动。
-- 校验（一键送校验＋导入通过项）：工具菜单「送当前丛书去校验…」把 work_ids 写
+- 校验（一键送校验＋导入通过E书）：「自制书籍」菜单「当前丛书生成并校验…」把 work_ids 写
   校验目录 ids 文件，子进程拉独立窗（`--ids-file/--out/--preset/--verify/--autostart`
   预填，需上游 `pycbeta.gui` 支持启动参数；`--preset` 传全局默认预设**文件名**，
-  上游 stem/文件名/绝对路径三种都认，不存在则保持原选中）；产物 `{id 书名}.{fmt}`＋报告落
-  `verify_dir/<丛书>/`（默认 `<工程>/cbeta_verify`，与自制书目录分离）。
-  「导入校验通过项…」读 `{stem}_verify_report.txt`（有 `[FAIL]`→不通过；
+  上游 stem/文件名/绝对路径三种都认，不存在则保持原选中）；正式产物 `{id 书名}.{fmt}`
+  落校验目录顶层，逐本报告 `{stem}_verify_report.txt` 落 `{id 书名}（验证）/` 子目录
+  （`verify_dir/<丛书>/`，默认 `<工程>/cbeta_verify`，与自制书目录分离）。
+  「导入校验通过E书」递归读报告（有 `[FAIL]`→不通过；
   ≥1 个 `[OK]` 且无 `[FAIL]`→通过；否则未判定）→ 通过的拷入自制书目录改名
   `{fmt}/{work}.{fmt}`（入库即被 `ensure_one(missing)` 复用）；不通过/未判定不入库，
   人工回独立窗看报告。临时预设未保存时拒绝发送。

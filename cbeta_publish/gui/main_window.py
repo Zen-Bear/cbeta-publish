@@ -4152,14 +4152,14 @@ class MainWindow(QMainWindow):
         act_settings.setToolTip("打开设置（Ctrl+,）")
         act_settings.setShortcut("Ctrl+,")
         act_settings.triggered.connect(self._open_settings)
-        m_tools=bar.addMenu("工具")
+        m_tools=bar.addMenu("自制书籍")
         act_xml2pdf=m_tools.addAction("xml2pdf 独立窗…")
         act_xml2pdf.setToolTip("打开 E:/dev/cbeta/xml2pdf 独立转换窗")
         act_xml2pdf.triggered.connect(self._open_xml2pdf_window)
-        act_verify_send=m_tools.addAction("送当前丛书去校验…")
+        act_verify_send=m_tools.addAction("当前丛书生成并校验…")
         act_verify_send.setToolTip("把当前丛书单发往独立窗批量生成+校验（产物与报告落校验目录）")
         act_verify_send.triggered.connect(self._send_coll_to_verify)
-        act_verify_import=m_tools.addAction("导入校验通过项…")
+        act_verify_import=m_tools.addAction("导入校验通过E书")
         act_verify_import.setToolTip("把校验目录中验证通过的书拷入自制书目录（平展命名）")
         act_verify_import.triggered.connect(self._import_verified)
         # 视图 → 布局（三栏含选书区 / 二栏隐藏选书区）
@@ -4248,7 +4248,20 @@ class MainWindow(QMainWindow):
         self.detail.setText(f"已送独立窗校验 {len(works)} 部 → {vdir}")
         self._wrap_box(QMessageBox.Information,"已发送",
                        f"已送独立窗校验 {len(works)} 部，产物与报告在：\n{vdir}\n"
-                       f"校验完成后用「导入校验通过项…」入库。")
+                       f"校验完成后用「导入校验通过E书」入库。")
+
+    @staticmethod
+    def _find_verify_product(vdir, stem, fmt):
+        """找校验产物 `{id 书名}.{fmt}`：优先校验目录顶层（正式产物），
+        其次 `（验证）` 子目录内同名文件；无则 None（报告/中间物不匹配 fmt）。"""
+        try:
+            for pat in (vdir.glob(f"{stem}*.{fmt}"), vdir.rglob(f"{stem}*.{fmt}")):
+                cands=sorted(p for p in pat if p.is_file())
+                if cands:
+                    return cands[0]
+        except Exception:
+            pass
+        return None
 
     def _import_verified(self):
         """一键导入通过项：校验目录报告判通过 → `{id 书名}.{fmt}` 拷入自制书目录改名平展。"""
@@ -4263,7 +4276,7 @@ class MainWindow(QMainWindow):
         if not vdir.is_dir():
             self._wrap_box(QMessageBox.Information,"暂无校验","校验目录不存在，请先送校验。")
             return
-        reports=sorted(vdir.glob("*_verify_report.txt"))
+        reports=sorted(vdir.rglob("*_verify_report.txt"))
         if not reports:
             self._wrap_box(QMessageBox.Information,"暂无校验","暂无校验报告，请等独立窗跑完。")
             return
@@ -4288,8 +4301,8 @@ class MainWindow(QMainWindow):
                 if verdict is True:
                     copied=[]
                     for fmt in ("pdf","epub"):
-                        src=vdir/f"{stem}.{fmt}"
-                        if src.is_file():
+                        src=self._find_verify_product(vdir, stem, fmt)
+                        if src is not None:
                             try:
                                 (base/fmt).mkdir(parents=True, exist_ok=True)
                                 shutil.copy2(src, base/fmt/f"{hit}.{fmt}")
@@ -4445,8 +4458,8 @@ class MainWindow(QMainWindow):
                 if not intro_cfg.get("list", True):
                     intro["sections"]=[]
                 if made_by_xml:
-                    # 自制来源整页一句注明（官方不加）
-                    intro.setdefault("summary", []).append("电子书由程序根据官方XML制作。")
+                    # 自制来源整页注明（官方不加）；居中排在说明标题下一行
+                    intro["note"]="E书依 CBETA XML 自制"
             except Exception as e:
                 print("intro build fail", e)
                 intro=None

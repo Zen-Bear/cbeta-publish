@@ -344,11 +344,9 @@ class MergeXmlSourceTest(unittest.TestCase):
         win = self.win
         cfg = {"enabled": True, "intro": {"enabled": True, "list": False}}
         made = win._intro_for(["T0001"], cfg, made_by_xml=True)
-        self.assertIn("电子书由程序根据官方XML制作。",
-                      " ".join(made.get("summary", [])))
+        self.assertEqual(made.get("note"), "E书依 CBETA XML 自制")
         off = win._intro_for(["T0001"], cfg, made_by_xml=False)
-        self.assertNotIn("电子书由程序根据官方XML制作。",
-                         " ".join(off.get("summary", [])))
+        self.assertIsNone(off.get("note"))
 
     def _xml_env(self, regen="missing"):
         win = self.win
