@@ -572,12 +572,34 @@ class MadeBooksInfoTest(unittest.TestCase):
         p1.write_bytes(b"x")
         win.tab_bottom.setCurrentIndex(1)
         win._show_made_books("生成完成", [("T0001", "pdf", p1)],
-                             "生成完成 1 部 → " + str(d))
+                             "生成完成 1 部 →", out_dir=d)
         txt = win.detail.text()
         self.assertIn("href=", txt)
         self.assertIn("生成完成 1 部", txt)
         self.assertIn("T0001", txt)
-        self.assertEqual(win.tab_bottom.currentIndex(), 0)   # 切到书籍信息页
+        self.assertIn("made", txt)                             # 目录也可点开
+        self.assertEqual(win.tab_bottom.currentIndex(), 0)     # 切到书籍信息页
+        self.assertEqual(win.detail_scroll.verticalScrollBar().value(), 0)   # 回到第一行
+
+    def test_detail_link_opens(self):
+        from PySide6.QtGui import QDesktopServices
+        opened = []
+        real = QDesktopServices.openUrl
+        QDesktopServices.openUrl = staticmethod(lambda u: opened.append(u.toLocalFile()))
+        try:
+            self.win._open_publish_link("file:///E:/tmp/x.pdf")
+        finally:
+            QDesktopServices.openUrl = real
+        self.assertTrue(opened and opened[-1].endswith("x.pdf"))
+
+    def test_dir_labels_are_links(self):
+        win = self.win
+        self.assertEqual(win.lbl_cache_dir.text(), "官方")
+        self.assertEqual(win.lbl_xml_dir.text(), "自制")
+        self.assertEqual(win.lbl_out_dir.text(), "丛书")
+        for lb in (win.lbl_cache_dir, win.lbl_xml_dir, win.lbl_out_dir):
+            self.assertTrue(lb.toolTip())          # 保留全路径 tooltip
+            self.assertTrue(callable(getattr(lb, "refresh", None)))
 
     def test_format_icon_tooltip_double_click(self):
         win = self.win
