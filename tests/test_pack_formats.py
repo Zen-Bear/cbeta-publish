@@ -62,6 +62,15 @@ class PackAvailTest(unittest.TestCase):
         finally:
             self.win.config["default_source"] = "official"
 
+    def test_pack_hint_is_right_aligned(self):
+        win = self.win
+        self.assertEqual(win.lbl_pack_hint.text(), "（其它格式用ZIP/导出）")
+        lay = win.chk_pdf.parentWidget().layout()
+        items = [lay.itemAt(i) for i in range(lay.count())]
+        hint_at = next(i for i, it in enumerate(items) if it.widget() is win.lbl_pack_hint)
+        stretch_at = next(i for i, it in enumerate(items) if it.spacerItem() is not None)
+        self.assertGreater(hint_at, stretch_at)   # 提示在 stretch 之后 = 靠右
+
 
 class PackDirFormatTest(unittest.TestCase):
     """目录型只打包：ZIP 按 部/相对路径 写入；导出整树拷贝。"""
@@ -116,6 +125,7 @@ class PackDirFormatTest(unittest.TestCase):
         out = self.tmp / "zout"
         out.mkdir()
         restore = self._patch_all(["txt"], out)
+        self.win.tab_bottom.setCurrentIndex(0)
         try:
             self.win._zip()
         finally:
@@ -125,17 +135,20 @@ class PackDirFormatTest(unittest.TestCase):
         with zipfile.ZipFile(zpath) as z:
             names = sorted(z.namelist())
         self.assertEqual(names, ["T0001/T0001-toc.txt", "T0001/T0001.txt"])
+        self.assertEqual(self.win.tab_bottom.currentIndex(), 1)   # 切到丛书信息页
 
     def test_export_copies_dir_tree(self):
         target = self.tmp / "xout"
         target.mkdir()
         restore = self._patch_all(["txt"], target)
+        self.win.tab_bottom.setCurrentIndex(0)
         try:
             self.win._export()
         finally:
             restore()
         self.assertEqual((target / "T0001" / "T0001.txt").read_text(encoding="utf-8"), "經文")
         self.assertTrue((target / "T0001" / "T0001-toc.txt").is_file())
+        self.assertEqual(self.win.tab_bottom.currentIndex(), 1)   # 切到丛书信息页
 
     def test_cancel_chooses_nothing(self):
         win = self.win
