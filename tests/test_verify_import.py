@@ -124,6 +124,7 @@ class VerifySendImportTest(unittest.TestCase):
         self.assertIn("--verify", argv)
         self.assertIn("--autostart", argv)
         self.assertNotIn("--preset", argv)   # 出厂默认不传
+        self.assertEqual(argv[argv.index("--formats") + 1], "pdf")   # 随右栏勾选
         ids = Path(argv[argv.index("--ids-file") + 1])
         self.assertEqual(ids.read_text(encoding="utf-8").split(), ["T0001", "T0002"])
         self.assertEqual(Path(argv[argv.index("--out") + 1]),
@@ -153,6 +154,7 @@ class VerifySendImportTest(unittest.TestCase):
         vdir = b.verify_coll_dir(self.win.config, "v")
         vdir.mkdir(parents=True, exist_ok=True)
         (vdir / "T0001 大般若經.pdf").write_bytes(b"PDF")
+        (vdir / "T0001 大般若經.docx").write_bytes(b"DOCX")
         vd1 = vdir / "T0001 大般若經（验证）"
         vd1.mkdir(parents=True, exist_ok=True)
         (vd1 / "T0001_verify_report.txt").write_text(
@@ -173,8 +175,9 @@ class VerifySendImportTest(unittest.TestCase):
         finally:
             restore()
         base = Path(self.win.config["xml_to_ebooks_dir"])
-        self.assertEqual((base / "pdf" / "T0001.pdf").read_bytes(), b"PDF")  # 通过入库改名
-        self.assertFalse((base / "epub" / "T0002.epub").exists())            # 未通过不入库
+        self.assertEqual((base / "pdf" / "T0001.pdf").read_bytes(), b"PDF")    # 通过入库改名
+        self.assertEqual((base / "docx" / "T0001.docx").read_bytes(), b"DOCX")  # 多格式都入
+        self.assertFalse((base / "epub" / "T0002.epub").exists())               # 未通过不入库
         self.assertTrue(any("入库 1 部" in str(a) for a in boxes), boxes)
 
     def test_import_no_reports(self):
