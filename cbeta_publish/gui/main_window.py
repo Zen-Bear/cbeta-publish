@@ -496,6 +496,9 @@ class MainWindow(QMainWindow):
         self.chk_epub.setIcon(QIcon(str(icon_dir/"epub.png")))
         fh.addWidget(self.chk_pdf); fh.addWidget(self.chk_epub)
         fh.addStretch()
+        self.lbl_pack_hint=QLabel("（其它格式用ZIP/导出）")
+        self.lbl_pack_hint.setStyleSheet("color: gray")
+        fh.addWidget(self.lbl_pack_hint)
         pg.addWidget(fmt_box)
         # 来源 + 预设：一套丛书可按官方或自制合并，整批统一
         src_box=QWidget()
@@ -4789,6 +4792,7 @@ class MainWindow(QMainWindow):
             self._last_publish[str(data)]=[(Path(s).name, s) for s in success]
         self._load_coll_works()
         if success:
+            self.tab_bottom.setCurrentIndex(1)   # ZIP完成，切到丛书信息页显示发布结果
             succ_txt="\n".join(success[:3]) + (f"\n... 共 {len(success)} 个文件" if len(success)>3 else "")
             fail_txt=("\n失败:\n" + "\n".join(failed[:5]) + (f"\n... 共 {len(failed)} 项失败" if len(failed)>5 else "")) if failed else ""
             self._wrap_box(QMessageBox.Information, "成功", "ZIP 成功:\n" + succ_txt + fail_txt)
@@ -4911,6 +4915,7 @@ class MainWindow(QMainWindow):
             self._last_publish[str(data)]=[("导出目录", target)]
         self._load_coll_works()
         if success:
+            self.tab_bottom.setCurrentIndex(1)   # 导出完成，切到丛书信息页显示发布结果
             self._wrap_box(QMessageBox.Information, "成功", f"导出成功 {len(success)} 文件到:\n{target}\n" + "\n".join(success[:3]) + ("\n..." if len(success)>3 else "") + ("\n失败:\n" + "\n".join(failed[:5]) + (f"\n... 共 {len(failed)} 项失败" if len(failed)>5 else "") if failed else ""))
             self._prompt_save_collection("导出完成，", str(data))
         else:
