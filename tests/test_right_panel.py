@@ -178,6 +178,7 @@ class RightPanelTest(unittest.TestCase):
 
         def fake(w, xml, out, config, fmt="pdf", preset=None, stop=None):
             calls.append(str(out))
+            Path(out).parent.mkdir(parents=True, exist_ok=True)
             Path(out).write_bytes(b"x")
             return Path(out)
         b.convert = fake
@@ -247,11 +248,12 @@ class RightPanelTest(unittest.TestCase):
         win.config["xml_to_ebooks_dir"] = str(xb)
         win.config["default_source"] = "xml"
         self.assertIsNone(win._ebook_path("T0099", "pdf"))     # 无文件
-        (xb / "T0099.pdf").write_bytes(b"x")
-        self.assertEqual(win._ebook_path("T0099", "pdf"), xb / "T0099.pdf")
-        (xb / "T0099.pdf").unlink()
-        (xb / "T0099 中論.pdf").write_bytes(b"x")              # GUI 平展命名也认
-        self.assertEqual(win._ebook_path("T0099", "pdf"), xb / "T0099 中論.pdf")
+        (xb / "pdf").mkdir(parents=True, exist_ok=True)
+        (xb / "pdf" / "T0099.pdf").write_bytes(b"x")
+        self.assertEqual(win._ebook_path("T0099", "pdf"), xb / "pdf" / "T0099.pdf")
+        (xb / "pdf" / "T0099.pdf").unlink()
+        (xb / "pdf" / "T0099 中論.pdf").write_bytes(b"x")    # 同目录异名也认（通配）
+        self.assertEqual(win._ebook_path("T0099", "pdf"), xb / "pdf" / "T0099 中論.pdf")
         win.config["default_source"] = "official"
         p = win._ebook_path("T0099", "pdf")                     # 官方目录（可能不存在→None）
         if p is not None:
@@ -275,13 +277,15 @@ class RightPanelTest(unittest.TestCase):
             self.assertFalse(win._open_ebook("T0200", "pdf"))
             self.assertEqual(opened, [])
             # 只有 epub：双击书名打开 epub；双击 pdf 图标无反应
-            (xb / "T0200.epub").write_bytes(b"x")
+            (xb / "epub").mkdir(parents=True, exist_ok=True)
+            (xb / "epub" / "T0200.epub").write_bytes(b"x")
             self.assertFalse(win._open_ebook("T0200", "pdf", only_prefer=True))
             self.assertEqual(opened, [])
             self.assertTrue(win._open_ebook("T0200", "pdf"))
             self.assertTrue(opened[-1].endswith("T0200.epub"))
             # pdf + epub 都有：双击书名优先 pdf；图标各自打开
-            (xb / "T0200.pdf").write_bytes(b"x")
+            (xb / "pdf").mkdir(parents=True, exist_ok=True)
+            (xb / "pdf" / "T0200.pdf").write_bytes(b"x")
             self.assertTrue(win._open_ebook("T0200", "pdf"))
             self.assertTrue(opened[-1].endswith("T0200.pdf"))
             self.assertTrue(win._open_ebook("T0200", "epub", only_prefer=True))
@@ -304,9 +308,9 @@ class RightPanelTest(unittest.TestCase):
         win.config["xml2pdf"]["preset"] = "a5"
         win.config["default_source"] = "xml"
         win.config["xml_to_ebooks_dir"] = str(root / "out")
-        (root / "out").mkdir()
+        (root / "out" / "pdf").mkdir(parents=True)
         # 已有产物（旧预设生成）→ 一般情况下"仅缺"会跳过
-        (root / "out" / "T0001.pdf").write_bytes(b"old")
+        (root / "out" / "pdf" / "T0001.pdf").write_bytes(b"old")
         # 拟「调整…」结果：纸张 A4
         win._set_transient_preset({"default_page": "a4"})
         self.assertIsNotNone(win._tmp_preset)
@@ -335,6 +339,7 @@ class RightPanelTest(unittest.TestCase):
 
         def fake(wk, xml, out, config, fmt="pdf", preset=None, stop=None):
             calls.append(preset)
+            _P(out).parent.mkdir(parents=True, exist_ok=True)
             _P(out).write_bytes(b"new")
             return _P(out)
         b.convert = fake
@@ -345,7 +350,7 @@ class RightPanelTest(unittest.TestCase):
             b.convert = real
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0], win._tmp_preset)              # 用的是临时预设
-        self.assertEqual((root / "out" / "T0001.pdf").read_bytes(), b"new")
+        self.assertEqual((root / "out" / "pdf" / "T0001.pdf").read_bytes(), b"new")
         # 改选预设 → 放弃临时预设（临时文件删除、标签复原）
         tmp_path = win._tmp_preset
         win.cb_preset.setCurrentIndex(0)

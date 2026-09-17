@@ -167,8 +167,8 @@ class VerifySendImportTest(unittest.TestCase):
         finally:
             restore()
         base = Path(self.win.config["xml_to_ebooks_dir"])
-        self.assertEqual((base / "T0001.pdf").read_bytes(), b"PDF")  # 通过入库改名平展
-        self.assertFalse((base / "T0002.epub").exists())             # 未通过不入库
+        self.assertEqual((base / "pdf" / "T0001.pdf").read_bytes(), b"PDF")  # 通过入库改名
+        self.assertFalse((base / "epub" / "T0002.epub").exists())            # 未通过不入库
         self.assertTrue(any("入库 1 部" in str(a) for a in boxes), boxes)
 
     def test_import_no_reports(self):

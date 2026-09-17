@@ -184,7 +184,7 @@ class DownloadMissingTest(unittest.TestCase):
         finally:
             restore()
         self.assertTrue(ok)
-        self.assertTrue((self.tmp / "eb" / "pdf" / "T" / "T0001.pdf").exists())
+        self.assertTrue((self.tmp / "eb" / "pdf" / "T0001.pdf").exists())
         self.assertEqual(self.win._dl_stats["ok"], 2)
         self.assertEqual(self.win._dl_stats["total"], 2)
 
@@ -319,6 +319,7 @@ class MergeXmlSourceTest(unittest.TestCase):
 
         def fake_convert(w, xml, out, config, fmt="pdf", preset=None, stop=None):
             calls.append((w, xml, fmt, preset, str(out)))
+            Path(out).parent.mkdir(parents=True, exist_ok=True)
             Path(out).write_bytes(b"x")
             return Path(out)
 
@@ -336,7 +337,7 @@ class MergeXmlSourceTest(unittest.TestCase):
         self.assertEqual((w, fmt), ("T0001", "pdf"))
         self.assertIsNone(xml)   # 只传 work id，XML 解析归 xml2pdf（P5a≠P5，不再自行定位）
         self.assertEqual(Path(preset_arg), preset)          # 预设透传
-        self.assertEqual(out, str(self.tmp / "xb" / "T0001.pdf"))  # 平展
+        self.assertEqual(out, str(self.tmp / "xb" / "pdf" / "T0001.pdf"))  # {fmt}/分层
         self._coll_file.unlink(missing_ok=True)
 
     def test_intro_note_only_for_made(self):
@@ -364,7 +365,8 @@ class MergeXmlSourceTest(unittest.TestCase):
         self._select_coll(["T0001"])
         out_dir = self._xml_env("missing")
         out_dir.mkdir(parents=True, exist_ok=True)
-        (out_dir / "T0001.pdf").write_bytes(b"old")
+        (out_dir / "pdf").mkdir(exist_ok=True)
+        (out_dir / "pdf" / "T0001.pdf").write_bytes(b"old")
         calls = []
         real_convert, real_merge = b.convert, em.merge_pdfs
         b.convert = lambda *a, **k: (calls.append(a) or a[2])
@@ -385,7 +387,8 @@ class MergeXmlSourceTest(unittest.TestCase):
         self._select_coll(["T0001"])
         out_dir = self._xml_env("all")
         out_dir.mkdir(parents=True, exist_ok=True)
-        (out_dir / "T0001.pdf").write_bytes(b"old")
+        (out_dir / "pdf").mkdir(exist_ok=True)
+        (out_dir / "pdf" / "T0001.pdf").write_bytes(b"old")
         calls = []
         real_convert, real_merge = b.convert, em.merge_pdfs
 
@@ -402,7 +405,7 @@ class MergeXmlSourceTest(unittest.TestCase):
         finally:
             b.convert, em.merge_pdfs = real_convert, real_merge
         self.assertEqual(len(calls), 1)
-        self.assertEqual(calls[0], str(out_dir / "T0001.pdf"))
+        self.assertEqual(calls[0], str(out_dir / "pdf" / "T0001.pdf"))
         self._coll_file.unlink(missing_ok=True)
 
     def test_ensure_xml_batch_generates_and_reports(self):
@@ -417,6 +420,7 @@ class MergeXmlSourceTest(unittest.TestCase):
             calls.append((w, fmt))
             if w == "T9999":
                 return None
+            Path(out).parent.mkdir(parents=True, exist_ok=True)
             Path(out).write_bytes(b"x")
             return Path(out)
         b.convert = fake_convert

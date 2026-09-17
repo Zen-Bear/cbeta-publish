@@ -20,26 +20,26 @@ class SourceMetaTest(unittest.TestCase):
 
     def test_dest_path(self):
         self.assertEqual(dest_path("T0001", "pdf", self.dir),
-                         self.dir / "pdf" / "T" / "T0001.pdf")
+                         self.dir / "pdf" / "T0001.pdf")
         self.assertEqual(dest_path("A1057", "epub", self.dir),
-                         self.dir / "epub" / "A" / "A1057.epub")
+                         self.dir / "epub" / "A1057.epub")
         self.assertTrue(ebook_url("pdf", "T", "T0001").endswith("/pdf/T/T0001.pdf"))
 
     def test_id_case_normalization(self):
-        # 字母后缀/前缀的编号：canon 大写、编号保留原大小写
+        # 字母后缀/前缀的编号：canon 大写（拼 URL 用）、编号保留原大小写；落盘无 canon 层
         self.assertEqual(canon_of("TXA001"), "TX")
         self.assertEqual(canon_of("T0128A"), "T")
         self.assertEqual(canon_of("jb005"), "J")
         self.assertEqual(dest_path("TXA001", "pdf", self.dir),
-                         self.dir / "pdf" / "TX" / "TXa001.pdf")
+                         self.dir / "pdf" / "TXa001.pdf")
         self.assertEqual(dest_path("T0128A", "epub", self.dir),
-                         self.dir / "epub" / "T" / "T0128a.epub")
+                         self.dir / "epub" / "T0128a.epub")
         self.assertEqual(dest_path("jb005", "pdf", self.dir),
-                         self.dir / "pdf" / "J" / "JB005.pdf")
+                         self.dir / "pdf" / "JB005.pdf")
 
     def test_zip_format_layout_and_download(self):
         self.assertEqual(zip_dest_dir("T0099", "docx", self.dir),
-                         self.dir / "docx" / "T" / "T0099")
+                         self.dir / "docx" / "T0099")
         calls = {}
         real = oes.cf.download
 
@@ -109,7 +109,7 @@ class SourceMetaTest(unittest.TestCase):
         self.assertTrue(ebook_url("txt", "T", "T0001").endswith("/text/T0001.txt.zip"))
         self.assertIn("txt", oes._ZIP_FORMATS)
         self.assertEqual(oes.local_path("T0001", "txt", self.dir),
-                         self.dir / "txt" / "T" / "T0001")
+                         self.dir / "txt" / "T0001")
         with self.assertRaises(ValueError):
             ebook_url("bogus", "T", "T0001")
 
@@ -117,9 +117,9 @@ class SourceMetaTest(unittest.TestCase):
 class DownloadWorkerTest(unittest.TestCase):
     def setUp(self):
         self.dir = Path(tempfile.mkdtemp())
-        (self.dir / "pdf" / "T").mkdir(parents=True)
-        (self.dir / "pdf" / "T" / "T0001.pdf").write_bytes(b"x" * 100)
-        (self.dir / "pdf" / "T" / "T0003.pdf").write_bytes(b"y" * 50)
+        (self.dir / "pdf").mkdir(parents=True)
+        (self.dir / "pdf" / "T0001.pdf").write_bytes(b"x" * 100)
+        (self.dir / "pdf" / "T0003.pdf").write_bytes(b"y" * 50)
         self._real_remote = oes.remote_info
         self._real_dl = oes.download_ebook
 

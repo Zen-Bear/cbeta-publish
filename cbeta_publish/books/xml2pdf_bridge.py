@@ -306,7 +306,7 @@ def remove_temp_preset(path):
         pass
 
 
-# ---------- 自制书输出目录（完全平展） ----------
+# ---------- 自制书输出目录（`{root}/{fmt}/…`，与官方缓存同构） ----------
 
 def xml_books_dir(config) -> Path:
     """自制书输出根（可配，与官方 cbeta_ebooks 分开；相对路径按工程根解析）。"""
@@ -314,19 +314,19 @@ def xml_books_dir(config) -> Path:
 
 
 def xml_dest(work: str, fmt: str, base_dir) -> Path:
-    """自制书目标路径（平展 `{work}.{fmt}`，publish 定名保证合并可寻址）。"""
-    return Path(base_dir) / f"{work}.{fmt}"
+    """自制书目标路径（`{fmt}/{work}.{fmt}`，publish 定名保证合并可寻址）。"""
+    return Path(base_dir) / fmt / f"{work}.{fmt}"
 
 
 def find_built(work: str, fmt: str, base_dir):
-    """已生成的自制书：精确名优先，其次 `{work}*.{fmt}`（兼容 GUI 产出的
-    `{id 书名}.pdf` 形式）；都没有返回 None。"""
+    """已生成的自制书：精确名 `{fmt}/{work}.{fmt}` 优先，其次同目录通配；
+    都没有返回 None（旧版平展/`{id 书名}` 兼容已删除，不双读）。"""
     base = Path(base_dir)
-    exact = base / f"{work}.{fmt}"
+    exact = base / fmt / f"{work}.{fmt}"
     if exact.exists():
         return exact
     try:
-        cands = sorted(base.glob(f"{work}*.{fmt}"))
+        cands = sorted((base / fmt).glob(f"{work}*.{fmt}"))
     except Exception:
         return None
     return cands[0] if cands else None
@@ -337,7 +337,7 @@ def ensure_one(work: str, fmt: str, base_dir, config, preset=None,
     """确保一部自制书存在，返回 (产物 Path | None, reused: bool)。
 
     regen_all=False（仅生成缺少）：已有产物直接复用（`find_built`）；
-    否则（含已有异名产物，如 GUI 的 `{id 书名}.pdf`）一律重新生成并覆盖原路径。
+    否则一律重新生成并覆盖原路径。
     """
     hit = find_built(work, fmt, base_dir)
     if not regen_all and hit is not None:

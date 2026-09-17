@@ -103,10 +103,13 @@ def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=No
 - 来源**不再**按丛书/逐书配置：一套丛书可按官方或自制合并（右栏按次选，整批统一）。
 - 旧字段保留仅为兼容旧 JSON，publish 不写、不用。
 
-**输出目录**
-- 官方：`cbeta_ebooks/{fmt}/{canon}/{work}.{fmt}`（`cbeta_ebooks_dir`）。
-- 自制：`xml_to_ebooks_dir/{work}.{fmt}`（**完全平展**，pdf/epub 同目录，
-  扩展名区分；`find_built` 兼容 GUI 产出的 `{id 书名}.pdf` 形式）。
+**输出目录**（两缓存根同构 `{root}/{fmt}/…`，根分开防复用串源）
+- 官方：`cbeta_ebooks/{fmt}/{work}.{fmt}`；目录型 `cbeta_ebooks/{fmt}/{work}/`
+  （`official_books_dir` 收敛配置键，`cbeta_ebooks_dir` 优先兼容 `official_ebooks_dir`）。
+- 自制：`xml_to_ebooks_dir/{fmt}/{work}.{fmt}`（pdf/epub 分格式目录；
+  `find_built` 优先精确名，其次同 `{fmt}/` 下 `{work}*.{fmt}` 通配）。
+- **旧版平展布局作废**（不迁移、不双读、不自动删）：旧文件需用户手动删除；
+  自制书按新布局会视为不存在 → 需重下/重生成。
 - **生成策略**（`config.xml2pdf.regen`，右栏「生成」单选，用户决定）：
   `missing`（默认）＝已有产物复用、只生成缺少（`bridge.ensure_one(regen_all=False)`）；
   `all`＝全部重新生成、覆盖原路径（`regen_all=True`）。**不用 mtime/哈希推断过期**。
@@ -116,7 +119,7 @@ def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=No
 
 ```
 右栏来源 = official → official_ebook_source.download_ebook → cbeta_ebooks/{fmt}/...
-右栏来源 = xml      → xml2pdf_bridge.ensure_one(work_id, preset, regen_all) → xml_to_ebooks_dir/{work}.{fmt}
+右栏来源 = xml      → xml2pdf_bridge.ensure_one(work_id, preset, regen_all) → xml_to_ebooks_dir/{fmt}/{work}.{fmt}
 → ebook_merger 单一格式合并 / ZIP 打包 / 拷贝导出
 ```
 - 说明页：来源=自制时追加一句「电子书由程序根据官方XML制作。」；官方不加。
@@ -128,11 +131,12 @@ def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=No
   vendor 共享层不动。
 - 校验（一键送校验＋导入通过项）：工具菜单「送当前丛书去校验…」把 work_ids 写
   校验目录 ids 文件，子进程拉独立窗（`--ids-file/--out/--preset/--verify/--autostart`
-  预填，需上游 `pycbeta.gui` 支持启动参数）；产物 `{id 书名}.{fmt}`＋报告落
+  预填，需上游 `pycbeta.gui` 支持启动参数；`--preset` 传全局默认预设**文件名**，
+  上游 stem/文件名/绝对路径三种都认，不存在则保持原选中）；产物 `{id 书名}.{fmt}`＋报告落
   `verify_dir/<丛书>/`（默认 `<工程>/cbeta_verify`，与自制书目录分离）。
   「导入校验通过项…」读 `{stem}_verify_report.txt`（有 `[FAIL]`→不通过；
-  ≥1 个 `[OK]` 且无 `[FAIL]`→通过；否则未判定）→ 通过的拷入自制书目录改名平展
-  `{work}.{fmt}`（入库即被 `ensure_one(missing)` 复用）；不通过/未判定不入库，
+  ≥1 个 `[OK]` 且无 `[FAIL]`→通过；否则未判定）→ 通过的拷入自制书目录改名
+  `{fmt}/{work}.{fmt}`（入库即被 `ensure_one(missing)` 复用）；不通过/未判定不入库，
   人工回独立窗看报告。临时预设未保存时拒绝发送。
 
 ## 6. 实施清单
@@ -140,6 +144,9 @@ def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=No
 - [x] `publish`：`xml2pdf_bridge.py`（库调用＋预设（上游 API）＋平展输出＋`ensure_one` 生成策略）
 - [x] `publish`：右栏来源单选＋预设下拉＋生成策略（仅缺/全部）＋[调整…]
 - [x] `publish`：`[合并]` 整批同源、平展目录、说明页注明；**ZIP/导出 亦支持自制**
+- [x] `publish`：一键送校验（工具菜单两项＋校验目录＋导入通过项＋临时预设拦截；UI 见《链路B-UI设计.md》§8）
+- [x] `xml2pdf`：独立窗启动参数预填（`7258b65`：`--ids-file/--out/--preset/--verify/--autostart`，
+  `parse_known_args`＋Qt 透传；`--preset` 认 stem/文件名/绝对路径，详见 xml2pdf `docs/第三方调用说明.md` §6.3）
 - [x] `xml2pdf`：`pycbeta.gui` 面板/对话框/独立入口（已存在，publish 直接复用）
 - [x] `xml2pdf`：`--config` 兼容 run.json 与基础配置 JSON（`theme.resolve_config_arg`）；
   `--html-epub-user-theme` 占位开关；公开 `merged_preset`/`get_preset`/`*_config_preset`

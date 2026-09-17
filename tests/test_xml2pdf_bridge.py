@@ -164,35 +164,43 @@ class BridgePresetDirTest(unittest.TestCase):
         self.assertEqual(b.load_preset_dict("我的配置", self.cfg), {"default_page": "a4"})
         self.assertIn("我的配置", b.list_presets(self.cfg))
 
-    def test_flat_dest_and_find_built(self):
+    def test_fmt_dest_and_find_built(self):
         import cbeta_publish.books.xml2pdf_bridge as b
         base = self.dir / "out"
         base.mkdir()
-        self.assertEqual(b.xml_dest("T0001", "pdf", base), base / "T0001.pdf")
+        self.assertEqual(b.xml_dest("T0001", "pdf", base), base / "pdf" / "T0001.pdf")
         self.assertIsNone(b.find_built("T0001", "pdf", base))
-        (base / "T0001 中論.pdf").write_bytes(b"x")     # GUI 产出的平展命名也认
-        self.assertEqual(b.find_built("T0001", "pdf", base), base / "T0001 中論.pdf")
-        (base / "T0001.pdf").write_bytes(b"x")          # 精确名优先
-        self.assertEqual(b.find_built("T0001", "pdf", base), base / "T0001.pdf")
+        (base / "pdf").mkdir()
+        (base / "pdf" / "T0001 中論.pdf").write_bytes(b"x")   # 同目录异名通配
+        self.assertEqual(b.find_built("T0001", "pdf", base), base / "pdf" / "T0001 中論.pdf")
+        (base / "pdf" / "T0001.pdf").write_bytes(b"x")        # 精确名优先
+        self.assertEqual(b.find_built("T0001", "pdf", base), base / "pdf" / "T0001.pdf")
+        # 旧版顶层平展不再认（不双读）
+        (base / "pdf" / "T0001.pdf").unlink()
+        (base / "pdf" / "T0001 中論.pdf").unlink()
+        (base / "T0001.pdf").write_bytes(b"x")
+        self.assertIsNone(b.find_built("T0001", "pdf", base))
 
     def test_ensure_one_missing_vs_all(self):
         # 仅缺：已有产物直接复用（不调 convert）；全部：一律重跑 convert 并覆盖原路径
         import cbeta_publish.books.xml2pdf_bridge as b
         base = self.dir / "out"
-        base.mkdir()
+        (base / "pdf").mkdir(parents=True)
         calls = []
 
         def fake_convert(w, xml, out, config, fmt="pdf", preset=None, stop=None):
             calls.append(Path(out))
+            Path(out).parent.mkdir(parents=True, exist_ok=True)
             Path(out).write_bytes(b"x")
             return Path(out)
         real = b.convert
         b.convert = fake_convert
         try:
-            # 无产物 → 生成
+            # 无产物 → 生成到 {fmt}/{work}.{fmt}
             p, reused = b.ensure_one("T0001", "pdf", base, self.cfg)
             self.assertFalse(reused)
             self.assertEqual(len(calls), 1)
+            self.assertEqual(p, base / "pdf" / "T0001.pdf")
             # 已有 → 仅缺模式复用
             p2, reused2 = b.ensure_one("T0001", "pdf", base, self.cfg)
             self.assertTrue(reused2)
@@ -203,14 +211,14 @@ class BridgePresetDirTest(unittest.TestCase):
             self.assertFalse(reused3)
             self.assertEqual(len(calls), 2)
             self.assertEqual(p3, p)
-            # 异名产物（GUI 命名）在全部模式下也覆盖原路径，不留两份
-            (base / "T0001.pdf").unlink()
-            gui = base / "T0001 中論.pdf"
+            # 异名产物在全部模式下也覆盖原路径，不留两份
+            (base / "pdf" / "T0001.pdf").unlink()
+            gui = base / "pdf" / "T0001 中論.pdf"
             gui.write_bytes(b"x")
             p4, _ = b.ensure_one("T0001", "pdf", base, self.cfg, regen_all=True)
             self.assertEqual(p4, gui)
             self.assertEqual(len(calls), 3)
-            self.assertFalse((base / "T0001.pdf").exists())
+            self.assertFalse((base / "pdf" / "T0001.pdf").exists())
         finally:
             b.convert = real
 
