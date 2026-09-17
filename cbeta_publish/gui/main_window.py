@@ -4240,6 +4240,9 @@ class MainWindow(QMainWindow):
         preset_name=(self.config.get("xml2pdf",{}) or {}).get("preset","")
         if preset_name:
             argv+=["--preset",preset_name]
+        fmts=self._checked_fmts()
+        if fmts:
+            argv+=["--formats",",".join(fmts)]
         try:
             subprocess.Popen(argv, cwd=str(x2p))
         except Exception as e:
@@ -4251,17 +4254,21 @@ class MainWindow(QMainWindow):
                        f"校验完成后用「导入校验通过E书」入库。")
 
     @staticmethod
-    def _find_verify_product(vdir, stem, fmt):
-        """找校验产物 `{id 书名}.{fmt}`：优先校验目录顶层（正式产物），
-        其次 `（验证）` 子目录内同名文件；无则 None（报告/中间物不匹配 fmt）。"""
-        try:
-            for pat in (vdir.glob(f"{stem}*.{fmt}"), vdir.rglob(f"{stem}*.{fmt}")):
-                cands=sorted(p for p in pat if p.is_file())
-                if cands:
-                    return cands[0]
-        except Exception:
-            pass
-        return None
+    def _verify_products(vdir, stem):
+        """找某书的全部校验正式产物：校验目录顶层 `{stem}*{ext}`，
+        返回 [(fmt, Path)]；按扩展名识别格式（pdf/epub/docx/odt/md/txt）。"""
+        ext2fmt={".pdf":"pdf",".epub":"epub",".docx":"docx",
+                 ".odt":"odt",".md":"md",".txt":"txt"}
+        out=[]
+        for ext, fmt in ext2fmt.items():
+            try:
+                cands=[p for p in vdir.glob(f"{stem}*{ext}")
+                       if p.is_file() and not p.name.endswith(("_verify_report.txt","_ids.txt"))]
+            except Exception:
+                cands=[]
+            if cands:
+                out.append((fmt, sorted(cands)[0]))
+        return out
 
     def _import_verified(self):
         """一键导入通过项：校验目录报告判通过 → `{id 书名}.{fmt}` 拷入自制书目录改名平展。"""
@@ -4300,15 +4307,13 @@ class MainWindow(QMainWindow):
                 verdict=_b.verify_report_pass(rp)
                 if verdict is True:
                     copied=[]
-                    for fmt in ("pdf","epub"):
-                        src=self._find_verify_product(vdir, stem, fmt)
-                        if src is not None:
-                            try:
-                                (base/fmt).mkdir(parents=True, exist_ok=True)
-                                shutil.copy2(src, base/fmt/f"{hit}.{fmt}")
-                                copied.append(fmt)
-                            except Exception as e:
-                                fail_list.append(f"{hit} 拷贝失败: {e}")
+                    for fmt, src in self._verify_products(vdir, stem):
+                        try:
+                            (base/fmt).mkdir(parents=True, exist_ok=True)
+                            shutil.copy2(src, base/fmt/f"{hit}.{fmt}")
+                            copied.append(fmt)
+                        except Exception as e:
+                            fail_list.append(f"{hit} {fmt} 拷贝失败: {e}")
                     if copied:
                         ok_list.append(f"{hit}（{'/'.join(copied)}）")
                     else:
