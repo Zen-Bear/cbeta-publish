@@ -98,13 +98,17 @@ class DownloadLogTest(unittest.TestCase):
         self.assertNotIn("下载记录", names)
 
     def test_tabs_are_book_info_then_coll_info(self):
-        # 右下页签：① 书籍信息 ② 丛书信息（原「下载记录」已删除）
+        # 右下页签：① 书籍信息 ② 丛书信息 ③ E书目录（原「下载记录」已删除）
         win = self.win
         tb = win.tab_bottom
-        self.assertEqual(tb.count(), 2)
-        self.assertEqual([tb.tabText(i) for i in range(2)], ["书籍信息", "丛书信息"])
+        self.assertEqual(tb.count(), 3)
+        self.assertEqual([tb.tabText(i) for i in range(3)],
+                         ["书籍信息", "丛书信息", "E书目录"])
         self.assertTrue(tb.widget(0).isAncestorOf(win.detail))
         self.assertTrue(tb.widget(1).isAncestorOf(win.lbl_coll_info))
+        self.assertTrue(tb.widget(2).isAncestorOf(win.lbl_cache_dir))
+        self.assertTrue(tb.widget(2).isAncestorOf(win.lbl_xml_dir))
+        self.assertTrue(tb.widget(2).isAncestorOf(win.lbl_out_dir))
 
     def test_click_book_activates_book_tab(self):
         # 三栏点书 → 显示书籍信息并切到「书籍信息」页签；点分组节点 → 清空且不切页签

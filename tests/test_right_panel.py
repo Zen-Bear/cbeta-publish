@@ -599,7 +599,7 @@ class MadeBooksInfoTest(unittest.TestCase):
         self.assertEqual(win.lbl_out_dir.text(), "丛书")
         for lb in (win.lbl_cache_dir, win.lbl_xml_dir, win.lbl_out_dir):
             self.assertTrue(lb.toolTip())          # 保留全路径 tooltip
-            self.assertTrue(callable(getattr(lb, "refresh", None)))
+        self.assertEqual(len(win._dir_refreshers), 3)   # E书目录页可刷新
 
     def test_format_icon_tooltip_double_click(self):
         win = self.win

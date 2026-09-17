@@ -570,39 +570,7 @@ class MainWindow(QMainWindow):
         sh.addStretch()
         self._sync_source_preset_ui()   # 依赖上面按钮存在（来源=自制时换按钮）
         rv.addWidget(publish_group)
-        cache_box=QWidget()
-        ch=QHBoxLayout(cache_box)
-        ch.setContentsMargins(0,0,0,0)
-        from cbeta_publish.books import xml2pdf_bridge as _xb
-        def _dir_label(text, getter):
-            # 标签文字固定（官方/自制/丛书），悬停看全路径，点击打开（路径动态取）
-            lb=QLabel(text)
-            lb.setStyleSheet("color:#0645AD; text-decoration:underline;")
-            lb.setCursor(Qt.PointingHandCursor)
-            def _refresh():
-                p=Path(getter())
-                lb.setToolTip(f"{p}\n点击在文件浏览器中打开")
-            lb.refresh=_refresh
-            def _open(e):
-                try:
-                    from PySide6.QtGui import QDesktopServices
-                    from PySide6.QtCore import QUrl
-                    QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(getter()).resolve())))
-                except Exception as ex:
-                    print(ex)
-            lb.mousePressEvent=_open
-            _refresh()
-            return lb
-        ch.addWidget(QLabel("E书目录:"))
-        self.lbl_cache_dir=_dir_label("官方", lambda: official_ebook_source.official_books_dir(self.config))
-        self.lbl_xml_dir=_dir_label("自制", lambda: _xb.xml_books_dir(self.config))
-        self.lbl_out_dir=_dir_label("丛书", lambda: self._out_dir())
-        for _lb in (self.lbl_cache_dir, self.lbl_xml_dir, self.lbl_out_dir):
-            ch.addWidget(_lb)
-            ch.addSpacing(16)
-        ch.addStretch()
-        rv.addWidget(cache_box)
-        # 右下页签：① 书籍信息 ② 丛书信息（原「下载记录」页签删除，下载改为弹窗进度）
+        # 右下页签：① 书籍信息 ② 丛书信息 ③ E书目录（原「下载记录」页签已删除）
         self.tab_bottom=QTabWidget()
         from PySide6.QtWidgets import QScrollArea
         book_page=QWidget()
@@ -623,6 +591,50 @@ class MainWindow(QMainWindow):
         self.info_scroll.setWidget(self.lbl_coll_info)
         info_layout.addWidget(self.info_scroll)
         self.tab_bottom.addTab(info_page, "丛书信息")
+        # E书目录页：官方/自制/丛书 三个可点链接（悬停看全路径，右侧显示完整路径）
+        from cbeta_publish.books import xml2pdf_bridge as _xb
+        self._dir_refreshers=[]
+        def _dir_row(text, getter, attr):
+            row=QWidget()
+            h=QHBoxLayout(row)
+            h.setContentsMargins(6,2,6,2)
+            lb=QLabel(text)
+            lb.setStyleSheet("color:#0645AD; text-decoration:underline;")
+            lb.setCursor(Qt.PointingHandCursor)
+            pl=QLabel()
+            pl.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            pl.setStyleSheet("color: gray;")
+            h.addWidget(lb)
+            h.addSpacing(10)
+            h.addWidget(pl, 1)
+            def _open(e, _g=getter):
+                try:
+                    from PySide6.QtGui import QDesktopServices
+                    from PySide6.QtCore import QUrl
+                    QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(_g()).resolve())))
+                except Exception as ex:
+                    print(ex)
+            lb.mousePressEvent=_open
+            def _refresh():
+                p=Path(getter())
+                lb.setToolTip(f"{p}\n点击在文件浏览器中打开")
+                pl.setText(str(p))
+                pl.setToolTip(str(p))
+            setattr(self, attr, lb)
+            self._dir_refreshers.append(_refresh)
+            _refresh()
+            return row
+        ebook_page=QWidget()
+        ebook_layout=QVBoxLayout(ebook_page)
+        ebook_layout.setContentsMargins(0,0,0,0)
+        ebook_layout.addWidget(_dir_row(
+            "官方", lambda: official_ebook_source.official_books_dir(self.config), "lbl_cache_dir"))
+        ebook_layout.addWidget(_dir_row(
+            "自制", lambda: _xb.xml_books_dir(self.config), "lbl_xml_dir"))
+        ebook_layout.addWidget(_dir_row(
+            "丛书", lambda: self._out_dir(), "lbl_out_dir"))
+        ebook_layout.addStretch()
+        self.tab_bottom.addTab(ebook_page, "E书目录")
         self.btn_tab_toggle=QPushButton("▾")
         self.btn_tab_toggle.setFixedWidth(28)
         self.btn_tab_toggle.setToolTip("最小化/恢复下方窗格")
@@ -4380,15 +4392,12 @@ class MainWindow(QMainWindow):
                 self.detail.setText("设置已应用（未写盘，仅本次运行生效）")
 
     def _refresh_dir_labels(self):
-        """设置变更后刷新右栏「E书目录」三处短名/提示（路径经 getter 动态取）。"""
-        for _lb in (getattr(self,"lbl_cache_dir",None), getattr(self,"lbl_xml_dir",None),
-                    getattr(self,"lbl_out_dir",None)):
-            r=getattr(_lb,"refresh",None)
-            if callable(r):
-                try:
-                    r()
-                except Exception:
-                    pass
+        """设置变更后刷新「E书目录」页签的链接提示/完整路径（getter 动态取）。"""
+        for r in getattr(self, "_dir_refreshers", []) or []:
+            try:
+                r()
+            except Exception:
+                pass
 
     def _cover_config(self):
         # 直接使用内存配置，避免 CWD 相对读取
