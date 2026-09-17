@@ -98,15 +98,16 @@
 - 来源是**官方**时不加任何字。
 - 文件名、封面、书签、目录页不加标签，保持干净。
 
-## 6. 输出目录（双方可配、互不混淆）
+## 6. 输出目录（两缓存根同构 `{root}/{fmt}/…`）
 
-- 官方：`cbeta_ebooks/{fmt}/{canon}/{work}.{fmt}`（现状不动；设置项 `cbeta_ebooks_dir` 不动）。
-- 自制：`xml_to_ebooks_dir/{work}.{fmt}`（**完全平展**，pdf/epub 同目录，
-  扩展名区分；设置项新增，可配，默认 `cbeta_ebooks_xml`）。
+- 官方：`cbeta_ebooks/{fmt}/{work}.{fmt}`；目录型 `cbeta_ebooks/{fmt}/{work}/`
+  （`official_books_dir` 收敛键，`cbeta_ebooks_dir` 优先兼容 `official_ebooks_dir`）。
+- 自制：`xml_to_ebooks_dir/{fmt}/{work}.{fmt}`（设置项可配，默认 `cbeta_ebooks_xml`）。
+- **旧版平展布局作废**（不迁移/不双读/不自动删）：旧文件需手动删，自制书需重生成。
 - **复用规则（由右栏「生成」决定，不再用 mtime/哈希推断）**：
   - `仅缺`：`find_built` 命中即复用（日志 `复用 T0001.pdf`）；
   - `全部`：一律重新生成（日志 `生成 T0001.pdf`），已有异名产物按原路径覆盖。
-- GUI 产物识别：`{work}*.{fmt}` 匹配（如 `T0001 中論.pdf`），命中即视为已生成。
+- 同 `{fmt}/` 下 `{work}*.{fmt}` 匹配（如 `T0001 中論.pdf`），命中即视为已生成。
 - 「已下载/已生成」检查各查各的目录；官方源缺书走"是否先下载"弹窗，
   自制源缺书直接进生成流程。
 
@@ -123,7 +124,30 @@
    生成/下载失败即中止该操作。
 5. 合成/ZIP/导出（不变；说明页带第 5 节注明）。
 
-## 8. 不做
+## 8. 一键送校验（工具菜单 → 独立窗 → 导入入库）
+
+工具菜单两项（`main_window._send_coll_to_verify` / `_import_verified`）：
+
+**「送当前丛书去校验…」**
+1. 前置拦截（依次弹窗）：占位/空丛书/读失败 → 选丛书；**临时预设未保存**
+   （`_tmp_preset` 非空）→ 须先在「调整…」里覆盖/另存为（`[调整…]` 旁有"（临时）"标记）。
+2. 校验目录 `verify_dir/<丛书>/`（`bridge.verify_coll_dir`；默认 `<工程>/cbeta_verify`，
+   与自制书目录分离），书单写 `{slug}_ids.txt`（work_ids 一行一部）。
+3. detached 子进程（`cwd=<x2p>`，publish 不等它）：
+   `python -m pycbeta.gui --ids-file <ids> --out <vdir> [--preset <全局默认预设>] --verify --autostart`
+   - `--preset` 传全局 `xml2pdf.preset` **文件名**（如 `my.json`）；上游匹配 stem/文件名/
+     绝对路径三种（`xml2pdf@7258b65`＋文件名归一化），不存在则保持原选中（静默）。
+   - 独立窗内：预填 ids/out/preset、勾校验、**自动开跑**；产物 `{id 书名}.{fmt}` ＋
+     `{stem}_verify_report.txt` 落校验目录。
+4. 发送后详情行 + "已发送"弹窗（提示：校验完成后用「导入校验通过项…」入库）。
+
+**「导入校验通过项…」**
+- 读各 `{stem}_verify_report.txt`（`bridge.verify_report_pass`）：有 `[FAIL]`→不通过；
+  ≥1 个 `[OK]` 且无 `[FAIL]`→通过；否则未判定（`[--]`/读失败，人工处理）。
+- 通过的拷入自制书目录并改名 `{fmt}/{work}.{fmt}`（入库即被 `ensure_one(missing)` 复用）；
+  不通过/未判定不入库，人工回独立窗看报告（进度窗复用下载窗组件）。
+
+## 9. 不做
 
 - per-book 来源细粒度（`work_sources` 只读兼容）。
 - 单本内部更细的生成进度（对面只在完成时落一行）。

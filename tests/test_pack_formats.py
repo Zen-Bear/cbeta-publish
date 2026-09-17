@@ -92,7 +92,7 @@ class PackDirFormatTest(unittest.TestCase):
                 break
         _ensure_app().processEvents()
         # 目录型产物固件：txt 解压后目录
-        d = cls.tmp / "eb" / "txt" / "T" / "T0001"
+        d = cls.tmp / "eb" / "txt" / "T0001"
         d.mkdir(parents=True)
         (d / "T0001.txt").write_text("經文", encoding="utf-8")
         (d / "T0001-toc.txt").write_text("目次", encoding="utf-8")

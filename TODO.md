@@ -3,6 +3,18 @@
 > 三藏/朝代作为另一种目录分类；生成均按“启动时内存重分组”策略。
 
 ## 已完成（近期）
+- [x] **目录结构统一：官方/自制两缓存根同构 `{root}/{fmt}/…`**（2026-09-17）
+  - 官方去 `canon` 层：`{fmt}/{work}.{fmt}`、目录型 `{fmt}/{work}/`；自制加 `fmt` 层：`{fmt}/{work}.{fmt}`
+  - `official_ebook_source.official_books_dir(config)` 收敛配置键（`cbeta_ebooks_dir` 优先兼容 `official_ebooks_dir`；保旧回退链语义），main_window 6 处回退链改走 helper
+  - `xml2pdf_bridge.find_built` 只在 `{fmt}/` 下找（精确名优先，再 `{work}*.{fmt}` 通配）；删旧平展/顶层兼容，**不双读**
+  - 旧版平展缓存作废（不迁移/不自动删）：需手动删，自制书需重生成；`_import_verified` 入库目标改 `{fmt}/{work}.{fmt}`
+  - 单测固件路径同步（download/bridge/pack/right_panel/download_log/verify_import）；全量 255 通过
+- [x] **一键送校验＋导入通过项**（2026-09-17）
+  - 上游 `pycbeta.gui` 加启动参数 `--ids-file/--out/--preset/--verify/--autostart`（`parse_known_args`，裸启动零变化；xml2pdf 仓 `7258b65`）
+  - 工具菜单「送当前丛书去校验…」：work_ids 写校验目录 ids 文件 → detached 拉独立窗自动开跑；临时预设未保存拒绝发送
+  - 工具菜单「导入校验通过项…」：`verify_report_pass` 判读（`[FAIL]`→不通过；≥1 `[OK]` 无 `[FAIL]`→通过；否则未判定）→ 通过项拷入自制书目录；不通过/未判定不入库
+  - 新增 `verify_dir`（默认 `<工程>/cbeta_verify`，设置页可配、gitignore）；单测 `tests/test_verify_import.py`
+
 - [x] **P0：复用 cbeta-fetch 共享下载层**（`cbeta_publish/_vendor/cbeta_fetch.py` v0.1.1，sha256 见 `SOURCE.txt`）
   - `official_ebook_source.py`：URL 模板 / id 大小写规范化（`TXA001→TXa001`、`T0128A→T0128a`）/ 原子下载 / docx·odt zip 解压，全部走共享层；布局 `{fmt}/{canon}/{work}` 仍为本仓自有（新增 `canon_of/zip_dest_dir/local_path`）
   - `remote_sources.py`：URL 单源，`_SPEC` 引 `cf.REMOTE_URLS`（展开为原 4 元组，下游免改）；新增 `url_of(key)`

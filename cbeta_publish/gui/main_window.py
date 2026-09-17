@@ -570,7 +570,7 @@ class MainWindow(QMainWindow):
         ch=QHBoxLayout(cache_box)
         ch.setContentsMargins(0,0,0,0)
         ch.addWidget(QLabel("缓存目录"))
-        cache_base=Path(self.config.get("cbeta_ebooks_dir", self.config.get("official_ebooks_dir","./cbeta_ebooks")))
+        cache_base=official_ebook_source.official_books_dir(self.config)
         def _dir_label(p):
             # 目录短名显示，悬停看全路径，点击打开
             lb=QLabel(Path(p).name or str(p))
@@ -3444,11 +3444,11 @@ class MainWindow(QMainWindow):
 
     def _ebook_path(self, w, fmt):
         """按当前来源返回该书的电子书路径（不存在则 None）：
-        官方 → cbeta_ebooks；自制 → xml_to_ebooks_dir（含 GUI 命名的平展产物）。"""
+        两边同构 `{root}/{fmt}/…`，根分开（官方 cbeta_ebooks／自制 xml_to_ebooks_dir）。"""
         from cbeta_publish.books import xml2pdf_bridge
         if self._run_source()=="xml":
             return xml2pdf_bridge.find_built(w, fmt, xml2pdf_bridge.xml_books_dir(self.config))
-        base=Path(self.config.get("cbeta_ebooks_dir", self.config.get("official_ebooks_dir","./cbeta_ebooks")))
+        base=official_ebook_source.official_books_dir(self.config)
         dest=official_ebook_source.local_path(w, fmt, base)
         return dest if dest.exists() else None
 
@@ -3798,7 +3798,7 @@ class MainWindow(QMainWindow):
         if not fmts:
             self.detail.setText("请至少选择一种格式 pdf/epub")
             return
-        dest_dir=Path(self.config.get("cbeta_ebooks_dir", self.config.get("official_ebooks_dir","./cbeta_ebooks")))
+        dest_dir=official_ebook_source.official_books_dir(self.config)
         pairs=[(w, f) for w in works for f in fmts]
         ok=self._download_missing(pairs, dest_dir, title="下载/更新")
         st=getattr(self, "_dl_stats", {}) or {}
@@ -4219,7 +4219,8 @@ class MainWindow(QMainWindow):
                         src=vdir/f"{stem}.{fmt}"
                         if src.is_file():
                             try:
-                                shutil.copy2(src, base/f"{hit}.{fmt}")
+                                (base/fmt).mkdir(parents=True, exist_ok=True)
+                                shutil.copy2(src, base/fmt/f"{hit}.{fmt}")
                                 copied.append(fmt)
                             except Exception as e:
                                 fail_list.append(f"{hit} 拷贝失败: {e}")
@@ -4588,7 +4589,7 @@ class MainWindow(QMainWindow):
         from cbeta_publish.books.ebook_merger import merge_pdfs, merge_epubs, MergeCancelled
         from cbeta_publish.books import xml2pdf_bridge
         from cbeta_publish.books import official_ebook_source
-        dest_dir=Path(self.config.get("cbeta_ebooks_dir", self.config.get("official_ebooks_dir","./cbeta_ebooks")))
+        dest_dir=official_ebook_source.official_books_dir(self.config)
         # 本次来源：右栏单选（整批统一；丛书不绑定来源）
         run_source=self._run_source()
         run_preset=self._run_preset() if run_source=="xml" else None
@@ -4834,7 +4835,7 @@ class MainWindow(QMainWindow):
             return
         import zipfile
         from cbeta_publish.books import official_ebook_source
-        dest_dir=Path(self.config.get("cbeta_ebooks_dir", self.config.get("official_ebooks_dir","./cbeta_ebooks")))
+        dest_dir=official_ebook_source.official_books_dir(self.config)
         # 按来源准备素材：官方=缺则下载；自制=缺则生成（改过预设可选全部重生成）
         if self._run_source()=="xml":
             ok_map, gen_failed, gen_cancelled = self._ensure_xml_batch(works, fmts, title="生成（ZIP 前）")
@@ -4977,7 +4978,7 @@ class MainWindow(QMainWindow):
             return
         import shutil
         from cbeta_publish.books import official_ebook_source
-        dest_dir=Path(self.config.get("cbeta_ebooks_dir", self.config.get("official_ebooks_dir","./cbeta_ebooks")))
+        dest_dir=official_ebook_source.official_books_dir(self.config)
         # 按来源准备素材：官方=缺则下载；自制=缺则生成（改过预设可选全部重生成）
         if self._run_source()=="xml":
             ok_map, gen_failed, gen_cancelled = self._ensure_xml_batch(works, fmts, title="生成（导出前）")

@@ -1,8 +1,9 @@
 """官方电子书下载（复用 cbeta-fetch 共享层：URL 模板 / id 规范化 / 原子下载 / zip 解压）。
 
 - URL、id 大小写规范化、下载与解压均由 `cbeta_publish/_vendor/cbeta_fetch` 提供（勿改）。
-- 目录布局（publish 自有，不共享）：`{dest_dir}/{fmt}/{canon}/{work}.{fmt}`；
-  docx/odt 端点为 zip，解压到目录 `{dest_dir}/{fmt}/{canon}/{work}/`。
+- 目录布局（publish 自有）：`{dest_dir}/{fmt}/{work}.{fmt}`；
+  目录型（docx/odt/html/txt/txt_notes，端点为 zip）解压到 `{dest_dir}/{fmt}/{work}/`。
+  与自制书目录同构（`{root}/{fmt}/…`），根分开防复用串源。
 """
 from email.utils import parsedate_to_datetime
 from pathlib import Path
@@ -42,14 +43,21 @@ def ebook_url(fmt: str, canon: str, work: str) -> str:
     return tmpl.format(canon=canon, id=work)
 
 
+def official_books_dir(config) -> Path:
+    """官方电子书缓存根（`cbeta_ebooks_dir` 优先，兼容 `official_ebooks_dir`；与旧回退链同序）。"""
+    cfg = (config or {})
+    return Path(cfg.get("cbeta_ebooks_dir") or cfg.get("official_ebooks_dir")
+                or "./cbeta_ebooks")
+
+
 def dest_path(work: str, fmt: str, dest_dir) -> Path:
     """单文件格式落盘路径（布局 publish 自有）。"""
-    return Path(dest_dir) / fmt / canon_of(work) / f"{canonical(work)}.{fmt}"
+    return Path(dest_dir) / fmt / f"{canonical(work)}.{fmt}"
 
 
 def zip_dest_dir(work: str, fmt: str, dest_dir) -> Path:
-    """zip 型格式（docx/odt）解压目录。"""
-    return Path(dest_dir) / fmt / canon_of(work) / canonical(work)
+    """zip 型格式解压目录。"""
+    return Path(dest_dir) / fmt / canonical(work)
 
 
 def local_path(work: str, fmt: str, dest_dir) -> Path:
