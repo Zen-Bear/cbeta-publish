@@ -720,6 +720,7 @@ class MainWindow(QMainWindow):
         self.coll_list.dragMoveEvent = lambda e: self._drop_move(e, self.coll_list)
         self.coll_list.dropEvent = lambda e: self._coll_drop(e)
         self.coll_list.viewport().installEventFilter(self)
+        self.coll_list.viewport().setMouseTracking(True)   # 图标 tooltip 需移动事件
         self.chk_pdf.stateChanged.connect(self._load_coll_works)
         self.chk_epub.stateChanged.connect(self._load_coll_works)
         self.lbl_coll_info.linkActivated.connect(self._open_publish_link)
@@ -3501,8 +3502,9 @@ class MainWindow(QMainWindow):
             item=QListWidgetItem()
             item.setData(Qt.UserRole, w)
             item.setFlags(item.flags() | Qt.ItemIsDragEnabled | Qt.ItemIsEnabled | Qt.ItemIsSelectable)
-            missing=[f"{fmt.upper()}未下载" for fmt,ex in fmts_status if not ex]
-            item.setToolTip(" ".join(missing) if missing else "")
+            tips=[f"{fmt.upper()} 双击打开" if ex else f"{fmt.upper()}未下载"
+                  for fmt, ex in fmts_status]
+            item.setToolTip("　".join(tips))
             row=QWidget()
             # setItemWidget 的子控件会吞掉鼠标事件导致拖拽无法启动；
             # 让整行对鼠标透明，事件直达 viewport 从而可拖拽。
@@ -3524,11 +3526,8 @@ class MainWindow(QMainWindow):
                 lab=QLabel()
                 pix=QPixmap(str(icon_dir/(f"{fmt}.png" if exists else f"{fmt}_gray.png")))
                 lab.setPixmap(pix.scaled(16,16, Qt.KeepAspectRatio, Qt.SmoothTransformation))
-                if not exists:
-                    lab.setToolTip(f"{fmt.upper()}未下载")
-                else:
-                    lab.setToolTip("双击打开")
                 lab.fmt=fmt
+                lab.exists_flag=exists
                 lab.setAttribute(Qt.WA_TransparentForMouseEvents, True)
                 hl.addWidget(lab)
             text_lab=QLabel(f"{idx}. {title}")
@@ -3581,6 +3580,15 @@ class MainWindow(QMainWindow):
                     pos=event.position().toPoint()
                     if self._coll_hit_icon(pos):
                         return True
+                elif t==QEvent.Type.MouseMove:
+                    from PySide6.QtWidgets import QToolTip
+                    lab=self._coll_icon_at(event.position().toPoint())
+                    if lab is not None:
+                        tip=("双击打开" if getattr(lab,"exists_flag",False)
+                             else f"{lab.fmt.upper()}未下载")
+                        QToolTip.showText(event.globalPosition().toPoint(), tip, self.coll_list)
+                    else:
+                        QToolTip.hideText()
         except Exception as ex:
             print(ex)
         return super().eventFilter(obj, event)
@@ -3600,18 +3608,28 @@ class MainWindow(QMainWindow):
                 return True
         return False
 
+    def _coll_icon_at(self, pos):
+        """返回视口坐标 pos 下的格式图标 QLabel（无则 None）。"""
+        item=self.coll_list.itemAt(pos)
+        if not item:
+            return None
+        row=self.coll_list.itemWidget(item)
+        if not row:
+            return None
+        local=row.mapFrom(self.coll_list.viewport(), pos)
+        for lab in row.findChildren(QLabel):
+            if getattr(lab,"fmt",None) and lab.isVisible() and lab.geometry().contains(local):
+                return lab
+        return None
+
     def _coll_hit_icon(self, pos):
         item=self.coll_list.itemAt(pos)
         if not item:
             return False
-        row=self.coll_list.itemWidget(item)
-        if not row:
-            return False
-        local=row.mapFrom(self.coll_list.viewport(), pos)
-        for lab in row.findChildren(QLabel):
-            if lab.isVisible() and lab.geometry().contains(local) and hasattr(lab,"fmt"):
-                self._open_ebook(item.data(Qt.UserRole), prefer=lab.fmt, only_prefer=True)
-                return True
+        lab=self._coll_icon_at(pos)
+        if lab is not None:
+            self._open_ebook(item.data(Qt.UserRole), prefer=lab.fmt, only_prefer=True)
+            return True
         return False
 
     def _coll_drag_enter(self, e):
