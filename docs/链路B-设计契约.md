@@ -138,3 +138,35 @@ def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=No
 
 - 三藏/朝代等目录过滤与本链路无关，沿用「启动时内存生成」策略。
 - X 续藏按 `bulei.txt` 同名归并，已纳入三藏映射。
+
+## 8. 问答
+
+**Q1：何时要包一层临时 run.json，何时直接传？**
+
+根因是上游 `theme.resolve_config_arg` 的分流：`--config` 直接传预设（base 配置
+JSON）时只当 `config-json` 单槽，其余 CSS 槽回出厂，不取仓库当前 `run.json`。
+
+- 要包（`preset` 非空）：命名预设或「调整…」临时预设，且要保留仓库主题 →
+  `bridge.write_run_wrapper`（5 槽照抄仓库当前 `run.json`，`config-json` 指本次
+  预设），`--config` 传包装，用后删。`convert` 内已统一做，两条路径一致。
+- 不包：`preset=None`（出厂默认，`--config` 整个不传）；或上游不可用时回退
+  直传预设（降级：能跑，但 CSS 槽回出厂，与包装前旧行为一致）。
+- 只读类调用（`list_presets`/`resolve_preset`/`load_preset_dict`）不走
+  `--config`，不涉及。
+
+**Q2：「调整…」不保存时，为何用临时预设文件，而不用 CLI 开关直传？**
+
+上游 CLI 确实有不少开关（`--theme`、4 个 CSS 槽、`--font-lang`、`--t2s`、
+`--font-scale`、`--notes`、`--page`、`--vertical`、`--engine` 等），且 publish
+是进程内调 `pycbeta.cli.main(argv)`，技术上加开关无障碍。但：
+
+1. 覆盖不全：预设是整棵配置树（`output/pages/source/engines/annotations/…`），
+   CLI 只覆盖部分叶子，无开关的项会丢；走文件是面板产出 dict → CLI 消费
+   文件的无损直通。
+2. 耦合回流：上游每加一个面板选项，publish 就要手写一条映射；预设制正是
+   为清掉这类逐项耦合。
+3. 路径分叉：命名/临时预设共用一条 `--config` 路径（`_run_preset` 透传、
+   `ensure_one` 复用判断）；开关直传要另起一套 argv 装配，调用点更复杂。
+
+故保持临时预设文件方案（`write_temp_preset` + 临时 run.json 包装，用后删）；
+开关直传只适合临时调试，不做正式路径。
