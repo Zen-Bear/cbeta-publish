@@ -1801,6 +1801,13 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
+    def _checked_fmts(self):
+        """右栏「格式」勾选 → ["pdf"]/["epub"]/["pdf","epub"]（pdf 在前）。"""
+        fmts=[]
+        if self.chk_pdf.isChecked(): fmts.append("pdf")
+        if self.chk_epub.isChecked(): fmts.append("epub")
+        return fmts
+
     def _run_regen(self):
         # 自制书生成策略（右栏「生成」单选）：missing=仅生成缺少（默认）；all=全部重新生成
         v=(self.config.get("xml2pdf", {}) or {}).get("regen", "missing")
@@ -1897,6 +1904,15 @@ class MainWindow(QMainWindow):
         cur_path = _b.resolve_preset(self.config, cur_name)
         base = _b.load_preset_dict(cur_path, self.config) if cur_path else {}
         dlg = XmlOptionsDialog(base or None, self)
+        # 「输出格式」对 publish 无意义（格式由右栏勾选、以 -f 传入）：预置为当前勾选，避免误导
+        _fmts=self._checked_fmts()
+        if _fmts:
+            try:
+                _opts=dlg.panel.get_options()
+                _opts.formats=list(_fmts)
+                dlg.panel.set_options(_opts)
+            except Exception as e:
+                print('preset formats fail', e)
         if dlg.exec() != _QD.Accepted:
             return
         merged = dlg.get_preset(base if isinstance(base, dict) else None)
@@ -3434,9 +3450,7 @@ class MainWindow(QMainWindow):
         return dest if dest.exists() else None
 
     def _render_coll_rows(self, works):
-        fmts=[]
-        if self.chk_pdf.isChecked(): fmts.append("pdf")
-        if self.chk_epub.isChecked(): fmts.append("epub")
+        fmts=self._checked_fmts()
         if not fmts: fmts=["pdf"]
         from PySide6.QtGui import QPixmap
         from PySide6.QtWidgets import QCheckBox as _Chk
@@ -3777,9 +3791,7 @@ class MainWindow(QMainWindow):
         if not works:
             QMessageBox.warning(self,"失败","丛书为空")
             return
-        fmts=[]
-        if self.chk_pdf.isChecked(): fmts.append("pdf")
-        if self.chk_epub.isChecked(): fmts.append("epub")
+        fmts=self._checked_fmts()
         if not fmts:
             self.detail.setText("请至少选择一种格式 pdf/epub")
             return
@@ -3799,9 +3811,7 @@ class MainWindow(QMainWindow):
     def _on_make_button(self, regen_all):
         # 右栏「自制」/「重制」：为当前丛书生成自制电子书（整批）
         #   自制 = 仅生成缺少（复用已有）；重制 = 全部重新生成
-        fmts=[]
-        if self.chk_pdf.isChecked(): fmts.append("pdf")
-        if self.chk_epub.isChecked(): fmts.append("epub")
+        fmts=self._checked_fmts()
         if not fmts:
             QMessageBox.warning(self, "失败", "请至少选择一种格式 pdf/epub")
             return
@@ -4390,9 +4400,7 @@ class MainWindow(QMainWindow):
         return ok_map, failed, cancelled
 
     def _merge(self):
-        fmts=[]
-        if self.chk_pdf.isChecked(): fmts.append("pdf")
-        if self.chk_epub.isChecked(): fmts.append("epub")
+        fmts=self._checked_fmts()
         if not fmts:
             QMessageBox.warning(self,"失败","请至少选择一种格式 pdf/epub")
             return
@@ -4620,9 +4628,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self,"失败", "合并失败:\n" + "\n".join(failed))
 
     def _zip(self):
-        fmts=[]
-        if self.chk_pdf.isChecked(): fmts.append("pdf")
-        if self.chk_epub.isChecked(): fmts.append("epub")
+        fmts=self._checked_fmts()
         if not fmts:
             QMessageBox.warning(self,"失败","请选择格式 pdf/epub")
             return
@@ -4757,9 +4763,7 @@ class MainWindow(QMainWindow):
         return QMessageBox(icon, title, text, buttons, self).exec()
 
     def _export(self):
-        fmts=[]
-        if self.chk_pdf.isChecked(): fmts.append("pdf")
-        if self.chk_epub.isChecked(): fmts.append("epub")
+        fmts=self._checked_fmts()
         if not fmts:
             QMessageBox.warning(self,"失败","请选择格式")
             return

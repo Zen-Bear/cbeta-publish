@@ -227,9 +227,18 @@ def write_temp_preset(config, data) -> Path | None:
     """把预设 dict 写成**临时**文件（系统临时目录），供 `--config` 用一次。
 
     用于「调整…」后仅本次生效、不落盘为命名预设的场景；调用方负责用
-    `remove_temp_preset` 删除。（上游 panel.write_temp_presets 是等价实现，
-    但输入是 XmlOptions；这里直接写合并后的 dict。）
+    `remove_temp_preset` 删除。优先用上游公开 API `panel.write_temp_preset`
+    （系统 temp、不碰 presets/ 与 run.json），不可用时本地写。
     """
+    root = _x2p_root(config)
+    try:
+        _ensure_path(str(root))
+        from pycbeta.gui.panel import write_temp_preset as _up
+        p = _up(data)
+        if p:
+            return Path(p)
+    except Exception:
+        pass
     import json
     import tempfile
     try:
