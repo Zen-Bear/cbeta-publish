@@ -37,7 +37,7 @@ DEFAULT_CONFIG = {
     "merge": {"by_volume": False},
     "xml2pdf": {"path": "E:/dev/cbeta/xml2pdf",
                 "cbeta_ebook": str(PROJECT_ROOT / "cbeta_xml"),
-                "preset": "", "regen": "missing"},
+                "preset": ""},
     "catalog": {"filters": {"tripitaka": {"hidden": []}, "dynasty": {"hidden": []}, "vol": {"hidden": []}}},
     "cover": {
         "organizer": "CBETA 整理",
@@ -1019,8 +1019,9 @@ class SettingsDialog(QDialog):
         c["update_interval"] = self.cb_interval.currentText()
         c["default_source"] = "xml" if self.rb_src_made.isChecked() else "official"
         c.setdefault("xml2pdf", {})
-        # 旧逐项（page/font_lang/engine/vertical）照读兼容，不再写入/使用，preset 为准
-        for _k in ("page", "font_lang", "engine", "vertical", "preset_dir"):
+        # 旧逐项（page/font_lang/engine/vertical）照读兼容，不再写入/使用，preset 为准；
+        # regen 生成策略已移除（合并/ZIP/导出恒仅缺，全部重生成用「重制」）
+        for _k in ("page", "font_lang", "engine", "vertical", "preset_dir", "regen"):
             c["xml2pdf"].pop(_k, None)
         c["xml2pdf"].update({
             "path": self._native_path(self.ed_x2p.text().strip()),

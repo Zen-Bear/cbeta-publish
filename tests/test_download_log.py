@@ -352,20 +352,19 @@ class MergeXmlSourceTest(unittest.TestCase):
         off = win._intro_for(["T0001"], cfg, made_by_xml=False)
         self.assertIsNone(off.get("note"))
 
-    def _xml_env(self, regen="missing"):
+    def _xml_env(self):
         win = self.win
         win.config["default_source"] = "xml"
-        win.config["xml_to_ebooks_dir"] = str(self.tmp / f"xb_{regen}")
-        win.config.setdefault("xml2pdf", {})["regen"] = regen
+        win.config["xml_to_ebooks_dir"] = str(self.tmp / "xb_env")
         return Path(win.config["xml_to_ebooks_dir"])
 
     def test_merge_reuses_existing_in_missing_mode(self):
-        # 仅缺：已有产物 → 不再调用 convert
+        # 合并恒「仅缺」：已有产物 → 不再调用 convert
         import cbeta_publish.books.xml2pdf_bridge as b
         import cbeta_publish.books.ebook_merger as em
         win = self.win
         self._select_coll(["T0001"])
-        out_dir = self._xml_env("missing")
+        out_dir = self._xml_env()
         out_dir.mkdir(parents=True, exist_ok=True)
         (out_dir / "pdf").mkdir(exist_ok=True)
         (out_dir / "pdf" / "T0001.pdf").write_bytes(b"old")
@@ -381,40 +380,11 @@ class MergeXmlSourceTest(unittest.TestCase):
         self.assertEqual(calls, [])          # 复用，未重生成
         self._coll_file.unlink(missing_ok=True)
 
-    def test_merge_regen_all_rebuilds(self):
-        # 全部：忽略已有产物，重跑 convert（覆盖同名）
-        import cbeta_publish.books.xml2pdf_bridge as b
-        import cbeta_publish.books.ebook_merger as em
-        win = self.win
-        self._select_coll(["T0001"])
-        out_dir = self._xml_env("all")
-        out_dir.mkdir(parents=True, exist_ok=True)
-        (out_dir / "pdf").mkdir(exist_ok=True)
-        (out_dir / "pdf" / "T0001.pdf").write_bytes(b"old")
-        calls = []
-        real_convert, real_merge = b.convert, em.merge_pdfs
-
-        def fake_convert(w, xml, out, config, fmt="pdf", preset=None, stop=None):
-            calls.append(str(out))
-            Path(out).write_bytes(b"new")
-            return Path(out)
-        b.convert = fake_convert
-        em.merge_pdfs = lambda sources, out, **kw: (Path(out).write_bytes(b"PDF"), [Path(out)])[1]
-        win._confirm_regen = lambda *a, **k: True     # 跳过确认弹窗
-        try:
-            win._merge()
-            _ensure_app().processEvents()
-        finally:
-            b.convert, em.merge_pdfs = real_convert, real_merge
-        self.assertEqual(len(calls), 1)
-        self.assertEqual(calls[0], str(out_dir / "pdf" / "T0001.pdf"))
-        self._coll_file.unlink(missing_ok=True)
-
     def test_ensure_xml_batch_generates_and_reports(self):
         # ZIP/导出 共用的批量生成助手：ok_map/failed 结构
         import cbeta_publish.books.xml2pdf_bridge as b
         win = self.win
-        out_dir = self._xml_env("missing")
+        out_dir = self._xml_env()
         calls = []
         real = b.convert
 

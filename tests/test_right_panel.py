@@ -95,45 +95,6 @@ class RightPanelTest(unittest.TestCase):
         self.assertEqual(win.config["default_source"], "official")
         self.assertFalse(win.cb_preset.isEnabled())
 
-    def test_regen_row(self):
-        # 生成策略单选（仅缺/全部）：仅自制启用；切换写回全局
-        import json
-        win = self.win
-        win.config["default_source"] = "xml"
-        win.config["xml2pdf"]["regen"] = "missing"
-        win._sync_source_preset_ui()
-        _ensure_app().processEvents()
-        self.assertEqual([win.rb_regen_missing.text(), win.rb_regen_all.text()], ["仅缺", "全部"])
-        self.assertTrue(win.rb_regen_missing.isChecked())
-        self.assertTrue(win.rb_regen_all.isEnabled())
-        self.assertEqual(win._run_regen(), "missing")
-        win.rb_regen_all.setChecked(True)
-        win.regen_group.buttonClicked.emit(win.rb_regen_all)
-        _ensure_app().processEvents()
-        self.assertEqual(win.config["xml2pdf"]["regen"], "all")
-        self.assertEqual(win._run_regen(), "all")
-        disk = json.loads(Path(win._config_path).read_text(encoding="utf-8"))
-        self.assertEqual(disk["xml2pdf"]["regen"], "all")
-        # 官方来源：策略行禁用
-        win.config["default_source"] = "official"
-        win._sync_source_preset_ui()
-        _ensure_app().processEvents()
-        self.assertFalse(win.rb_regen_all.isEnabled())
-        # 「仅缺/全部」留在来源行（自制单选之后）；自制/重制按钮在发布行
-        slay = win.rb_official.parent().layout()
-        self.assertGreater(slay.indexOf(win.regen_box), slay.indexOf(win.rb_made))
-        self.assertEqual(slay.indexOf(win.btn_make), -1)
-        self.assertEqual(slay.indexOf(win.btn_remake), -1)
-        play = win.btn_merge.parent().layout()
-        self.assertGreater(play.indexOf(win.btn_make), play.indexOf(win.btn_download))
-        self.assertGreater(play.indexOf(win.btn_remake), play.indexOf(win.btn_make))
-        self.assertEqual(play.indexOf(win.regen_box), -1)
-        win.config["default_source"] = "xml"
-        win._sync_source_preset_ui()
-        _ensure_app().processEvents()
-        self.assertTrue(win.regen_box.isVisibleTo(win))
-        self.assertTrue(win.btn_make.isVisibleTo(win))
-
     def test_make_buttons_switch_with_source(self):
         # 来源=自制 → 显示「自制/重制」，隐藏「下载/更新」；来源=官方反之
         win = self.win

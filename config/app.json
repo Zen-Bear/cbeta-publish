@@ -32,8 +32,7 @@
   },
   "xml2pdf": {
     "path": "E:/dev/cbeta/xml2pdf",
-    "preset": "Publish A5 简体",
-    "regen": "missing"
+    "preset": "Publish A5 简体"
   },
   "catalog": {
     "filters": {
