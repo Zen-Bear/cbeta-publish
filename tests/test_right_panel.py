@@ -586,15 +586,20 @@ class MadeBooksInfoTest(unittest.TestCase):
         (self.tmp / "xbtip" / "pdf").mkdir(parents=True, exist_ok=True)
         (self.tmp / "xbtip" / "pdf" / "T0099.pdf").write_bytes(b"x")
         win.chk_pdf.setChecked(True)
-        win.chk_epub.setChecked(False)
+        win.chk_epub.setChecked(True)
         try:
             win.coll_list.clear()
             win._render_coll_rows(["T0099"])
             _ensure_app().processEvents()
             row = win.coll_list.itemWidget(win.coll_list.item(0))
-            tips = [lb.toolTip() for lb in row.findChildren(QLabel)
-                    if lb.toolTip() in ("双击打开", "PDF未下载", "EPUB未下载")]
-            self.assertIn("双击打开", tips)
+            icons = {lb.fmt: lb for lb in row.findChildren(QLabel)
+                     if getattr(lb, "fmt", None)}
+            self.assertTrue(icons["pdf"].exists_flag)     # 已有 → 双击打开
+            self.assertFalse(icons["epub"].exists_flag)   # 缺 → 未下载
+            # 行 tooltip：存在的显示「双击打开」，缺的显示「未下载」
+            tip = win.coll_list.item(0).toolTip()
+            self.assertIn("PDF 双击打开", tip)
+            self.assertIn("EPUB未下载", tip)
         finally:
             win.config["default_source"] = "official"
 
