@@ -134,24 +134,28 @@ def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=No
 - 校验（进程内「当前丛书生成并校验」＋自动/手动导入）：「自制书籍」菜单触发
   `VerifyWorker` 逐本调 `bridge.verify_work` → 库调用
   `pycbeta.cli.main(["-i", work, "-f", <勾选>, "-o", <vdir>, [--config wrap],
-  "--cbeta-ebook", <工作根>, "--verify"])`（上游 `cli.py` 修 work id 校验；
-  预设经临时 run.json 保主题）。正式产物 `{id 书名}.{fmt}` 落校验目录顶层，
+  "--cbeta-ebook", <工作根>, "--verify"])`（上游 `cli.py` 修 work id 校验 `2a10d12`；
+  官方基线源目录 `src` 亦按 work id 修正 `16df9cf`：文件→其目录 / 目录→该目录 /
+  編號→已材料化 XML 的 work 目录，否则 `find_official`/`auto_fetch` 定位不到）；
+  预设经临时 run.json 保主题。正式产物 `{id 书名}.{fmt}` 落校验目录顶层，
   报告落 `{id 书名}（验证）/`（`verify_dir/<丛书>/`，默认 `<工程>/cbeta_verify`，
   与自制书目录分离）。跑完自动导入（可手动重试）：报告兼容
-  `{stem}_verify_report.txt` / `report.txt` 两种命名（`bridge.verify_reports`），
-  `bridge.verify_report_pass` 判读（有 `[FAIL]`→不通过；≥1 `[OK]` 无 `[FAIL]`→通过；
-  否则未判定）→ 产物按扩展名全收（pdf/epub/docx/odt/md/txt），通过的拷入自制书目录
-  改名 `{fmt}/{work}.{fmt}`（入库即被 `ensure_one(missing)` 复用）；不通过/未判定不入库。
+  `{stem}_verify_report.txt` / `report.txt` 两种命名（`bridge.verify_reports`，
+  同一 work 只取最新），`bridge.verify_report_pass` 判读（有 `[FAIL]`→不通过；
+  ≥1 个 `[OK]` 且无 `[FAIL]`→通过；否则未判定）→ 产物按扩展名全收
+  （pdf/epub/docx/odt/md/txt），通过的拷入自制书目录改名
+  `{fmt}/{work}.{fmt}`（入库即被 `ensure_one(missing)` 复用）；不通过/未判定不入库。
   临时预设未保存时拒绝执行。独立窗（「xml2pdf 独立窗…」）保留为手动工作台。
 
 ## 6. 实施清单
 
-- [x] `publish`：`xml2pdf_bridge.py`（库调用＋预设（上游 API）＋平展输出＋`ensure_one` 生成策略）
+- [x] `publish`：`xml2pdf_bridge.py`（库调用＋预设（上游 API）＋分格式目录＋`ensure_one` 生成策略）
 - [x] `publish`：右栏来源单选＋预设下拉＋生成策略（仅缺/全部）＋[调整…]
 - [x] `publish`：`[合并]` 整批同源、分格式目录、说明页注明；**ZIP/导出 亦支持自制**
 - [x] `publish`：**生成并校验**（进程内 `VerifyWorker`→`verify_work`，跑完自动导入；
   「自制书籍」菜单三项＋校验目录＋临时预设拦截；见 §5）
-- [x] `xml2pdf`：`--verify` 支持 work id 输入（`2a10d12`：改用已 materialize 的 `xmls`）
+- [x] `xml2pdf`：`--verify` 支持 work id 输入（`2a10d12`：改用已 materialize 的 `xmls`；
+  `16df9cf`：官方基线源目录 `src` 按 work 目录修正，编号输入可定位官方基线）
 - [x] `xml2pdf`：独立窗启动参数预填（`7258b65`：`--ids-file/--out/--preset/--formats/
   --verify/--autostart`，`parse_known_args`＋Qt 透传；保留为手动工作台）
 - [x] `xml2pdf`：`pycbeta.gui` 面板/对话框/独立入口（已存在，publish 直接复用）
