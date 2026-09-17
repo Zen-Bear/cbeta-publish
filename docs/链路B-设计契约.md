@@ -129,18 +129,18 @@ def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=No
   ZIP 按 `部/相对路径` 写入 `{丛书名}_{fmt}.zip`，导出整树拷贝到 `{target}/{work}/`。
   纯 txt 端点（`text/{id}.txt.zip`，不含校注）放 publish 自有 `_EXTRA_DOWNLOADS`，
   vendor 共享层不动。
-- 校验（一键送校验＋导入通过E书）：「自制书籍」菜单「当前丛书生成并校验…」把 work_ids 写
-  校验目录 ids 文件，子进程拉独立窗（`--ids-file/--out/--preset/--formats/--verify/--autostart`
-  预填，需上游 `pycbeta.gui` 支持启动参数；`--preset` 传全局默认预设**文件名**，
-  上游 stem/文件名/绝对路径三种都认，不存在则保持原选中；`--formats` 传右栏勾选，
-  覆盖预设输出格式）；正式产物 `{id 书名}.{fmt}` 落校验目录顶层，逐本报告
-  `{stem}_verify_report.txt` 落 `{id 书名}（验证）/` 子目录
-  （`verify_dir/<丛书>/`，默认 `<工程>/cbeta_verify`，与自制书目录分离）。
-  「导入校验通过E书」递归读报告（有 `[FAIL]`→不通过；
-  ≥1 个 `[OK]` 且无 `[FAIL]`→通过；否则未判定）→ 产物按扩展名全收
-  （pdf/epub/docx/odt/md/txt），通过的拷入自制书目录改名
-  `{fmt}/{work}.{fmt}`（入库即被 `ensure_one(missing)` 复用）；不通过/未判定不入库，
-  人工回独立窗看报告。临时预设未保存时拒绝发送。
+- 校验（进程内「当前丛书生成并校验」＋自动/手动导入）：「自制书籍」菜单触发
+  `VerifyWorker` 逐本调 `bridge.verify_work` → 库调用
+  `pycbeta.cli.main(["-i", work, "-f", <勾选>, "-o", <vdir>, [--config wrap],
+  "--cbeta-ebook", <工作根>, "--verify"])`（上游 `cli.py` 修 work id 校验；
+  预设经临时 run.json 保主题）。正式产物 `{id 书名}.{fmt}` 落校验目录顶层，
+  报告落 `{id 书名}（验证）/`（`verify_dir/<丛书>/`，默认 `<工程>/cbeta_verify`，
+  与自制书目录分离）。跑完自动导入（可手动重试）：报告兼容
+  `{stem}_verify_report.txt` / `report.txt` 两种命名（`bridge.verify_reports`），
+  `bridge.verify_report_pass` 判读（有 `[FAIL]`→不通过；≥1 `[OK]` 无 `[FAIL]`→通过；
+  否则未判定）→ 产物按扩展名全收（pdf/epub/docx/odt/md/txt），通过的拷入自制书目录
+  改名 `{fmt}/{work}.{fmt}`（入库即被 `ensure_one(missing)` 复用）；不通过/未判定不入库。
+  临时预设未保存时拒绝执行。独立窗（「xml2pdf 独立窗…」）保留为手动工作台。
 
 ## 6. 实施清单
 

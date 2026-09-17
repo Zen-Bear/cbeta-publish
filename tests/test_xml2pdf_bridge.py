@@ -326,5 +326,76 @@ class BridgeRunWrapperTest(unittest.TestCase):
             shutil.rmtree(d, ignore_errors=True)
 
 
+class BridgeVerifyWorkTest(unittest.TestCase):
+    """进程内校验：argv 装配（-i work/-f 逗号/-o/--verify/--cbeta-ebook）与报告定位。"""
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+        self.x2p = self.dir / "x2p"
+        self.x2p.mkdir()
+        self.cfg = {"xml2pdf": {"path": str(self.x2p)}}
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def _patch(self, touch_report=True):
+        import cbeta_publish.books.xml2pdf_bridge as b
+        real = b._run_cli
+        calls = []
+
+        def fake(argv):
+            calls.append(list(argv))
+            if touch_report:
+                out = Path(argv[argv.index("-o") + 1])
+                vd = out / "T0001 大般若經（验证）"
+                vd.mkdir(parents=True, exist_ok=True)
+                (vd / "report.txt").write_text(
+                    "=== T0001\n  [OK]  docx 缺0 多0\n", encoding="utf-8")
+            return 0
+        b._run_cli = fake
+        return calls, lambda: setattr(b, "_run_cli", real)
+
+    def test_argv_and_report_found(self):
+        import cbeta_publish.books.xml2pdf_bridge as b
+        out = self.dir / "v"
+        calls, restore = self._patch()
+        try:
+            rp = b.verify_work("T0001", ["pdf", "epub"], out, self.cfg)
+        finally:
+            restore()
+        self.assertIsNotNone(rp)
+        self.assertTrue(rp.is_file())
+        self.assertTrue(b.verify_report_pass(rp))
+        a = calls[0]
+        self.assertEqual(a[a.index("-i") + 1], "T0001")
+        self.assertEqual(a[a.index("-f") + 1], "pdf,epub")
+        self.assertEqual(a[a.index("-o") + 1], str(out))
+        self.assertIn("--verify", a)
+        self.assertEqual(a[a.index("--cbeta-ebook") + 1], str(b.xml_work_dir(self.cfg)))
+        self.assertNotIn("--config", a)   # 出厂默认不传
+
+    def test_no_report_returns_none(self):
+        import cbeta_publish.books.xml2pdf_bridge as b
+        calls, restore = self._patch(touch_report=False)
+        try:
+            rp = b.verify_work("T0001", ["pdf"], self.dir / "v2", self.cfg)
+        finally:
+            restore()
+        self.assertIsNone(rp)
+
+    def test_verify_reports_both_namings(self):
+        import cbeta_publish.books.xml2pdf_bridge as b
+        d = self.dir / "v3"
+        vd1 = d / "T0001 涅槃（验证）"
+        vd1.mkdir(parents=True)
+        (vd1 / "T0001_verify_report.txt").write_text("=== T0001\n [OK]\n", encoding="utf-8")
+        vd2 = d / "T0002 般若（验证）"
+        vd2.mkdir(parents=True)
+        (vd2 / "report.txt").write_text("=== T0002\n [FAIL]\n", encoding="utf-8")
+        got = dict((stem, rp.name) for rp, stem in b.verify_reports(d))
+        self.assertEqual(got.get("T0001"), "T0001_verify_report.txt")
+        self.assertEqual(got.get("T0002"), "report.txt")
+
+
 if __name__ == "__main__":
     unittest.main()
