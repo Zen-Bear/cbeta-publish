@@ -553,5 +553,51 @@ class RightPanelTest(unittest.TestCase):
                          ["%02d" % i for i in range(1, 14)])
 
 
+class MadeBooksInfoTest(unittest.TestCase):
+    """下载/自制后「书籍信息」页签列出产物链接 + 总结行；格式图标 tooltip=双击打开。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.win, cls.tmp = _make_window()
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def test_show_made_books_links_and_summary(self):
+        win = self.win
+        d = self.tmp / "made"
+        d.mkdir(exist_ok=True)
+        p1 = d / "T0001.pdf"
+        p1.write_bytes(b"x")
+        win.tab_bottom.setCurrentIndex(1)
+        win._show_made_books("生成完成", [("T0001", "pdf", p1)],
+                             "生成完成 1 部 → " + str(d))
+        txt = win.detail.text()
+        self.assertIn("href=", txt)
+        self.assertIn("生成完成 1 部", txt)
+        self.assertIn("T0001", txt)
+        self.assertEqual(win.tab_bottom.currentIndex(), 0)   # 切到书籍信息页
+
+    def test_format_icon_tooltip_double_click(self):
+        win = self.win
+        win.config["default_source"] = "xml"
+        win.config["xml_to_ebooks_dir"] = str(self.tmp / "xbtip")
+        (self.tmp / "xbtip" / "pdf").mkdir(parents=True, exist_ok=True)
+        (self.tmp / "xbtip" / "pdf" / "T0099.pdf").write_bytes(b"x")
+        win.chk_pdf.setChecked(True)
+        win.chk_epub.setChecked(False)
+        try:
+            win.coll_list.clear()
+            win._render_coll_rows(["T0099"])
+            _ensure_app().processEvents()
+            row = win.coll_list.itemWidget(win.coll_list.item(0))
+            tips = [lb.toolTip() for lb in row.findChildren(QLabel)
+                    if lb.toolTip() in ("双击打开", "PDF未下载", "EPUB未下载")]
+            self.assertIn("双击打开", tips)
+        finally:
+            win.config["default_source"] = "official"
+
+
 if __name__ == "__main__":
     unittest.main()
