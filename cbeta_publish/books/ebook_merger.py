@@ -615,6 +615,15 @@ def _intro_pdf(intro: dict, first_src: Path, out_path: Path, config: dict=None) 
     c.drawCentredString(width/2, y, intro.get("title","说明"))
     y=tm["item_y0"]
     maxw=width-left-right
+    if intro.get("note"):
+        # 说明标题下一行：居中注明（如「E书依 CBETA XML 自制」）
+        try:
+            c.setFont(f_body, item_sz)
+        except Exception:
+            c.setFont("Helvetica", item_sz)
+        c.setFillColor(Color(*[v/255 for v in _color("toc_item",[30,30,30])]))
+        c.drawCentredString(width/2, y, _fit(str(intro["note"]), f_body, item_sz, maxw))
+        y-=summary_advance
     for ln in intro.get("summary",[]) or []:
         if y<bottom+summary_advance:
             _new_page()
@@ -904,6 +913,8 @@ def _epub_intro_page(intro: dict):
     c=epub.EpubHtml(title=intro.get("title","说明"), file_name="intro.xhtml", lang="zh")
     parts=['<html xmlns="http://www.w3.org/1999/xhtml"><head/><body>']
     parts.append(f'<h1 style="text-align:center;font-size:1.8em;">{_html.escape(intro.get("title","说明"))}</h1>')
+    if intro.get("note"):
+        parts.append(f'<p style="text-align:center;margin:0.2em 0 0.6em;">{_html.escape(str(intro["note"]))}</p>')
     for ln in intro.get("summary",[]) or []:
         parts.append(f'<p style="margin:0.3em 0;">{_html.escape(ln)}</p>')
     for header, rows in intro.get("sections",[]) or []:
