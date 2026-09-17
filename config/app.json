@@ -1,5 +1,6 @@
 {
   "official_ebooks_dir": "E:/dev/cbeta/publish/cbeta_ebooks",
+  "verify_dir": "E:/dev/cbeta/publish/cbeta_verify",
   "mulu_dir": "E:/dev/cbeta/publish/mulu",
   "collections_dir": "E:/dev/cbeta/publish/collections",
   "theme": {

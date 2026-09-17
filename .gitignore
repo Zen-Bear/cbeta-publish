@@ -8,6 +8,7 @@ __pycache__/
 cbeta_ebooks/
 cbeta_xml/
 cbeta_ebooks_xml/
+cbeta_verify/
 mulu/cache/
 
 # ---- 合成产物 / 临时文件 ----
