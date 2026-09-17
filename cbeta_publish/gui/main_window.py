@@ -532,20 +532,6 @@ class MainWindow(QMainWindow):
         self.btn_preset_edit.setFixedWidth(64)
         ph.addWidget(self.btn_preset_edit)
         pg.addWidget(preset_box)
-        self.rb_regen_missing=QRadioButton("仅缺")
-        self.rb_regen_missing.setToolTip("合并/ZIP/导出 时：已有自制书直接复用，只生成缺少的（推荐）")
-        self.rb_regen_all=QRadioButton("全部")
-        self.rb_regen_all.setToolTip("合并/ZIP/导出 时：忽略已有自制书，全部重新生成（改过预设后用）")
-        self.regen_box=QWidget()
-        self.regen_group=QButtonGroup(self.regen_box)
-        rg_h=QHBoxLayout(self.regen_box)
-        rg_h.setContentsMargins(0,0,0,0)
-        rg_h.setSpacing(2)
-        rg_h.addWidget(QLabel("（"))
-        for _i, _rb in enumerate((self.rb_regen_missing, self.rb_regen_all)):
-            rg_h.addWidget(_rb)
-            self.regen_group.addButton(_rb, _i)
-        rg_h.addWidget(QLabel("）"))
         publish_box=QWidget()
         hb2=QHBoxLayout(publish_box)
         hb2.setContentsMargins(0,0,0,0)
@@ -565,8 +551,6 @@ class MainWindow(QMainWindow):
         hb2.addWidget(self.btn_download); hb2.addWidget(self.btn_make); hb2.addWidget(self.btn_remake)
         hb2.addStretch()
         pg.addWidget(publish_box)
-        # 「仅缺/全部」留在来源行、紧跟「自制」单选之后（自制/重制按钮在发布行）
-        sh.addWidget(self.regen_box)
         sh.addStretch()
         self._sync_source_preset_ui()   # 依赖上面按钮存在（来源=自制时换按钮）
         rv.addWidget(publish_group)
@@ -714,7 +698,6 @@ class MainWindow(QMainWindow):
         self.btn_zip.clicked.connect(self._zip)
         self.btn_export.clicked.connect(self._export)
         self.src_group.buttonClicked.connect(self._on_source_changed)
-        self.regen_group.buttonClicked.connect(self._on_regen_changed)
         self.cb_preset.currentIndexChanged.connect(self._on_preset_changed)
         self.btn_preset_edit.clicked.connect(self._edit_preset)
         self.search.textChanged.connect(self._on_search)
@@ -1833,20 +1816,11 @@ class MainWindow(QMainWindow):
         if self.chk_epub.isChecked(): fmts.append("epub")
         return fmts
 
-    def _run_regen(self):
-        # 自制书生成策略（右栏「生成」单选）：missing=仅生成缺少（默认）；all=全部重新生成
-        v=(self.config.get("xml2pdf", {}) or {}).get("regen", "missing")
-        return "all" if v=="all" else "missing"
-
     def _sync_source_preset_ui(self):
-        # 右栏来源单选 + 预设下拉 + 生成策略与配置同步（启动/设置页保存后调用）
+        # 右栏来源单选 + 预设下拉与配置同步（启动/设置页保存后调用）
         try:
             src=self._run_source()
             (self.rb_made if src=="xml" else self.rb_official).setChecked(True)
-        except Exception:
-            pass
-        try:
-            (self.rb_regen_all if self._run_regen()=="all" else self.rb_regen_missing).setChecked(True)
         except Exception:
             pass
         self._refresh_preset_combo()
@@ -1875,13 +1849,10 @@ class MainWindow(QMainWindow):
         self._update_preset_enabled()
 
     def _update_preset_enabled(self):
-        # 仅来源=自制时启用预设/生成行，并把「下载/更新」换成「自制/重制」
+        # 仅来源=自制时启用预设行，并把「下载/更新」换成「自制/重制」
         on=self._run_source()=="xml"
         self.cb_preset.setEnabled(on)
         self.btn_preset_edit.setEnabled(on)
-        self.rb_regen_missing.setEnabled(on)
-        self.rb_regen_all.setEnabled(on)
-        self.regen_box.setVisible(on)
         self.btn_download.setVisible(not on)
         self.btn_make.setVisible(on)
         self.btn_remake.setVisible(on)
@@ -1893,12 +1864,6 @@ class MainWindow(QMainWindow):
         self._save_config()
         self._update_preset_enabled()
         self._load_coll_works()   # 已有标志随来源（官方/自制目录）刷新
-
-    def _on_regen_changed(self, *_):
-        # 右栏生成策略切换：sticky 写回全局
-        btn=self.regen_group.checkedButton()
-        self.config.setdefault("xml2pdf", {})["regen"]="all" if btn is self.rb_regen_all else "missing"
-        self._save_config()
 
     def _on_preset_changed(self, *_):
         # 右栏预设切换：sticky 写回全局默认预设
@@ -3913,7 +3878,7 @@ class MainWindow(QMainWindow):
         title="重新生成全部自制电子书" if regen_all else "生成自制电子书"
         from cbeta_publish.books import xml2pdf_bridge
         ok_map, failed, cancelled = self._ensure_xml_batch(
-            works, fmts, title=title, regen_all=bool(regen_all), confirm=False)
+            works, fmts, title=title, regen_all=bool(regen_all))
         n=sum(len(v) for v in ok_map.values())
         base=xml2pdf_bridge.xml_books_dir(self.config)
         entries=[(w, fmt, p) for fmt, m in ok_map.items() for w, p in m.items()]
@@ -4604,28 +4569,9 @@ class MainWindow(QMainWindow):
         st["finish"]=finish
         return dlg, update, st
 
-    def _confirm_regen(self, works, fmts, xml_out):
-        """「全部重新生成」确认：已有 N 部自制书会被重跑（较耗时）。返回是否继续。"""
-        from cbeta_publish.books import xml2pdf_bridge
-        n=0
-        for fmt in fmts:
-            for w in works:
-                if xml2pdf_bridge.find_built(w, fmt, xml_out) is not None:
-                    n+=1
-        if n<=0:
-            return True
-        ret=QMessageBox.question(
-            self, "全部重新生成",
-            f"「生成」选了「全部」：已有 {n} 部自制电子书会被重新生成（需要重跑 xml2pdf，较耗时）。\n继续？",
-            QMessageBox.Yes | QMessageBox.No)
-        return ret==QMessageBox.Yes
+    def _ensure_xml_batch(self, works, fmts, title="生成（自制）", regen_all=False):
+        """确保 works×fmts 的自制书存在（默认仅缺；regen_all=True 为「重制」显式指定）。
 
-    def _ensure_xml_batch(self, works, fmts, title="生成（自制）",
-                          regen_all=None, confirm=True):
-        """确保 works×fmts 的自制书存在。
-
-        regen_all=None 时按右栏「生成」策略；True/False 为显式指定（「重制」/「自制」按钮）。
-        confirm=True 且需要全部重生成时，先确认一次。
         返回 (ok_map, failed, cancelled)：ok_map = {fmt: {work: Path}}。
         """
         from cbeta_publish.books import xml2pdf_bridge
@@ -4638,13 +4584,8 @@ class MainWindow(QMainWindow):
         # 「调整…」临时预设（本次有效）：已有产物是旧预设生成的，必须重新生成才算生效
         if getattr(self, "_tmp_preset", None) is not None:
             regen_all=True
-            confirm=False
-        if regen_all is None:
-            regen_all=(self._run_regen()=="all")
         ok_map={f: {} for f in fmts}
         failed=[]
-        if regen_all and confirm and not self._confirm_regen(works, fmts, xml_out):
-            return ok_map, failed, True
         total=max(1, len(works)*len(fmts))
         done=[0]
         dlg, update, pstate = self._make_progress(title, total)
@@ -4745,14 +4686,8 @@ class MainWindow(QMainWindow):
                 missing=[f"{w}.{fmt}" for fmt in fmts for w in works
                          if _src(w)=="official" and not _official_dest(fmt, w).exists()]
         skip_missing = (ret == QMessageBox.No) if missing else False
-        # 自制：全部重新生成前确认（会重跑 xml2pdf，较耗时）
-        regen_all = (run_source=="xml" and self._run_regen()=="all")
-        if getattr(self, "_tmp_preset", None) is not None:
-            regen_all = True          # 临时预设：必须重生成才算生效
-        if regen_all and getattr(self, "_tmp_preset", None) is None \
-                and not self._confirm_regen(works, fmts, xml_out):
-            self.detail.setText("已取消合成（未重新生成）")
-            return
+        # 合并默认仅缺；「调整…」临时预设必须重生成才算生效
+        regen_all = (run_source=="xml" and getattr(self, "_tmp_preset", None) is not None)
         self.btn_merge.setEnabled(False)
         success=[]
         skipped=[]

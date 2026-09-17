@@ -87,8 +87,7 @@ def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=No
   "xml2pdf": {
     "path": "E:/dev/cbeta/xml2pdf",                    // 自制程序仓库（预设目录=其 presets/）
     "cbeta_ebook": "E:/dev/cbeta/publish/cbeta_xml",   // CBETA XML 目录（--cbeta-ebook；不可空，空则用默认）
-    "preset": "",                                     // 默认预设名（presets/ 下 stem）；空=对面默认
-    "regen": "missing"                                // 生成策略：missing=仅缺｜all=全部重生成
+    "preset": ""                                     // 默认预设名（presets/ 下 stem）；空=对面默认
   }
 }
 ```
@@ -96,7 +95,8 @@ def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=No
 - 预设目录固定在 xml2pdf 仓库 `presets/`（上游 `user_presets_dir`），
   publish 不再单独配置目录；`xml2pdf.preset` 存**预设名（stem）**。
 - 已删除：`book_dir`、`local_xml_root`（XML 源归 xml2pdf）、
-  `xml2pdf.{page,font_lang,engine,vertical}`（preset 为准）、`xml2pdf.preset_dir`。
+  `xml2pdf.{page,font_lang,engine,vertical}`（preset 为准）、`xml2pdf.preset_dir`、
+  `xml2pdf.regen`（合并/ZIP/导出恒「仅缺」，全部重生成用右栏「重制」按钮）。
 
 **`collections/<cat>/<slug>.json`**（只读兼容，不参与决策）
 ```json
@@ -112,9 +112,9 @@ def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=No
   `find_built` 优先精确名，其次同 `{fmt}/` 下 `{work}*.{fmt}` 通配）。
 - **旧版平展布局作废**（不迁移、不双读、不自动删）：旧文件需用户手动删除；
   自制书按新布局会视为不存在 → 需重下/重生成。
-- **生成策略**（`config.xml2pdf.regen`，右栏「生成」单选，用户决定）：
-  `missing`（默认）＝已有产物复用、只生成缺少（`bridge.ensure_one(regen_all=False)`）；
-  `all`＝全部重新生成、覆盖原路径（`regen_all=True`）。**不用 mtime/哈希推断过期**。
+- **生成策略**：合并/ZIP/导出**恒为「仅缺」**＝已有产物复用、只生成缺少
+  （`bridge.ensure_one(regen_all=False)`）。需整体重生成时先点右栏 `[重制]`
+  （`regen_all=True`；「调整…」临时预设亦强制重生成）。**不用 mtime/哈希推断过期**。
   两边目录互不混淆；ZIP/导出同样按来源取目录。
 
 ## 5. 数据流（合并 / ZIP / 导出）
@@ -150,7 +150,7 @@ def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=No
 ## 6. 实施清单
 
 - [x] `publish`：`xml2pdf_bridge.py`（库调用＋预设（上游 API）＋分格式目录＋`ensure_one` 生成策略）
-- [x] `publish`：右栏来源单选＋预设下拉＋生成策略（仅缺/全部）＋[调整…]
+- [x] `publish`：右栏来源单选＋预设下拉＋[调整…]（生成策略单选已移除：合并/ZIP/导出恒仅缺，「重制」按钮=全部重生成）
 - [x] `publish`：`[合并]` 整批同源、分格式目录、说明页注明；**ZIP/导出 亦支持自制**
 - [x] `publish`：**生成并校验**（进程内 `VerifyWorker`→`verify_work`，跑完自动导入；
   「自制书籍」菜单三项＋校验目录＋临时预设拦截；见 §5）
