@@ -68,7 +68,9 @@ def convert(work_id: str, xml_path, out_file, config: dict, fmt: str = "pdf",
     xml_path: 本地 XML 路径（一般传 None 直接传 work id，由对面按自家
     配置的 XML 源解析；CBReader 书库是 P5a 按卷切分，不符合对面要的 P5
     整部经，publish 侧不再自行定位）。
-    preset: run.json 预设文件路径（None=对面默认）。
+    preset: 预设文件路径（命名预设或临时预设；None=对面默认）。
+    传参时会被包进一张**临时 run.json**（5 槽沿用 xml2pdf 仓库当前 run.json，
+    `config-json` 指向该预设），这样主题 CSS 槽不回出厂；用后删除。
     out_file: 显式输出文件路径（publish 侧定名，保证合并可寻址）。
     stop: 可调用对象，调用前返回 True 表示取消。
     返回产物 Path（存在）或 None。
@@ -87,8 +89,11 @@ def convert(work_id: str, xml_path, out_file, config: dict, fmt: str = "pdf",
     out_file = Path(out_file)
     out_file.parent.mkdir(parents=True, exist_ok=True)
     src = str(xml_path) if xml_path else str(work_id)
+    run_wrap = write_run_wrapper(config, preset) if preset else None
     argv = ["-i", src, "-f", fmt, "-o", str(out_file)]
-    if preset:
+    if run_wrap is not None:
+        argv += ["--config", str(run_wrap)]
+    elif preset:
         argv += ["--config", str(preset)]
     # CBETA XML 目录（工作根）：不可空，空则用默认
     argv += ["--cbeta-ebook", str(xml_work_dir(config))]
@@ -99,11 +104,51 @@ def convert(work_id: str, xml_path, out_file, config: dict, fmt: str = "pdf",
     except Exception as e:
         print("pycbeta lib fail", e)
         return None
+    finally:
+        if run_wrap is not None:
+            remove_temp_preset(run_wrap)
     if code:
         tail = (buf.getvalue() or "")[-500:].strip()
         print("pycbeta fail", code, tail)
         return None
     return out_file if out_file.exists() else None
+
+
+def write_run_wrapper(config, preset_path) -> Path | None:
+    """为一次调用生成临时 run.json 并返回路径；失败返回 None（调用方回退直传预设）。
+
+    内容：5 槽沿用 xml2pdf 仓库当前 `run.json`，`config-json` 指向本次预设
+    （绝对路径）。用后由调用方删除（`remove_temp_preset`）。
+    """
+    import json
+    import tempfile
+    try:
+        root = _x2p_root(config)
+        _ensure_path(str(root))
+        import pycbeta.theme as _theme
+        # 必须是配置根下那份上游（sys.path/缓存里可能是别处旧的）：否则回退直传
+        try:
+            if Path(_theme.__file__).resolve().parent.parent != root.resolve():
+                return None
+        except Exception:
+            return None
+        from pycbeta.theme import load_run_config, RUN_KEYS
+        try:
+            run = load_run_config(None, str(root))
+        except TypeError:
+            run = load_run_config(str(root / "run.json"))
+        if not isinstance(run, dict):
+            return None
+        data = {k: run.get(k, "") for k in RUN_KEYS}
+        data["config-json"] = str(Path(preset_path).resolve())
+        fd, path = tempfile.mkstemp(prefix="cbeta-publish-run-", suffix=".json")
+        import os
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        return Path(path)
+    except Exception as e:
+        print("write run wrapper fail", e)
+        return None
 
 
 # ---------- 预设（xml2pdf 仓库下 presets/，用上游公开 API） ----------
