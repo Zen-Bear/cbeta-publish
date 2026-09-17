@@ -1,6 +1,6 @@
 # 链路 B 设计契约 — XML → xml2pdf → 丛书（供 publish 与 xml2pdf 双会话复用）
 
-> 状态：**已实现**（publish 侧库调用＋预设制＋平展目录；UI 见《链路B-UI设计.md》）。
+> 状态：**已实现**（publish 侧库调用＋预设制＋分格式目录；UI 见《UI设计.md》）。
 > 修订要点：XML 源解析归 xml2pdf；publish 不配置 XML 源、不逐书设来源、
 > 不再自行定位 XML（CBReader 是 P5a，非对面要的 P5）。
 
@@ -44,7 +44,7 @@ def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=No
     打开「调整…」时已把面板「输出格式」预置为该勾选，避免误导。
   - **CSS 槽（样式表）属 run.json**：已由临时 run.json 包装保留仓库主题
     （命名/临时预设两条路径一致）。
-- `-o` = publish 定名的完整产物路径（平展，见 §4）。
+- `-o` = publish 定名的完整产物路径（`{fmt}/{work}.{fmt}` 或校验目录；见 §4）。
 
 **辅助函数**（同在 `xml2pdf_bridge.py`）：
 `write_run_wrapper` / `remove_temp_preset`（临时 run.json 生成与删除）/
@@ -52,7 +52,9 @@ def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=No
 `presets_dir`（= `<仓库>/presets`，由 xml2pdf 决定，publish 不另配）/
 `list_presets` / `resolve_preset` / `load_preset_dict` / `save_preset`
 （预设读写；优先走上游公开 API，不可用时回退本地）/
-`xml_books_dir` / `xml_dest` / `find_built` / `is_fresh`。
+`xml_books_dir` / `xml_dest` / `find_built` / `ensure_one`（自制书寻址与复用）/
+`verify_work` / `find_verify_report` / `verify_reports` / `verify_report_pass`
+（校验，见 §5）。官方侧：`official_ebook_source.official_books_dir`（收敛官方缓存根键）。
 
 ## 3. 可复用 UI 组件 `pycbeta.gui`
 
@@ -146,17 +148,19 @@ def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=No
 
 - [x] `publish`：`xml2pdf_bridge.py`（库调用＋预设（上游 API）＋平展输出＋`ensure_one` 生成策略）
 - [x] `publish`：右栏来源单选＋预设下拉＋生成策略（仅缺/全部）＋[调整…]
-- [x] `publish`：`[合并]` 整批同源、平展目录、说明页注明；**ZIP/导出 亦支持自制**
-- [x] `publish`：一键送校验（工具菜单两项＋校验目录＋导入通过项＋临时预设拦截；UI 见《链路B-UI设计.md》§8）
-- [x] `xml2pdf`：独立窗启动参数预填（`7258b65`：`--ids-file/--out/--preset/--verify/--autostart`，
-  `parse_known_args`＋Qt 透传；`--preset` 认 stem/文件名/绝对路径，详见 xml2pdf `docs/第三方调用说明.md` §6.3）
+- [x] `publish`：`[合并]` 整批同源、分格式目录、说明页注明；**ZIP/导出 亦支持自制**
+- [x] `publish`：**生成并校验**（进程内 `VerifyWorker`→`verify_work`，跑完自动导入；
+  「自制书籍」菜单三项＋校验目录＋临时预设拦截；见 §5）
+- [x] `xml2pdf`：`--verify` 支持 work id 输入（`2a10d12`：改用已 materialize 的 `xmls`）
+- [x] `xml2pdf`：独立窗启动参数预填（`7258b65`：`--ids-file/--out/--preset/--formats/
+  --verify/--autostart`，`parse_known_args`＋Qt 透传；保留为手动工作台）
 - [x] `xml2pdf`：`pycbeta.gui` 面板/对话框/独立入口（已存在，publish 直接复用）
 - [x] `xml2pdf`：`--config` 兼容 run.json 与基础配置 JSON（`theme.resolve_config_arg`）；
   `--html-epub-user-theme` 占位开关；公开 `merged_preset`/`get_preset`/`*_config_preset`
 - [x] `publish`：`convert` 传 `--cbeta-ebook`（配置键 `xml2pdf.cbeta_ebook`，设置页「XML 工作根」行）
 - [x] `publish`：预设读写改用公开 API（`list_config_presets`/`load_config_preset`/
   `save_config_preset`；`[调整…]` 用 `get_preset`），不再碰私有名或自写盘
-- [x] 文档：本契约 + 《链路B-UI设计.md》
+- [x] 文档：本契约 + 《UI设计.md》
 
 ## 7. 备注
 
