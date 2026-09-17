@@ -24,6 +24,7 @@ class VerifyWorker(QThread):
 
     def run(self):
         from cbeta_publish.books import xml2pdf_bridge as b
+        from cbeta_publish.books.download_worker import REPLACE_LAST
         total = len(self.works)
         ok = 0
         failed = []
@@ -36,11 +37,11 @@ class VerifyWorker(QThread):
             verdict = b.verify_report_pass(report) if report is not None else None
             if verdict is True:
                 ok += 1
-                self.progress.emit(i, f"生成并校验 {w} ...通过", "ok")
+                self.progress.emit(i, f"{REPLACE_LAST}生成并校验 {w} ...通过", "ok")
             elif verdict is False:
                 failed.append(w)
-                self.progress.emit(i, f"生成并校验 {w} ...未通过", "fail")
+                self.progress.emit(i, f"{REPLACE_LAST}生成并校验 {w} ...未通过", "fail")
             else:
                 failed.append(w)
-                self.progress.emit(i, f"生成并校验 {w} ...未判定", "fail")
+                self.progress.emit(i, f"{REPLACE_LAST}生成并校验 {w} ...未判定", "fail")
         self.finished_all.emit(ok, total, failed)
