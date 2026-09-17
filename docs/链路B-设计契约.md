@@ -137,7 +137,9 @@ def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=No
   "--cbeta-ebook", <工作根>, "--verify"])`（上游 `cli.py` 修 work id 校验 `2a10d12`；
   官方基线源目录 `src` 亦按 work id 修正 `16df9cf`：文件→其目录 / 目录→该目录 /
   編號→已材料化 XML 的 work 目录，否则 `find_official`/`auto_fetch` 定位不到）；
-  预设经临时 run.json 保主题。正式产物 `{id 书名}.{fmt}` 落校验目录顶层，
+  预设经临时 run.json 保主题。**比对档由上游 `generate_formal` 生成**（`verify` 段覆盖
+  `output` 段，与 GUI 独立窗一致：`inline_brackets`/`suppress_jhead_dup`/`show_close_juan`
+  等生效，`cli.py` `37a864a`），否则会与官方基线误报。正式产物 `{id 书名}.{fmt}` 落校验目录顶层，
   报告落 `{id 书名}（验证）/`（`verify_dir/<丛书>/`，默认 `<工程>/cbeta_verify`，
   与自制书目录分离）。跑完自动导入（可手动重试）：报告兼容
   `{stem}_verify_report.txt` / `report.txt` 两种命名（`bridge.verify_reports`，
