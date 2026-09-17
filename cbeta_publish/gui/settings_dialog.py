@@ -20,14 +20,14 @@ DEFAULT_IMAGES_DIR = IMAGES_DIR / "default"
 
 DEFAULT_CONFIG = {
     "official_ebooks_dir": str(PROJECT_ROOT / "cbeta_ebooks"),
-    "xml_to_ebooks_dir": str(PROJECT_ROOT / "cbeta_ebooks_xml"),
+    "xml_to_ebooks_dir": str(PROJECT_ROOT / "cbeta_xml_ebooks"),
     "verify_dir": str(PROJECT_ROOT / "cbeta_verify"),
     "mulu_dir": str(PROJECT_ROOT / "mulu"),
     "collections_dir": str(PROJECT_ROOT / "collections"),
     "theme": {"mode": "system", "accent": "#8B4513"},
     "language": "zh-Hans",
     "update_interval": "weekly",
-    "output_dir": "my_books",
+    "output_dir": str(PROJECT_ROOT / "collections_books"),
     "ui": {"tree_expand": {"mode": "depth", "depth": 2}, "layout": "three",
            "app_font": "SimSun", "app_font_size": 9,
            "supplement_ttf": "E:/dev/cbeta/xml2pdf/cbeta/CBETA 補充字型/CBETASupplement.ttf"},
@@ -182,7 +182,8 @@ class SettingsDialog(QDialog):
         self.ed_mulu = QLineEdit(self._cfg.get("mulu_dir", ""))
         self.ed_collections = QLineEdit(self._cfg.get("collections_dir", ""))
         self.ed_ebooks = QLineEdit(self._cfg.get("official_ebooks_dir", ""))
-        self.ed_output = QLineEdit(self._cfg.get("output_dir", "my_books"))
+        self.ed_output = QLineEdit(
+            self._native_path(self._resolve_out_dir(self._cfg.get("output_dir"))))
         self.cb_interval = self._no_wheel_until_focused(QComboBox())
         self.cb_interval.addItems(["daily", "weekly", "monthly", "manual"])
         cur = self._cfg.get("update_interval", "weekly")
@@ -474,10 +475,10 @@ class SettingsDialog(QDialog):
         self.ed_collections.setText(self._native_path(c.get("collections_dir", "")))
         self.ed_ebooks.setText(self._native_path(c.get("official_ebooks_dir", "")))
         self.ed_xmlbooks.setText(self._native_path(
-            c.get("xml_to_ebooks_dir", str(PROJECT_ROOT / "cbeta_ebooks_xml"))))
+            c.get("xml_to_ebooks_dir") or str(PROJECT_ROOT / "cbeta_xml_ebooks")))
         self.ed_verify.setText(self._native_path(
             c.get("verify_dir", str(PROJECT_ROOT / "cbeta_verify"))))
-        self.ed_output.setText(self._native_path(c.get("output_dir", "my_books")))
+        self.ed_output.setText(self._native_path(self._resolve_out_dir(c.get("output_dir"))))
         iv = c.get("update_interval", "weekly")
         if iv in ["daily", "weekly", "monthly", "manual"]:
             self.cb_interval.setCurrentText(iv)
@@ -946,6 +947,15 @@ class SettingsDialog(QDialog):
         except Exception:
             return p
 
+    @staticmethod
+    def _resolve_out_dir(p):
+        """丛书输出目录：空则默认 collections_books；相对按工程根解析为全路径。"""
+        p = (p or "").strip()
+        if not p:
+            return str(PROJECT_ROOT / "collections_books")
+        pp = Path(p)
+        return str(pp if pp.is_absolute() else PROJECT_ROOT / pp)
+
     def _pick_image(self, key, ed):
         f, _ = QFileDialog.getOpenFileName(self, f"选择{key}图片", str(IMAGES_DIR),
                                            "图片 (*.jpg *.jpeg *.png *.gif *.bmp)")
@@ -1002,10 +1012,10 @@ class SettingsDialog(QDialog):
         c["collections_dir"] = self._native_path(self.ed_collections.text().strip())
         c["official_ebooks_dir"] = self._native_path(self.ed_ebooks.text().strip())
         c["xml_to_ebooks_dir"] = self._native_path(self.ed_xmlbooks.text().strip()) \
-            or str(PROJECT_ROOT / "cbeta_ebooks_xml")
+            or str(PROJECT_ROOT / "cbeta_xml_ebooks")
         c["verify_dir"] = self._native_path(self.ed_verify.text().strip()) \
             or str(PROJECT_ROOT / "cbeta_verify")
-        c["output_dir"] = self.ed_output.text().strip()
+        c["output_dir"] = self._native_path(self._resolve_out_dir(self.ed_output.text()))
         c["update_interval"] = self.cb_interval.currentText()
         c["default_source"] = "xml" if self.rb_src_made.isChecked() else "official"
         c.setdefault("xml2pdf", {})
