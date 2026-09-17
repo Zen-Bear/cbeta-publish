@@ -21,6 +21,7 @@ DEFAULT_IMAGES_DIR = IMAGES_DIR / "default"
 DEFAULT_CONFIG = {
     "official_ebooks_dir": str(PROJECT_ROOT / "cbeta_ebooks"),
     "xml_to_ebooks_dir": str(PROJECT_ROOT / "cbeta_ebooks_xml"),
+    "verify_dir": str(PROJECT_ROOT / "cbeta_verify"),
     "mulu_dir": str(PROJECT_ROOT / "mulu"),
     "collections_dir": str(PROJECT_ROOT / "collections"),
     "theme": {"mode": "system", "accent": "#8B4513"},
@@ -214,12 +215,15 @@ class SettingsDialog(QDialog):
             or str(PROJECT_ROOT / "cbeta_xml"))
         self.ed_x2p_ebook.setPlaceholderText("CBETA XML 目录（不可为空；空则用默认 cbeta_xml）")
         self.ed_xmlbooks = QLineEdit()
+        self.ed_verify = QLineEdit()
+        self.ed_verify.setPlaceholderText("校验工作目录（独立窗批量生成+校验，默认 cbeta_verify）")
         self.cb_preset = self._no_wheel_until_focused(QComboBox())
         self._reload_preset_combo()
         x2p_form.addRow("默认来源", self.src_default_box)
         x2p_form.addRow("自制程序路径", self._dir_row(self.ed_x2p))
         x2p_form.addRow("CBETA XML 目录", self._dir_row(self.ed_x2p_ebook))
         x2p_form.addRow("自制电子书", self._dir_row(self.ed_xmlbooks))
+        x2p_form.addRow("校验工作目录", self._dir_row(self.ed_verify))
         x2p_form.addRow("默认预设", self.cb_preset)
         hint = QLabel("自制：电子书由程序根据官方 XML 制作。默认预设用于来源选自制、且未另选预设时。")
         hint.setWordWrap(True)
@@ -471,6 +475,8 @@ class SettingsDialog(QDialog):
         self.ed_ebooks.setText(self._native_path(c.get("official_ebooks_dir", "")))
         self.ed_xmlbooks.setText(self._native_path(
             c.get("xml_to_ebooks_dir", str(PROJECT_ROOT / "cbeta_ebooks_xml"))))
+        self.ed_verify.setText(self._native_path(
+            c.get("verify_dir", str(PROJECT_ROOT / "cbeta_verify"))))
         self.ed_output.setText(self._native_path(c.get("output_dir", "my_books")))
         iv = c.get("update_interval", "weekly")
         if iv in ["daily", "weekly", "monthly", "manual"]:
@@ -997,6 +1003,8 @@ class SettingsDialog(QDialog):
         c["official_ebooks_dir"] = self._native_path(self.ed_ebooks.text().strip())
         c["xml_to_ebooks_dir"] = self._native_path(self.ed_xmlbooks.text().strip()) \
             or str(PROJECT_ROOT / "cbeta_ebooks_xml")
+        c["verify_dir"] = self._native_path(self.ed_verify.text().strip()) \
+            or str(PROJECT_ROOT / "cbeta_verify")
         c["output_dir"] = self.ed_output.text().strip()
         c["update_interval"] = self.cb_interval.currentText()
         c["default_source"] = "xml" if self.rb_src_made.isChecked() else "official"

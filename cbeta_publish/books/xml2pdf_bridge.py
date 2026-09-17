@@ -347,3 +347,37 @@ def ensure_one(work: str, fmt: str, base_dir, config, preset=None,
     if got is not None and got.exists():
         return got, False
     return None, False
+
+
+# ---------- 校验（独立窗批量生成+校验，publish 只管送单与入库） ----------
+
+VERIFY_DEFAULT_DIR = str(PROJECT_ROOT / "cbeta_verify")
+
+
+def verify_dir(config) -> Path:
+    """校验工作根（可配；与自制书目录分离，验证报告不污染复用池）。"""
+    return _abs((config or {}).get("verify_dir") or VERIFY_DEFAULT_DIR)
+
+
+def verify_coll_dir(config, slug: str) -> Path:
+    """某丛书的校验目录（产物 `{id 书名}.{fmt}`＋`{stem}_verify_report.txt` 落这里）。"""
+    return verify_dir(config) / (_safe_stem(slug) or "coll")
+
+
+def verify_report_pass(path) -> bool | None:
+    """判读上游 `{stem}_verify_report.txt`：有 `[FAIL]`→False；
+    ≥1 个 `[OK]` 且无 `[FAIL]`→True；否则 None（未判定，`[--]`/空报告，需人工看）。"""
+    try:
+        text = Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    ok = fail = 0
+    for ln in text.splitlines():
+        s = ln.strip()
+        if "[FAIL]" in s:
+            fail += 1
+        elif "[OK]" in s:
+            ok += 1
+    if fail:
+        return False
+    return True if ok else None

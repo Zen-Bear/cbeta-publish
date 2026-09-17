@@ -4084,6 +4084,12 @@ class MainWindow(QMainWindow):
         act_xml2pdf=m_tools.addAction("xml2pdf 独立窗…")
         act_xml2pdf.setToolTip("打开 E:/dev/cbeta/xml2pdf 独立转换窗")
         act_xml2pdf.triggered.connect(self._open_xml2pdf_window)
+        act_verify_send=m_tools.addAction("送当前丛书去校验…")
+        act_verify_send.setToolTip("把当前丛书单发往独立窗批量生成+校验（产物与报告落校验目录）")
+        act_verify_send.triggered.connect(self._send_coll_to_verify)
+        act_verify_import=m_tools.addAction("导入校验通过项…")
+        act_verify_import.setToolTip("把校验目录中验证通过的书拷入自制书目录（平展命名）")
+        act_verify_import.triggered.connect(self._import_verified)
         # 视图 → 布局（三栏含选书区 / 二栏隐藏选书区）
         from PySide6.QtGui import QActionGroup
         m_view=bar.addMenu("视图")
@@ -4108,6 +4114,148 @@ class MainWindow(QMainWindow):
             subprocess.Popen([sys.executable,"-m","pycbeta.gui"], cwd=str(x2p))
         except Exception as e:
             QMessageBox.warning(self,"启动失败",str(e))
+
+    def _verify_coll(self):
+        """当前丛书 (data, d, works)；占位/空/读失败返回 None（已弹窗）。"""
+        data=self.coll_combo.currentData()
+        if self._is_coll_placeholder(data):
+            self._wrap_box(QMessageBox.Warning, "失败", "请选择一个丛书")
+            return None
+        d=self._coll_dict(data)
+        if d is None:
+            try:
+                d=self._read_coll(Path(data))
+            except Exception as e:
+                self._wrap_box(QMessageBox.Warning, "失败", f"读取丛书失败 {e}")
+                return None
+        works=d.get("work_ids",[]) or []
+        if not works:
+            self._wrap_box(QMessageBox.Warning, "失败", "丛书为空")
+            return None
+        return data, d, works
+
+    def _send_coll_to_verify(self):
+        """一键送校验：书单写校验目录 ids 文件，独立窗预填后自动开跑（detached）。"""
+        import subprocess, sys
+        from cbeta_publish.books import xml2pdf_bridge as _b
+        got=self._verify_coll()
+        if got is None:
+            return
+        _data, d, works=got
+        if getattr(self, "_tmp_preset", None) is not None:
+            self._wrap_box(QMessageBox.Warning, "临时预设未保存",
+                           "「调整…」的临时预设尚未保存，请先保存（覆盖/另存为）再送校验。")
+            return
+        x2p=Path((self.config.get("xml2pdf",{}) or {}).get("path","") or "E:/dev/cbeta/xml2pdf")
+        if not x2p.exists():
+            self._wrap_box(QMessageBox.Warning,"未找到",f"xml2pdf 路径不存在：{x2p}")
+            return
+        slug=str(d.get("id") or d.get("name") or "")
+        vdir=_b.verify_coll_dir(self.config, slug)
+        try:
+            vdir.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            self._wrap_box(QMessageBox.Warning,"失败",f"校验目录不可写：{e}")
+            return
+        ids_file=vdir/f"{vdir.name}_ids.txt"
+        try:
+            ids_file.write_text("\n".join(works)+"\n", encoding="utf-8")
+        except Exception as e:
+            self._wrap_box(QMessageBox.Warning,"失败",f"书单写失败：{e}")
+            return
+        argv=[sys.executable,"-m","pycbeta.gui","--ids-file",str(ids_file),
+              "--out",str(vdir),"--verify","--autostart"]
+        preset_name=(self.config.get("xml2pdf",{}) or {}).get("preset","")
+        if preset_name:
+            argv+=["--preset",preset_name]
+        try:
+            subprocess.Popen(argv, cwd=str(x2p))
+        except Exception as e:
+            self._wrap_box(QMessageBox.Warning,"启动失败",str(e))
+            return
+        self.detail.setText(f"已送独立窗校验 {len(works)} 部 → {vdir}")
+        self._wrap_box(QMessageBox.Information,"已发送",
+                       f"已送独立窗校验 {len(works)} 部，产物与报告在：\n{vdir}\n"
+                       f"校验完成后用「导入校验通过项…」入库。")
+
+    def _import_verified(self):
+        """一键导入通过项：校验目录报告判通过 → `{id 书名}.{fmt}` 拷入自制书目录改名平展。"""
+        import shutil
+        from cbeta_publish.books import xml2pdf_bridge as _b
+        got=self._verify_coll()
+        if got is None:
+            return
+        _data, d, works=got
+        slug=str(d.get("id") or d.get("name") or "")
+        vdir=_b.verify_coll_dir(self.config, slug)
+        if not vdir.is_dir():
+            self._wrap_box(QMessageBox.Information,"暂无校验","校验目录不存在，请先送校验。")
+            return
+        reports=sorted(vdir.glob("*_verify_report.txt"))
+        if not reports:
+            self._wrap_box(QMessageBox.Information,"暂无校验","暂无校验报告，请等独立窗跑完。")
+            return
+        base=_b.xml_books_dir(self.config)
+        try:
+            base.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+        SFX="_verify_report.txt"
+        ok_list, fail_list, undet_list, skip_list=[], [], [], []
+        dlg, update, pstate=self._make_progress("导入校验通过项", max(1,len(reports)))
+        cancelled=False
+        done=0
+        for rp in reports:
+            stem=rp.name[:-len(SFX)] if rp.name.endswith(SFX) else ""
+            hit=next((w for w in works if stem==w or (stem and stem.startswith(w+" "))), None)
+            done_label=f"{stem or rp.name}"
+            if hit is None:
+                skip_list.append(done_label)
+            else:
+                verdict=_b.verify_report_pass(rp)
+                if verdict is True:
+                    copied=[]
+                    for fmt in ("pdf","epub"):
+                        src=vdir/f"{stem}.{fmt}"
+                        if src.is_file():
+                            try:
+                                shutil.copy2(src, base/f"{hit}.{fmt}")
+                                copied.append(fmt)
+                            except Exception as e:
+                                fail_list.append(f"{hit} 拷贝失败: {e}")
+                    if copied:
+                        ok_list.append(f"{hit}（{'/'.join(copied)}）")
+                    else:
+                        fail_list.append(f"{hit} 缺产物")
+                elif verdict is False:
+                    fail_list.append(f"{hit} 校验未通过")
+                else:
+                    undet_list.append(f"{hit} 未判定")
+            done+=1
+            if not update(done, done_label):
+                cancelled=True
+                break
+        try:
+            dlg.close()
+        except Exception:
+            pass
+        if cancelled:
+            self.detail.setText("已取消导入")
+            return
+        self._load_coll_works()
+        parts=[f"入库 {len(ok_list)} 部"]
+        if fail_list:
+            parts.append(f"未通过/失败 {len(fail_list)}")
+        if undet_list:
+            parts.append(f"未判定 {len(undet_list)}（需人工看报告）")
+        if skip_list:
+            parts.append(f"跳过 {len(skip_list)}（不在丛书中）")
+        msg="，".join(parts)+f"\n校验目录：{vdir}"
+        if fail_list:
+            msg+="\n未通过:\n"+"\n".join(fail_list[:5])
+        if undet_list:
+            msg+="\n未判定:\n"+"\n".join(undet_list[:5])
+        self._wrap_box(QMessageBox.Information,"导入完成",msg)
 
     def _open_settings(self):
         from cbeta_publish.gui.settings_dialog import SettingsDialog
