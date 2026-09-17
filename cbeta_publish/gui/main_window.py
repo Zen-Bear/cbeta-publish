@@ -407,6 +407,7 @@ class MainWindow(QMainWindow):
         self.detail=QLabel("")
         self.detail.setWordWrap(True)
         self.detail.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard)
+        self.detail.linkActivated.connect(self._open_publish_link)
         splitter.addWidget(mid)
 
         right=QWidget()
@@ -3414,6 +3415,26 @@ class MainWindow(QMainWindow):
         except Exception as e:
             print(e)
 
+    def _show_made_books(self, header, entries, summary):
+        """在「书籍信息」页签列出刚下载/自制的书籍（每项可点击打开），末行给总结。
+
+        entries: [(work, fmt, path)]；summary: 末行纯文本（如「生成完成 3 部 → …」）。
+        """
+        import html as _html
+        from PySide6.QtCore import QUrl as _QU
+        parts=[f"<b>{_html.escape(header)}</b>"]
+        for w, fmt, p in entries:
+            try:
+                pp=Path(p)
+                label=f"{w} {self._display_title(w)}（{fmt}）"
+                href=_QU.fromLocalFile(str(pp.resolve())).toString()
+                parts.append(f'<a href="{href}">{_html.escape(label)}</a>')
+            except Exception:
+                continue
+        parts.append(_html.escape(summary))
+        self.detail.setText("<br>".join(parts))
+        self.tab_bottom.setCurrentIndex(0)
+
     def _load_coll_works(self):
         data=self.coll_combo.currentData()
         is_placeholder = self._is_coll_placeholder(data)
@@ -3506,7 +3527,7 @@ class MainWindow(QMainWindow):
                 if not exists:
                     lab.setToolTip(f"{fmt.upper()}未下载")
                 else:
-                    lab.setToolTip("")
+                    lab.setToolTip("双击打开")
                 lab.fmt=fmt
                 lab.setAttribute(Qt.WA_TransparentForMouseEvents, True)
                 hl.addWidget(lab)
@@ -3811,13 +3832,17 @@ class MainWindow(QMainWindow):
         pairs=[(w, f) for w in works for f in fmts]
         ok=self._download_missing(pairs, dest_dir, title="下载/更新")
         st=getattr(self, "_dl_stats", {}) or {}
+        entries=[(w, f, official_ebook_source.local_path(w, f, dest_dir))
+                 for w, f in pairs
+                 if official_ebook_source.local_path(w, f, dest_dir).exists()]
         if not ok:
             failed=st.get("failed") or []
             if failed:
                 QMessageBox.warning(self, "下载失败", f"{len(failed)} 个文件下载失败：\n" + "\n".join(failed[:10]) + (f"\n...共 {len(failed)} 个" if len(failed)>10 else ""))
-            self.detail.setText("下载未全部完成")
+            summary=f"下载未全部完成 {st.get('ok',0)}/{st.get('total',len(pairs))} → {dest_dir}"
         else:
-            self.detail.setText(f"下载完成 {st.get('ok',0)}/{st.get('total',len(pairs))}")
+            summary=f"下载完成 {st.get('ok',0)}/{st.get('total',len(pairs))} → {dest_dir}"
+        self._show_made_books("下载完成", entries, summary)
         self._prompt_save_collection("下载完成，", str(data))
 
     def _on_make_button(self, regen_all):
@@ -3847,14 +3872,17 @@ class MainWindow(QMainWindow):
         ok_map, failed, cancelled = self._ensure_xml_batch(
             works, fmts, title=title, regen_all=bool(regen_all), confirm=False)
         n=sum(len(v) for v in ok_map.values())
+        base=xml2pdf_bridge.xml_books_dir(self.config)
+        entries=[(w, fmt, p) for fmt, m in ok_map.items() for w, p in m.items()]
         if cancelled:
-            self.detail.setText(f"已取消（已完成 {n} 部）")
+            summary=f"已取消（已完成 {n} 部）"
         elif failed:
             self._wrap_box(QMessageBox.Warning, "部分失败",
                            f"完成 {n} 部，失败 {len(failed)}：\n" + "\n".join(failed[:10]))
-            self.detail.setText(f"生成完成 {n} 部，失败 {len(failed)}")
+            summary=f"生成完成 {n} 部，失败 {len(failed)} → {base}"
         else:
-            self.detail.setText(f"{'重制' if regen_all else '生成'}完成 {n} 部 → {xml2pdf_bridge.xml_books_dir(self.config)}")
+            summary=f"{'重制' if regen_all else '生成'}完成 {n} 部 → {base}"
+        self._show_made_books("生成完成" if not regen_all else "重制完成", entries, summary)
         self._load_coll_works()
 
     def _on_download_button(self):

@@ -20,7 +20,7 @@
     "supplement_ttf": "E:/dev/cbeta/xml2pdf/cbeta/CBETA 補充字型/CBETASupplement.ttf",
     "last_collection": "E:\\dev\\cbeta\\publish\\collections\\custom\\测试丛书1.json"
   },
-  "default_source": "xml",
+  "default_source": "official",
   "pdf": {
     "split_pages": 5000
   },
@@ -32,7 +32,7 @@
   },
   "xml2pdf": {
     "path": "E:/dev/cbeta/xml2pdf",
-    "preset": "",
+    "preset": "Publish A5 简体",
     "regen": "missing"
   },
   "catalog": {
