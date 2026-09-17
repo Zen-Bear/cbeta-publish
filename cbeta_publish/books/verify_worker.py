@@ -30,17 +30,17 @@ class VerifyWorker(QThread):
         for i, w in enumerate(self.works, 1):
             if self._stop:
                 break
-            self.progress.emit(i - 1, f"校验 {w} ...", "run")
+            self.progress.emit(i - 1, f"生成并校验 {w} ...", "run")
             report = b.verify_work(w, self.fmts, self.out_dir, self.config,
                                    preset=self.preset, stop=lambda: self._stop)
             verdict = b.verify_report_pass(report) if report is not None else None
             if verdict is True:
                 ok += 1
-                self.progress.emit(i, f"校验 {w} ...通过", "ok")
+                self.progress.emit(i, f"生成并校验 {w} ...通过", "ok")
             elif verdict is False:
                 failed.append(w)
-                self.progress.emit(i, f"校验 {w} ...未通过", "fail")
+                self.progress.emit(i, f"生成并校验 {w} ...未通过", "fail")
             else:
                 failed.append(w)
-                self.progress.emit(i, f"校验 {w} ...未判定", "fail")
+                self.progress.emit(i, f"生成并校验 {w} ...未判定", "fail")
         self.finished_all.emit(ok, total, failed)
