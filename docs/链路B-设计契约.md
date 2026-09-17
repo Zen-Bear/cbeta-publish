@@ -131,8 +131,8 @@ def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=No
   ZIP 按 `部/相对路径` 写入 `{丛书名}_{fmt}.zip`，导出整树拷贝到 `{target}/{work}/`。
   纯 txt 端点（`text/{id}.txt.zip`，不含校注）放 publish 自有 `_EXTRA_DOWNLOADS`，
   vendor 共享层不动。
-- 校验（进程内「当前丛书生成并校验」＋自动/手动导入）：「自制书籍」菜单触发
-  `VerifyWorker` 逐本调 `bridge.verify_work` → 库调用
+- 校验（进程内「生成并校验」＋自动/手动导入）：右栏发布行 `[生成并校验]`
+  （来源=自制时显示）触发 `VerifyWorker` 逐本调 `bridge.verify_work` → 库调用
   `pycbeta.cli.main(["-i", work, "-f", <勾选>, "-o", <vdir>, [--config wrap],
   "--cbeta-ebook", <工作根>, "--verify"])`（上游 `cli.py` 修 work id 校验 `2a10d12`；
   官方基线源目录 `src` 亦按 work id 修正 `16df9cf`：文件→其目录 / 目录→该目录 /
@@ -145,7 +145,9 @@ def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=No
   ≥1 个 `[OK]` 且无 `[FAIL]`→通过；否则未判定）→ 产物按扩展名全收
   （pdf/epub/docx/odt/md/txt），通过的拷入自制书目录改名
   `{fmt}/{work}.{fmt}`（入库即被 `ensure_one(missing)` 复用）；不通过/未判定不入库。
-  临时预设未保存时拒绝执行。独立窗（「xml2pdf 独立窗…」）保留为手动工作台。
+  临时预设未保存时拒绝执行。手动导入（菜单「导入校验通过E书…」）优先读当前丛书的
+  `verify_dir/<丛书>/`；无报告时**弹目录选择**，可指向独立窗输出目录（同样兼容两种报告名），
+  便于把独立窗已校验的产物入库。独立窗（「xml2pdf 独立窗…」）保留为手动工作台。
 
 ## 6. 实施清单
 
