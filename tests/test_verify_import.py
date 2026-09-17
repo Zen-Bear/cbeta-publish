@@ -217,17 +217,44 @@ class VerifySendImportTest(unittest.TestCase):
         self.assertTrue(any("入库 1 部" in x for f in self._finishes for x in f),
                         self._finishes)
 
-    def test_import_no_reports(self):
+    def test_import_no_reports_cancel(self):
+        # 本丛书校验目录无报告 → 弹目录选择；取消则什么都不做
+        from PySide6.QtWidgets import QFileDialog
         from cbeta_publish.books import xml2pdf_bridge as b
         vdir = b.verify_coll_dir(self.win.config, "v")
         shutil.rmtree(vdir, ignore_errors=True)
-        vdir.mkdir(parents=True)
+        real = QFileDialog.getExistingDirectory
+        QFileDialog.getExistingDirectory = staticmethod(lambda *a, **k: "")
         boxes, restore = self._patch_common()
         try:
             self.win._import_verified()
         finally:
+            QFileDialog.getExistingDirectory = real
             restore()
-        self.assertTrue(any("暂无校验" in str(a) for a in boxes))
+        self.assertEqual(boxes, [])
+
+    def test_import_from_chosen_dir(self):
+        # 选另一个目录（模拟独立窗输出）→ 递归识别报告并入自制书目录
+        from PySide6.QtWidgets import QFileDialog
+        other = Path(tempfile.mkdtemp())
+        try:
+            (other / "T0001 大般若經.pdf").write_bytes(b"PDF")
+            vd = other / "T0001 大般若經（验证）"
+            vd.mkdir(parents=True)
+            (vd / "T0001_verify_report.txt").write_text(
+                "=== T0001\n  [OK]  docx 缺0 多0\n", encoding="utf-8")
+            real = QFileDialog.getExistingDirectory
+            QFileDialog.getExistingDirectory = staticmethod(lambda *a, **k: str(other))
+            boxes, restore = self._patch_common()
+            try:
+                self.win._import_verified()
+            finally:
+                QFileDialog.getExistingDirectory = real
+                restore()
+            base = Path(self.win.config["xml_to_ebooks_dir"])
+            self.assertEqual((base / "pdf" / "T0001.pdf").read_bytes(), b"PDF")
+        finally:
+            shutil.rmtree(other, ignore_errors=True)
 
 
 if __name__ == "__main__":

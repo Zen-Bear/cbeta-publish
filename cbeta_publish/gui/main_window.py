@@ -517,30 +517,31 @@ class MainWindow(QMainWindow):
         for _i, _rb in enumerate((self.rb_official, self.rb_made)):
             sh.addWidget(_rb)
             self.src_group.addButton(_rb, _i)
-        pg.addWidget(src_box)
-        preset_box=QWidget()
-        ph=QHBoxLayout(preset_box)
-        ph.setContentsMargins(0,0,0,0)
+        sh.addSpacing(10)
+        # 预设下拉 + 调整：紧跟「自制」右侧（仅来源=自制时启用）
         self.lbl_preset=QLabel("预设:")
-        ph.addWidget(self.lbl_preset)
+        sh.addWidget(self.lbl_preset)
         self.cb_preset=QComboBox()
         self.cb_preset.setToolTip("自制书的 xml2pdf 预设（预设目录下的 *.json，出厂默认=对面默认）")
         self.cb_preset.setMinimumWidth(140)
-        ph.addWidget(self.cb_preset, 1)
+        sh.addWidget(self.cb_preset, 1)
         self.btn_preset_edit=QPushButton("调整…")
         self.btn_preset_edit.setToolTip("打开 xml2pdf 选项对话框调整，可覆盖保存或另存为新预设")
         self.btn_preset_edit.setFixedWidth(64)
-        ph.addWidget(self.btn_preset_edit)
-        pg.addWidget(preset_box)
+        sh.addWidget(self.btn_preset_edit)
+        sh.addStretch()
+        pg.addWidget(src_box)
         publish_box=QWidget()
         hb2=QHBoxLayout(publish_box)
         hb2.setContentsMargins(0,0,0,0)
         self.btn_download=QPushButton("下载/更新")
         self.btn_download.setToolTip("下载/更新官方电子书（来源=官方时）")
         self.btn_make=QPushButton("自制")
-        self.btn_make.setToolTip("生成缺失的自制电子书（已有产物直接复用）")
+        self.btn_make.setToolTip("生成缺失的自制电子书（已有书籍直接复用）")
         self.btn_remake=QPushButton("重制")
-        self.btn_remake.setToolTip("重新生成全部自制电子书（忽略已有产物）")
+        self.btn_remake.setToolTip("重新生成全部自制电子书（忽略已有书籍）")
+        self.btn_verify=QPushButton("生成并校验")
+        self.btn_verify.setToolTip("逐本生成并校验自制电子书，跑完自动导入校验通过项")
         self.btn_merge=QPushButton("合并")
         self.btn_merge.setToolTip("PDF/ePub合并成一个文件（单一格式，允许分册）")
         self.btn_zip=QPushButton("ZIP")
@@ -548,10 +549,10 @@ class MainWindow(QMainWindow):
         self.btn_export=QPushButton("导出")
         self.btn_export.setToolTip("拷贝到指定目录")
         hb2.addWidget(self.btn_merge); hb2.addWidget(self.btn_zip); hb2.addWidget(self.btn_export)
-        hb2.addWidget(self.btn_download); hb2.addWidget(self.btn_make); hb2.addWidget(self.btn_remake)
+        hb2.addWidget(self.btn_download)
+        hb2.addWidget(self.btn_make); hb2.addWidget(self.btn_remake); hb2.addWidget(self.btn_verify)
         hb2.addStretch()
         pg.addWidget(publish_box)
-        sh.addStretch()
         self._sync_source_preset_ui()   # 依赖上面按钮存在（来源=自制时换按钮）
         rv.addWidget(publish_group)
         # 右下页签：① 书籍信息 ② 丛书信息 ③ E书目录（原「下载记录」页签已删除）
@@ -694,6 +695,7 @@ class MainWindow(QMainWindow):
         self.btn_download.clicked.connect(self._on_download_button)
         self.btn_make.clicked.connect(lambda: self._on_make_button(False))
         self.btn_remake.clicked.connect(lambda: self._on_make_button(True))
+        self.btn_verify.clicked.connect(self._send_coll_to_verify)
         self.btn_merge.clicked.connect(self._merge)
         self.btn_zip.clicked.connect(self._zip)
         self.btn_export.clicked.connect(self._export)
@@ -1856,6 +1858,7 @@ class MainWindow(QMainWindow):
         self.btn_download.setVisible(not on)
         self.btn_make.setVisible(on)
         self.btn_remake.setVisible(on)
+        self.btn_verify.setVisible(on)
 
     def _on_source_changed(self, *_):
         # 右栏来源切换：sticky 写回全局，下次默认上次的选择
@@ -4133,11 +4136,8 @@ class MainWindow(QMainWindow):
         act_xml2pdf=m_tools.addAction("xml2pdf 独立窗…")
         act_xml2pdf.setToolTip("打开 E:/dev/cbeta/xml2pdf 独立转换窗")
         act_xml2pdf.triggered.connect(self._open_xml2pdf_window)
-        act_verify_send=m_tools.addAction("当前丛书生成并校验…")
-        act_verify_send.setToolTip("把当前丛书单发往独立窗批量生成+校验（产物与报告落校验目录）")
-        act_verify_send.triggered.connect(self._send_coll_to_verify)
-        act_verify_import=m_tools.addAction("导入校验通过E书")
-        act_verify_import.setToolTip("把校验目录中验证通过的书拷入自制书目录（平展命名）")
+        act_verify_import=m_tools.addAction("导入校验通过E书…")
+        act_verify_import.setToolTip("从校验目录（或另选目录）把验证通过的书拷入自制书目录")
         act_verify_import.triggered.connect(self._import_verified)
         # 视图 → 布局（三栏含选书区 / 二栏隐藏选书区）
         from PySide6.QtGui import QActionGroup
@@ -4307,7 +4307,11 @@ class MainWindow(QMainWindow):
         return {"ok": ok_list, "fail": fail_list, "undet": undet_list, "skip": skip_list}
 
     def _import_verified(self):
-        """手动导入：校验目录报告判通过 → 产物拷入自制书目录（进程内校验后的重试入口）。"""
+        """手动导入：校验目录报告判通过 → 产物拷入自制书目录。
+
+        - 当前丛书的 `verify_dir/<丛书>/` 有报告则直接导入；
+        - 否则弹目录选择（用于导入 xml2pdf 独立窗输出目录里已校验的书）。
+        """
         from cbeta_publish.books import xml2pdf_bridge as _b
         got=self._verify_coll()
         if got is None:
@@ -4315,13 +4319,21 @@ class MainWindow(QMainWindow):
         _data, d, works=got
         slug=str(d.get("id") or d.get("name") or "")
         vdir=_b.verify_coll_dir(self.config, slug)
-        if not vdir.is_dir():
-            self._wrap_box(QMessageBox.Information,"暂无校验","校验目录不存在，请先校验。")
-            return
-        reports=_b.verify_reports(vdir)
+        reports=_b.verify_reports(vdir) if vdir.is_dir() else []
         if not reports:
-            self._wrap_box(QMessageBox.Information,"暂无校验","暂无校验报告，请先生成并校验。")
-            return
+            # 独立窗产物：让用户指定其「输出目录」，在其中递归找 {stem}_verify_report.txt / report.txt
+            from PySide6.QtWidgets import QFileDialog
+            start=str(vdir if vdir.is_dir() else _b.verify_dir(self.config))
+            sel=QFileDialog.getExistingDirectory(self, "选择要导入的校验目录（含 *_verify_report.txt 或 report.txt）", start)
+            if not sel:
+                return
+            vdir=Path(sel)
+            reports=_b.verify_reports(vdir)
+            if not reports:
+                self._wrap_box(QMessageBox.Information, "暂无校验报告",
+                               f"该目录下未找到校验报告：\n{vdir}\n"
+                               f"（需要 `*_verify_report.txt` 或 `（验证）/report.txt`）")
+                return
         base=_b.xml_books_dir(self.config)
         dlg, update, pstate=self._make_progress("导入校验通过E书", max(1,len(reports)))
         imp=self._do_import_verified(works, vdir, base, update=update)
@@ -4581,7 +4593,7 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         preset=self._run_preset()
-        # 「调整…」临时预设（本次有效）：已有产物是旧预设生成的，必须重新生成才算生效
+        # 「调整…」临时预设（本次有效）：已有书籍是旧预设生成的，必须重新生成才算生效
         if getattr(self, "_tmp_preset", None) is not None:
             regen_all=True
         ok_map={f: {} for f in fmts}
