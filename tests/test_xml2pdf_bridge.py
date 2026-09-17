@@ -396,6 +396,25 @@ class BridgeVerifyWorkTest(unittest.TestCase):
         self.assertEqual(got.get("T0001"), "T0001_verify_report.txt")
         self.assertEqual(got.get("T0002"), "report.txt")
 
+    def test_verify_reports_dedupes_same_stem_newest(self):
+        # 同一书旧（独立窗）与新（CLI）报告并存：只取最新一份，不重复计数
+        import os
+        import cbeta_publish.books.xml2pdf_bridge as b
+        d = self.dir / "v4"
+        vd = d / "T0003 法華（验证）"
+        vd.mkdir(parents=True)
+        old = vd / "T0003_verify_report.txt"
+        new = vd / "report.txt"
+        old.write_text("=== T0003\n [OK]\n", encoding="utf-8")
+        new.write_text("=== T0003\n [FAIL]\n", encoding="utf-8")
+        os.utime(old, (1000, 1000))
+        os.utime(new, (2000, 2000))
+        got = b.verify_reports(d)
+        self.assertEqual(len(got), 1)
+        rp, stem = got[0]
+        self.assertEqual((stem, rp.name), ("T0003", "report.txt"))
+        self.assertFalse(b.verify_report_pass(rp))    # 取的是新的 FAIL
+
 
 if __name__ == "__main__":
     unittest.main()

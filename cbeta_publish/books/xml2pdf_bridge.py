@@ -384,6 +384,13 @@ def verify_work(work: str, fmts, out_dir, config: dict, preset=None, stop=None) 
     _ensure_path(str(x2p))
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    # 清掉本书旧的 `（验证）` 目录，避免新旧报告混淆（独立窗旧报告会被误读）
+    try:
+        import shutil as _sh
+        for d in out_dir.glob(f"{work}*（验证）"):
+            _sh.rmtree(d, ignore_errors=True)
+    except Exception:
+        pass
     fmt_arg = ",".join(f for f in (fmts or []) if f) or "pdf"
     run_wrap = write_run_wrapper(config, preset) if preset else None
     argv = ["-i", str(work), "-f", fmt_arg, "-o", str(out_dir), "--verify"]
@@ -409,41 +416,53 @@ def verify_work(work: str, fmts, out_dir, config: dict, preset=None, stop=None) 
     return report
 
 
+def _newest_report(paths):
+    """从候选报告里取最新的一份（mtime 大者优先；同刻优先 report.txt＝进程内 CLI）。"""
+    best = None
+    for p in paths:
+        try:
+            mt = p.stat().st_mtime
+        except OSError:
+            mt = 0.0
+        key = (mt, p.name == "report.txt")
+        if best is None or key > best[0]:
+            best = (key, p)
+    return best[1] if best else None
+
+
 def find_verify_report(out_dir, work: str) -> Path | None:
-    """在 out_dir 下找某书的校验报告（兼容两种命名）：
+    """在 out_dir 下找某书最新校验报告（兼容两种命名）：
     `{id 书名}（验证）/{stem}_verify_report.txt`（独立窗）与 `（验证）/report.txt`（CLI）。"""
     out = Path(out_dir)
+    cands = []
     exact = out / f"{work}_verify_report.txt"
     if exact.is_file():
-        return exact
+        cands.append(exact)
     try:
         for d in out.glob(f"{work}*（验证）"):
             for name in (f"{work}_verify_report.txt", "report.txt"):
                 p = d / name
                 if p.is_file():
-                    return p
+                    cands.append(p)
     except Exception:
         pass
-    try:
-        for d in out.glob("*（验证）"):
-            if d.name.startswith(work):
-                p = d / "report.txt"
-                if p.is_file():
-                    return p
-    except Exception:
-        pass
-    return None
+    return _newest_report(cands)
 
 
 def verify_reports(out_dir):
-    """列出 out_dir 下全部校验报告 [(Path, stem)]：
+    """列出 out_dir 下全部校验报告 [(Path, stem)]，**每个 stem 只取最新一份**
+    （同一书可能同时有独立窗的 `{stem}_verify_report.txt` 与 CLI 的 `report.txt`）：
     `*_verify_report.txt` 取文件名 stem；`（验证）/report.txt` 取父目录名前缀。"""
     out = Path(out_dir)
-    found = []
+    by_stem = {}
+    def _collect(p, stem):
+        if not stem:
+            return
+        prev = by_stem.get(stem)
+        by_stem[stem] = p if prev is None else _newest_report([prev, p])
     try:
         for p in out.rglob("*_verify_report.txt"):
-            stem = p.name[:-len("_verify_report.txt")]
-            found.append((p, stem))
+            _collect(p, p.name[:-len("_verify_report.txt")])
     except Exception:
         pass
     try:
@@ -451,11 +470,10 @@ def verify_reports(out_dir):
             parent = p.parent.name
             if parent.endswith("（验证）"):
                 parent = parent[:-len("（验证）")]
-            stem = parent.split(" ", 1)[0] if parent else ""
-            found.append((p, stem))
+            _collect(p, parent.split(" ", 1)[0] if parent else "")
     except Exception:
         pass
-    return found
+    return [(p, stem) for stem, p in by_stem.items()]
 
 
 def verify_report_pass(path) -> bool | None:
