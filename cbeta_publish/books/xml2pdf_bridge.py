@@ -349,7 +349,7 @@ def ensure_one(work: str, fmt: str, base_dir, config, preset=None,
     return None, False
 
 
-# ---------- 校验（独立窗批量生成+校验，publish 只管送单与入库） ----------
+# ---------- 校验（进程内逐本生成+校验；publish 只管跑与入库） ----------
 
 VERIFY_DEFAULT_DIR = str(PROJECT_ROOT / "cbeta_verify")
 
@@ -360,8 +360,102 @@ def verify_dir(config) -> Path:
 
 
 def verify_coll_dir(config, slug: str) -> Path:
-    """某丛书的校验目录（产物 `{id 书名}.{fmt}`＋`{stem}_verify_report.txt` 落这里）。"""
+    """某丛书的校验目录（产物 `{id 书名}.{fmt}`＋报告落这里/其 `（验证）/` 子目录）。"""
     return verify_dir(config) / (_safe_stem(slug) or "coll")
+
+
+def verify_work(work: str, fmts, out_dir, config: dict, preset=None, stop=None) -> Path | None:
+    """进程内逐本校验：跑 `pycbeta.cli.main([... --verify])`，产物与报告落 out_dir。
+
+    - 有预设时经 `write_run_wrapper` 包临时 run.json（保留仓库主题），用后删。
+    - 报告：CLI 写 `{id 书名}（验证）/report.txt`（GUI 写 `{stem}_verify_report.txt`）；
+      本函数返回实际报告 Path（存在）或 None。
+    """
+    if stop is not None:
+        try:
+            if stop():
+                return None
+        except Exception:
+            pass
+    x2p = _x2p_root(config)
+    if not x2p.exists():
+        print("xml2pdf path not found", x2p)
+        return None
+    _ensure_path(str(x2p))
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    fmt_arg = ",".join(f for f in (fmts or []) if f) or "pdf"
+    run_wrap = write_run_wrapper(config, preset) if preset else None
+    argv = ["-i", str(work), "-f", fmt_arg, "-o", str(out_dir), "--verify"]
+    if run_wrap is not None:
+        argv += ["--config", str(run_wrap)]
+    elif preset:
+        argv += ["--config", str(preset)]
+    argv += ["--cbeta-ebook", str(xml_work_dir(config))]
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf):
+            code = _run_cli(argv)
+    except Exception as e:
+        print("pycbeta verify fail", e)
+        return None
+    finally:
+        if run_wrap is not None:
+            remove_temp_preset(run_wrap)
+    report = find_verify_report(out_dir, str(work))
+    if report is None:
+        tail = (buf.getvalue() or "")[-500:].strip()
+        print("pycbeta verify no report", code, tail)
+    return report
+
+
+def find_verify_report(out_dir, work: str) -> Path | None:
+    """在 out_dir 下找某书的校验报告（兼容两种命名）：
+    `{id 书名}（验证）/{stem}_verify_report.txt`（独立窗）与 `（验证）/report.txt`（CLI）。"""
+    out = Path(out_dir)
+    exact = out / f"{work}_verify_report.txt"
+    if exact.is_file():
+        return exact
+    try:
+        for d in out.glob(f"{work}*（验证）"):
+            for name in (f"{work}_verify_report.txt", "report.txt"):
+                p = d / name
+                if p.is_file():
+                    return p
+    except Exception:
+        pass
+    try:
+        for d in out.glob("*（验证）"):
+            if d.name.startswith(work):
+                p = d / "report.txt"
+                if p.is_file():
+                    return p
+    except Exception:
+        pass
+    return None
+
+
+def verify_reports(out_dir):
+    """列出 out_dir 下全部校验报告 [(Path, stem)]：
+    `*_verify_report.txt` 取文件名 stem；`（验证）/report.txt` 取父目录名前缀。"""
+    out = Path(out_dir)
+    found = []
+    try:
+        for p in out.rglob("*_verify_report.txt"):
+            stem = p.name[:-len("_verify_report.txt")]
+            found.append((p, stem))
+    except Exception:
+        pass
+    try:
+        for p in out.rglob("report.txt"):
+            parent = p.parent.name
+            if parent.endswith("（验证）"):
+                parent = parent[:-len("（验证）")]
+            stem = parent.split(" ", 1)[0] if parent else ""
+            found.append((p, stem))
+    except Exception:
+        pass
+    return found
 
 
 def verify_report_pass(path) -> bool | None:

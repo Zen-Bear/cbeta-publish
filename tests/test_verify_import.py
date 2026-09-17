@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
-"""一键送校验 / 导入通过项：argv 组装、报告判定、入库改名平展。"""
+"""进程内生成并校验 / 自动+手动导入：报告判定、两种命名、入库改名、argv。"""
 import json
 import os
 import shutil
-import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -94,55 +93,92 @@ class VerifySendImportTest(unittest.TestCase):
     def tearDownClass(cls):
         shutil.rmtree(cls.tmp, ignore_errors=True)
 
+    def setUp(self):
+        # 每个用例独立：清校验目录与自制书目录
+        from cbeta_publish.books import xml2pdf_bridge as b
+        shutil.rmtree(b.verify_coll_dir(self.win.config, "v"), ignore_errors=True)
+        shutil.rmtree(Path(self.win.config["xml_to_ebooks_dir"]), ignore_errors=True)
+
     def _patch_common(self):
         win = self.win
         real_box = win._wrap_box
         real_prog = win._make_progress
         boxes = []
+        self._finishes = []
         win._wrap_box = lambda *a, **k: boxes.append(a) or None
-        win._make_progress = lambda title, total: (
-            None, lambda *a, **k: True, {"finish": lambda *a, **k: None})
+
+        def fake_prog(title, total):
+            def finish(lines=None, *a, **k):
+                self._finishes.append([str(x) for x in (lines or [])])
+            return None, (lambda *a, **k: True), {"finish": finish}
+        win._make_progress = fake_prog
+
         def restore():
             win._wrap_box = real_box
             win._make_progress = real_prog
         return boxes, restore
 
-    def test_send_builds_argv(self):
+    def _patch_verify(self, verdict_lines="=== T0001\n  [OK]  docx 缺0 多0\n"):
+        """替换 bridge.verify_work：写出报告与产物，模拟进程内校验成功。"""
+        import cbeta_publish.books.xml2pdf_bridge as b
+        real = b.verify_work
+        calls = []
+
+        def fake(work, fmts, out_dir, config, preset=None, stop=None):
+            calls.append((work, list(fmts), str(out_dir)))
+            out = Path(out_dir)
+            out.mkdir(parents=True, exist_ok=True)
+            (out / f"{work} 大般若經.pdf").write_bytes(b"PDF")
+            vd = out / f"{work} 大般若經（验证）"
+            vd.mkdir(parents=True, exist_ok=True)
+            rp = vd / "report.txt"
+            rp.write_text(verdict_lines, encoding="utf-8")
+            return rp
+        b.verify_work = fake
+        return calls, lambda: setattr(b, "verify_work", real)
+
+    def test_send_runs_inprocess_and_autoimports(self):
         win = self.win
         boxes, restore = self._patch_common()
-        calls = []
-        real_popen = subprocess.Popen
-        subprocess.Popen = lambda argv, **k: calls.append((list(argv), k)) or None
+        calls, restore_v = self._patch_verify()
         try:
             win._send_coll_to_verify()
         finally:
-            subprocess.Popen = real_popen
+            restore_v()
             restore()
-        self.assertEqual(len(calls), 1)
-        argv, kw = calls[0]
-        self.assertEqual(argv[1:3], ["-m", "pycbeta.gui"])
-        self.assertIn("--verify", argv)
-        self.assertIn("--autostart", argv)
-        self.assertNotIn("--preset", argv)   # 出厂默认不传
-        self.assertEqual(argv[argv.index("--formats") + 1], "pdf")   # 随右栏勾选
-        ids = Path(argv[argv.index("--ids-file") + 1])
-        self.assertEqual(ids.read_text(encoding="utf-8").split(), ["T0001", "T0002"])
-        self.assertEqual(Path(argv[argv.index("--out") + 1]),
-                         Path(win.config["verify_dir"]) / "v")
-        self.assertTrue(any("已送" in str(a) for a in boxes))
+        self.assertEqual(len(calls), 2)                     # 逐本调用
+        self.assertEqual(calls[0][1], ["pdf"])              # 随右栏勾选
+        self.assertEqual(calls[0][2], str(Path(win.config["verify_dir"]) / "v"))
+        base = Path(win.config["xml_to_ebooks_dir"])
+        self.assertEqual((base / "pdf" / "T0001.pdf").read_bytes(), b"PDF")  # 自动导入
+        self.assertTrue((base / "pdf" / "T0002.pdf").exists())
+
+    def test_send_reports_failure(self):
+        # 报告含 [FAIL] → 不入库
+        import cbeta_publish.books.xml2pdf_bridge as b
+        win = self.win
+        boxes, restore = self._patch_common()
+        calls, restore_v = self._patch_verify("=== T0001\n  [FAIL] docx 缺3 多1\n")
+        base = Path(win.config["xml_to_ebooks_dir"])
+        for w in ("T0001", "T0002"):
+            (base / "pdf" / f"{w}.pdf").unlink(missing_ok=True)
+        try:
+            win._send_coll_to_verify()
+        finally:
+            restore_v()
+            restore()
+        self.assertFalse((base / "pdf" / "T0001.pdf").exists())
 
     def test_send_blocks_on_tmp_preset(self):
         win = self.win
         boxes, restore = self._patch_common()
-        calls = []
-        real_popen = subprocess.Popen
-        subprocess.Popen = lambda *a, **k: calls.append(a) or None
+        calls, restore_v = self._patch_verify()
         win._tmp_preset = Path(self.tmp / "tmp.json")
         try:
             win._send_coll_to_verify()
         finally:
             del win._tmp_preset
-            subprocess.Popen = real_popen
+            restore_v()
             restore()
         self.assertEqual(calls, [])
         self.assertTrue(any("临时预设" in str(a) for a in boxes))
@@ -178,7 +214,8 @@ class VerifySendImportTest(unittest.TestCase):
         self.assertEqual((base / "pdf" / "T0001.pdf").read_bytes(), b"PDF")    # 通过入库改名
         self.assertEqual((base / "docx" / "T0001.docx").read_bytes(), b"DOCX")  # 多格式都入
         self.assertFalse((base / "epub" / "T0002.epub").exists())               # 未通过不入库
-        self.assertTrue(any("入库 1 部" in str(a) for a in boxes), boxes)
+        self.assertTrue(any("入库 1 部" in x for f in self._finishes for x in f),
+                        self._finishes)
 
     def test_import_no_reports(self):
         from cbeta_publish.books import xml2pdf_bridge as b

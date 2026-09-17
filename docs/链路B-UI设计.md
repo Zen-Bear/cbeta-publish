@@ -125,31 +125,31 @@
    生成/下载失败即中止该操作。
 5. 合成/ZIP/导出（不变；说明页带第 5 节注明）。
 
-## 8. 一键送校验（「自制书籍」菜单 → 独立窗 → 导入入库）
+## 8. 生成并校验（「自制书籍」菜单，进程内，跑完自动导入）
 
-菜单「自制书籍」三项（`main_window._send_coll_to_verify` / `_import_verified`）：
+菜单「自制书籍」三项（`main_window._send_coll_to_verify` / `_import_verified`；
+「xml2pdf 独立窗…」保留为手动全选项工作台，不参与自动流程）：
 
 **「当前丛书生成并校验…」**
 1. 前置拦截（依次弹窗）：占位/空丛书/读失败 → 选丛书；**临时预设未保存**
-   （`_tmp_preset` 非空）→ 须先在「调整…」里覆盖/另存为（`[调整…]` 旁有"（临时）"标记）。
+   （`_tmp_preset` 非空）→ 须先在「调整…」里覆盖/另存为；无勾选格式 → 提示。
 2. 校验目录 `verify_dir/<丛书>/`（`bridge.verify_coll_dir`；默认 `<工程>/cbeta_verify`，
-   与自制书目录分离），书单写 `{slug}_ids.txt`（work_ids 一行一部）。
-3. detached 子进程（`cwd=<x2p>`，publish 不等它）：
-   `python -m pycbeta.gui --ids-file <ids> --out <vdir> [--preset <全局默认预设>] --formats <勾选格式> --verify --autostart`
-   - `--preset` 传全局 `xml2pdf.preset` **文件名**（如 `my.json`）；上游匹配 stem/文件名/
-     绝对路径三种（`xml2pdf@7258b65`＋文件名归一化），不存在则保持原选中（静默）。
-   - `--formats` 传右栏勾选（如 `pdf,epub`），覆盖预设里的「输出格式」，保证产出与右栏一致。
-   - 独立窗内：预填 ids/out/preset/formats、勾校验、**自动开跑**；正式产物 `{id 书名}.{fmt}`
-     落校验目录顶层，逐本报告 `{stem}_verify_report.txt` 落 `{id 书名}（验证）/` 子目录。
-4. 发送后详情行 + "已发送"弹窗（提示：校验完成后用「导入校验通过E书」入库）。
+   与自制书目录分离）。
+3. **进程内逐本**：`VerifyWorker(QThread)` 调 `bridge.verify_work(work, fmts, vdir, config, preset)`
+   → 库调用 `pycbeta.cli.main(["-i", work, "-f", "pdf,epub", "-o", vdir, [--config wrap], "--cbeta-ebook", …, "--verify"])`
+   （上游 `cli.py` 修了 work id 校验；有预设时套临时 run.json 保主题）。
+   进度窗逐本「校验中/通过/未通过」（可取消，本与本之间生效）。
+   正式产物 `{id 书名}.{fmt}` 落校验目录顶层，报告落 `{id 书名}（验证）/`。
+4. **跑完自动导入**通过项（下方规则），进度窗总结「校验完成 x/y → vdir；已自动导入 n 部 → base」等。
 
-**「导入校验通过E书」**
-- 递归读 `*_verify_report.txt`（`bridge.verify_report_pass`）：有 `[FAIL]`→不通过；
-  ≥1 个 `[OK]` 且无 `[FAIL]`→通过；否则未判定（`[--]`/读失败，人工处理）。
-- 报告 stem（work id）匹配丛书书单；产物业按扩展名全收（pdf/epub/docx/odt/md/txt），
-  在校验目录顶层按 `{stem}*{ext}` 找。通过的拷入自制书目录并改名 `{fmt}/{work}.{fmt}`
-  （入库即被 `ensure_one(missing)` 复用）；不通过/未判定不入库，人工回独立窗看报告
-  （进度窗复用下载窗组件）。
+**「导入校验通过E书」（手动重试入口）**
+- 报告兼容两种命名：`{stem}_verify_report.txt`（独立窗）与 `report.txt`（CLI，
+  work 取父目录 `{id 书名}（验证）` 首 token）——`bridge.verify_reports`。
+- `bridge.verify_report_pass` 判读：有 `[FAIL]`→不通过；≥1 个 `[OK]` 且无 `[FAIL]`→通过；
+  否则未判定（`[--]`/读失败，人工处理）。
+- 产物按扩展名全收（pdf/epub/docx/odt/md/txt），在校验目录顶层按 `{stem}*{ext}` 找；
+  通过的拷入自制书目录改名 `{fmt}/{work}.{fmt}`（入库即被 `ensure_one(missing)` 复用）；
+  不通过/未判定不入库。
 
 ## 9. 不做
 
