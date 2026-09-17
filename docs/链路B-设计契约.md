@@ -120,6 +120,12 @@ def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=No
 → ebook_merger 单一格式合并 / ZIP 打包 / 拷贝导出
 ```
 - 说明页：来源=自制时追加一句「电子书由程序根据官方XML制作。」；官方不加。
+- 打包格式（ZIP/导出点后弹窗选，独立于合并格式勾选）：官方源 7 种
+ （`PACK_FORMATS`：pdf/epub 单文件＋html/docx/odt/txt/txt_notes 目录型），
+  自制源仅 pdf/epub。目录型只打包不合并：
+  ZIP 按 `部/相对路径` 写入 `{丛书名}_{fmt}.zip`，导出整树拷贝到 `{target}/{work}/`。
+  纯 txt 端点（`text/{id}.txt.zip`，不含校注）放 publish 自有 `_EXTRA_DOWNLOADS`，
+  vendor 共享层不动。
 
 ## 6. 实施清单
 

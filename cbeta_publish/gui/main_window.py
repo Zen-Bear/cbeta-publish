@@ -4627,10 +4627,43 @@ class MainWindow(QMainWindow):
         else:
             QMessageBox.warning(self,"失败", "合并失败:\n" + "\n".join(failed))
 
+    def _pack_avail_fmts(self):
+        """打包（ZIP/导出）可选格式：官方源 7 种，自制源仅 pdf/epub。"""
+        from cbeta_publish.books import official_ebook_source
+        if self._run_source() == "xml":
+            return ["pdf", "epub"]
+        return list(official_ebook_source.PACK_FORMATS)
+
+    def _choose_pack_fmts(self):
+        """ZIP/导出格式多选（独立于合并格式勾选；预选=当前勾选交集）。
+        返回 [fmt]（空即全不选）；取消返回 None。"""
+        from PySide6.QtWidgets import QDialog, QVBoxLayout, QCheckBox, QDialogButtonBox
+        avail = self._pack_avail_fmts()
+        pre = set(self._checked_fmts())
+        labels = {"txt": "txt（不含校注）", "txt_notes": "txt_notes（含校注）"}
+        dlg = QDialog(self)
+        dlg.setWindowTitle("选择打包格式")
+        lay = QVBoxLayout(dlg)
+        boxes = []
+        for f in avail:
+            b = QCheckBox(labels.get(f, f))
+            b.setChecked(f in pre)
+            lay.addWidget(b)
+            boxes.append((f, b))
+        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        btns.accepted.connect(dlg.accept)
+        btns.rejected.connect(dlg.reject)
+        lay.addWidget(btns)
+        if dlg.exec() != QDialog.Accepted:
+            return None
+        return [f for f, b in boxes if b.isChecked()]
+
     def _zip(self):
-        fmts=self._checked_fmts()
+        fmts = self._choose_pack_fmts()
+        if fmts is None:
+            return
         if not fmts:
-            QMessageBox.warning(self,"失败","请选择格式 pdf/epub")
+            QMessageBox.warning(self, "失败", "请选择格式")
             return
         data=self.coll_combo.currentData()
         if self._is_coll_placeholder(data):
@@ -4721,7 +4754,12 @@ class MainWindow(QMainWindow):
             try:
                 with zipfile.ZipFile(zpath,"w", zipfile.ZIP_DEFLATED) as z:
                     for i,f in enumerate(files):
-                        z.write(f, arcname=f.name)
+                        if f.is_dir():
+                            # 目录型（html/docx/odt/txt/txt_notes 解压后）：walk 按 部/相对路径 写入
+                            for sub in sorted(p for p in f.rglob("*") if p.is_file()):
+                                z.write(sub, arcname=f"{f.name}/{sub.relative_to(f).as_posix()}")
+                        else:
+                            z.write(f, arcname=f.name)
                         done+=1
                         if not update(done, f"[{fmt}] 压缩 {f.name}"):
                             cancelled=True
@@ -4763,9 +4801,11 @@ class MainWindow(QMainWindow):
         return QMessageBox(icon, title, text, buttons, self).exec()
 
     def _export(self):
-        fmts=self._checked_fmts()
+        fmts = self._choose_pack_fmts()
+        if fmts is None:
+            return
         if not fmts:
-            QMessageBox.warning(self,"失败","请选择格式")
+            QMessageBox.warning(self, "失败", "请选择格式")
             return
         data=self.coll_combo.currentData()
         if self._is_coll_placeholder(data):
@@ -4838,8 +4878,13 @@ class MainWindow(QMainWindow):
                 src=Path(src) if src is not None else None
                 if src is not None and src.exists():
                     try:
-                        shutil.copy(src, Path(target)/src.name)
-                        success.append(str(Path(target)/src.name))
+                        if src.is_dir():
+                            dest = Path(target)/src.name
+                            shutil.copytree(src, dest, dirs_exist_ok=True)
+                            success.append(str(dest))
+                        else:
+                            shutil.copy(src, Path(target)/src.name)
+                            success.append(str(Path(target)/src.name))
                     except Exception as e:
                         failed.append(f"{w}.{fmt} 拷贝失败: {e}")
                 else:

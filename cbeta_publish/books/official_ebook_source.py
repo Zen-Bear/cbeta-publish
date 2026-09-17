@@ -10,7 +10,16 @@ from pathlib import Path
 from cbeta_publish._vendor import cbeta_fetch as cf
 from cbeta_publish.catalog.work_id import canonical_work, catalog_path
 
-_ZIP_FORMATS = {"docx", "odt", "html", "txt_notes"}
+_ZIP_FORMATS = {"docx", "odt", "html", "txt_notes", "txt"}
+
+#: 打包（ZIP/导出）可选格式：官方源 7 种全列，自制源仅 pdf/epub（xml2pdf 只产这两种）。
+PACK_FORMATS = ("pdf", "epub", "html", "docx", "odt", "txt", "txt_notes")
+
+#: vendor 共享层之外的官方端点（vendor 标勿改，publish 自有扩展放这里）：
+#: 纯 txt（一部一档，含 `{id}-toc.txt` 目次），见 CBData「下載純文字格式佛典」。
+_EXTRA_DOWNLOADS = {
+    "txt": "https://cbdata.dila.edu.tw/stable/download/text/{id}.txt.zip",
+}
 
 
 def canonical(work: str) -> str:
@@ -27,7 +36,7 @@ def canon_of(work: str) -> str:
 
 
 def ebook_url(fmt: str, canon: str, work: str) -> str:
-    tmpl = cf.DEFAULT_DOWNLOADS.get(fmt)
+    tmpl = cf.DEFAULT_DOWNLOADS.get(fmt) or _EXTRA_DOWNLOADS.get(fmt)
     if not tmpl:
         raise ValueError(f"unknown ebook format: {fmt}")
     return tmpl.format(canon=canon, id=work)
