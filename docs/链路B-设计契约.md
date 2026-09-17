@@ -35,6 +35,17 @@ def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=No
 - `--config` = **run.json 组合单或基础配置 JSON**（`config.user.json`/`presets/*.json`
   快照，对面 `theme.resolve_config_arg` 自动分流：含 RUN_KEYS 当 run.json，
   否则当 `config-json` 槽）；`None` = 对面默认。
+- **面板选项靠预设即可全项生效**（无需逐个传开关）：`engine` / `output.vertical` /
+  `font_lang` 已由对面做**配置回退**（`cli.resolve_engine_vertical_lang`：显式开关 >
+  配置 > 默认），所以 publish 只传 `-i / -f / -o / --config / --cbeta-ebook` 即可。
+  详见 xml2pdf《第三方调用说明》§8.4 / §8.6 / §8.7 / §9。
+- **例外两处**：
+  - `formats` 与 `-f`：由命令行 `-f` 决定（publish 用自己的 pdf/epub 勾选）；
+    打开「调整…」时已把面板「输出格式」预置为该勾选，避免误导。
+  - **CSS 4 槽（样式表）不受 base 配置控制**（属 run.json）；选预设时主题取
+    对面 run.json（未包装 base 模式为出厂）。需要保留自定义主题时用
+    `panel.write_temp_run(run, snapshot_path)` 包一层临时 run.json（`config-json`
+    指向预设）——列为后续可选项，publish 暂未做。
 - `-o` = publish 定名的完整产物路径（平展，见 §4）。
 
 **辅助函数**（同在 `xml2pdf_bridge.py`）：

@@ -354,6 +354,35 @@ class RightPanelTest(unittest.TestCase):
         self.assertFalse(_P(tmp_path).exists())
         self.assertNotIn("本次", win.lbl_preset.text())
 
+    def test_checked_fmts_and_no_option_switches(self):
+        # 右栏勾选 → -f；convert 只传 -i/-f/-o/--config/--cbeta-ebook
+        # （engine/vertical/font_lang 由 xml2pdf 配置回退，无需开关）
+        import tempfile
+        from pathlib import Path as _P
+        import cbeta_publish.books.xml2pdf_bridge as b
+        win = self.win
+        win.chk_pdf.setChecked(True)
+        win.chk_epub.setChecked(True)
+        self.assertEqual(win._checked_fmts(), ["pdf", "epub"])
+        win.chk_epub.setChecked(False)
+        self.assertEqual(win._checked_fmts(), ["pdf"])
+        win.chk_pdf.setChecked(False)
+        win.chk_epub.setChecked(True)
+        self.assertEqual(win._checked_fmts(), ["epub"])
+        win.chk_pdf.setChecked(True)
+        argv = []
+        real = b._run_cli
+        b._run_cli = lambda a: (argv.extend(a) or 0)
+        try:
+            b.convert("T0001", None, _P(tempfile.mkdtemp()) / "T0001.pdf",
+                      win.config, fmt="pdf", preset=None)
+        finally:
+            b._run_cli = real
+        for f in ("--engine", "--vertical", "--font-lang", "--page", "--t2s"):
+            self.assertNotIn(f, argv)
+        self.assertEqual(argv[:6], ["-i", "T0001", "-f", "pdf", "-o", argv[5]])
+        self.assertIn("--cbeta-ebook", argv)
+
     def test_preset_dialog_opens(self):
         # 上游 XmlOptionsDialog 可实例化（调整入口不断链）
         # 注意：xml2pdf 可能处于编辑中间态，此跨仓检查失败时跳过（不阻断 publish）
