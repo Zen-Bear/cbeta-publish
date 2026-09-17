@@ -569,27 +569,36 @@ class MainWindow(QMainWindow):
         cache_box=QWidget()
         ch=QHBoxLayout(cache_box)
         ch.setContentsMargins(0,0,0,0)
-        ch.addWidget(QLabel("缓存目录"))
-        cache_base=official_ebook_source.official_books_dir(self.config)
-        def _dir_label(p):
-            # 目录短名显示，悬停看全路径，点击打开
-            lb=QLabel(Path(p).name or str(p))
+        from cbeta_publish.books import xml2pdf_bridge as _xb
+        def _dir_label(getter):
+            # 目录短名显示，悬停看全路径，点击打开（路径经 getter 动态取，设置改后刷新）
+            lb=QLabel()
             lb.setStyleSheet("color:#0645AD; text-decoration:underline;")
             lb.setCursor(Qt.PointingHandCursor)
-            lb.setToolTip(f"{p}\n点击在文件浏览器中打开")
-            def _open(e, _p=str(Path(p).resolve())):
+            def _refresh():
+                p=Path(getter())
+                lb.setText(Path(p).name or str(p))
+                lb.setToolTip(f"{p}\n点击在文件浏览器中打开")
+            lb.refresh=_refresh
+            def _open(e):
                 try:
                     from PySide6.QtGui import QDesktopServices
                     from PySide6.QtCore import QUrl
-                    QDesktopServices.openUrl(QUrl.fromLocalFile(_p))
+                    QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(getter()).resolve())))
                 except Exception as ex:
                     print(ex)
             lb.mousePressEvent=_open
+            _refresh()
             return lb
-        self.lbl_cache_dir=_dir_label(cache_base)
+        ch.addWidget(QLabel("E书目录:"))
+        ch.addWidget(QLabel("官方"))
+        self.lbl_cache_dir=_dir_label(lambda: official_ebook_source.official_books_dir(self.config))
         ch.addWidget(self.lbl_cache_dir)
-        ch.addWidget(QLabel("输出目录"))
-        self.lbl_out_dir=_dir_label(self._out_dir())
+        ch.addWidget(QLabel("自制"))
+        self.lbl_xml_dir=_dir_label(lambda: _xb.xml_books_dir(self.config))
+        ch.addWidget(self.lbl_xml_dir)
+        ch.addWidget(QLabel("丛书"))
+        self.lbl_out_dir=_dir_label(lambda: self._out_dir())
         ch.addWidget(self.lbl_out_dir)
         ch.addStretch()
         rv.addWidget(cache_box)
@@ -3459,10 +3468,10 @@ class MainWindow(QMainWindow):
         from PySide6.QtWidgets import QCheckBox as _Chk
         icon_dir=Path(__file__).parent / "theme" / "icons"
         for idx, w in enumerate(works, 1):
-            title=self.sutra.title_of(w)
-            if title==w:
+            title=self.sutra.title_of(w)   # 已含「编号 名称」
+            if title==w:                   # 未收录：退回经录名
                 m=self.mapping.resolve(w)
-                if m: title=m["name"]
+                if m: title=f"{w} {m['name']}"
             fmts_status=[]
             for fmt in fmts:
                 # 已有标志随来源：官方查 cbeta_ebooks，自制查 xml_to_ebooks_dir
@@ -3501,7 +3510,7 @@ class MainWindow(QMainWindow):
                 lab.fmt=fmt
                 lab.setAttribute(Qt.WA_TransparentForMouseEvents, True)
                 hl.addWidget(lab)
-            text_lab=QLabel(f"{idx}. {w} {title}")
+            text_lab=QLabel(f"{idx}. {title}")
             text_lab.missing=not any(ex for _,ex in fmts_status)
             if text_lab.missing:
                 text_lab.setStyleSheet("color: gray;")
@@ -4070,7 +4079,10 @@ class MainWindow(QMainWindow):
 
     # ---------- 合并 ----------
     def _out_dir(self):
-        return Path(self.config.get("output_dir","my_books"))
+        """丛书（合并/ZIP/导出）输出根：缺省 collections_books，相对按工程根解析。"""
+        from cbeta_publish.books import xml2pdf_bridge
+        p=Path(self.config.get("output_dir") or "collections_books")
+        return p if p.is_absolute() else xml2pdf_bridge.PROJECT_ROOT / p
 
     def _build_menu(self):
         # 菜单栏：「设置…」直接放在菜单栏（不用 设置→设置 两级）
@@ -4273,10 +4285,22 @@ class MainWindow(QMainWindow):
             self._on_nav_changed(self.nav_combo.currentText())
             # 设置可能改了来源/预设目录/默认预设：刷新右栏
             self._sync_source_preset_ui()
+            self._refresh_dir_labels()
             if saved:
                 self.detail.setText("设置已保存（界面字体即时生效；封面字体下次合并生效）")
             else:
                 self.detail.setText("设置已应用（未写盘，仅本次运行生效）")
+
+    def _refresh_dir_labels(self):
+        """设置变更后刷新右栏「E书目录」三处短名/提示（路径经 getter 动态取）。"""
+        for _lb in (getattr(self,"lbl_cache_dir",None), getattr(self,"lbl_xml_dir",None),
+                    getattr(self,"lbl_out_dir",None)):
+            r=getattr(_lb,"refresh",None)
+            if callable(r):
+                try:
+                    r()
+                except Exception:
+                    pass
 
     def _cover_config(self):
         # 直接使用内存配置，避免 CWD 相对读取

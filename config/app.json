@@ -9,7 +9,7 @@
   },
   "language": "zh-Hant",
   "update_interval": "manual",
-  "output_dir": "my_books",
+  "output_dir": "E:\\dev\\cbeta\\publish\\collections_books",
   "ui": {
     "tree_expand": {
       "mode": "none"

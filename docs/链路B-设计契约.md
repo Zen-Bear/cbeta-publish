@@ -81,7 +81,7 @@ def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=No
 ```json
 {
   "default_source": "official",                        // official | xml（右栏来源单选，sticky）
-  "xml_to_ebooks_dir": "E:/dev/cbeta/publish/cbeta_ebooks_xml",   // 自制书输出根（可配，绝对路径）
+  "xml_to_ebooks_dir": "E:/dev/cbeta/publish/cbeta_xml_ebooks",   // 自制书输出根（可配，绝对路径）
   "xml2pdf": {
     "path": "E:/dev/cbeta/xml2pdf",                    // 自制程序仓库（预设目录=其 presets/）
     "cbeta_ebook": "E:/dev/cbeta/publish/cbeta_xml",   // CBETA XML 目录（--cbeta-ebook；不可空，空则用默认）
