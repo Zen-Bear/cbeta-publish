@@ -156,6 +156,8 @@ def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=No
   「自制书籍」菜单三项＋校验目录＋临时预设拦截；见 §5）
 - [x] `xml2pdf`：`--verify` 支持 work id 输入（`2a10d12`：改用已 materialize 的 `xmls`；
   `16df9cf`：官方基线源目录 `src` 按 work 目录修正，编号输入可定位官方基线）
+- [x] `xml2pdf`：`-i` 输入分类健壮性（`25eccb8`：cwd 下有同名**非 XML** 目录时不再
+  劫持合法編號，改按編號材料化；避免 `no XML files under <id>`）
 - [x] `xml2pdf`：独立窗启动参数预填（`7258b65`：`--ids-file/--out/--preset/--formats/
   --verify/--autostart`，`parse_known_args`＋Qt 透传；保留为手动工作台）
 - [x] `xml2pdf`：`pycbeta.gui` 面板/对话框/独立入口（已存在，publish 直接复用）
