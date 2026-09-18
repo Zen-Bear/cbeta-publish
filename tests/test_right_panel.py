@@ -124,7 +124,8 @@ class RightPanelTest(unittest.TestCase):
         win = self.win
         tmp = self.tmp / "mk"
         (tmp / "presets").mkdir(parents=True, exist_ok=True)
-        win.config.setdefault("xml2pdf", {}).update({"path": str(tmp), "preset": ""})
+        win.config.setdefault("xml2pdf", {}).update({"path": str(tmp), "preset": "",
+                                                     "verify_build": False})
         win.config["default_source"] = "xml"
         win.config["xml_to_ebooks_dir"] = str(self.tmp / "mk_out")
         col = Path(win.config["collections_dir"]) / "custom" / "mk.json"
@@ -273,6 +274,7 @@ class RightPanelTest(unittest.TestCase):
         (root / "presets" / "a5.json").write_text('{"default_page": "a5"}', encoding="utf-8")
         win.config["xml2pdf"]["path"] = str(root)
         win.config["xml2pdf"]["preset"] = "a5"
+        win.config["xml2pdf"]["verify_build"] = False
         win.config["default_source"] = "xml"
         win.config["xml_to_ebooks_dir"] = str(root / "out")
         (root / "out" / "pdf").mkdir(parents=True)
