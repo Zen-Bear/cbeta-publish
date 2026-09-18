@@ -359,6 +359,30 @@ class MergeModeTest(unittest.TestCase):
         # 0.50 比 0.30 更靠下（页面自上而下 y 更大）
         self.assertGreater(t2[1], title[1])
 
+    def test_cover_group_path_splits_levels(self):
+        # 封面：collection_name 形如「丛书｜部类 / 刊本 / 子目」时，分组路径每段一行，
+        # 字体字号沿用目录条目（远小于封面标题）。
+        import copy
+        from cbeta_publish.books.ebook_merger import _cover_pdf
+        c = copy.deepcopy(COVER)
+        c["mode"] = "reading"
+        p = self.dir / "group" / "c.pdf"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        _cover_pdf(self.srcs[0], "測試叢書｜13 中觀部類 / 三論宗 / 肇論／疏",
+                   p, organizer="編", config=c)
+        spans = []
+        for b in pymupdf.open(p)[0].get_text("dict")["blocks"]:
+            for l in b.get("lines", []):
+                for s in l.get("spans", []):
+                    if s["text"].strip():
+                        spans.append((s["text"].strip(), s["size"]))
+        texts = [t for t, _ in spans]
+        for lv in ("13 中觀部類", "三論宗", "肇論／疏"):
+            self.assertIn(lv, texts)
+        title_sz = next(sz for t, sz in spans if t == "測試叢書")
+        lv_sz = next(sz for t, sz in spans if t == "三論宗")
+        self.assertLess(lv_sz, title_sz)   # 分组行用目录条目字号
+
     def test_cover_imprint_configurable(self):
         import copy
         from cbeta_publish.books.ebook_merger import _cover_pdf
