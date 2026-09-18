@@ -5,12 +5,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from PySide6.QtWidgets import QApplication
 from cbeta_publish.gui.main_window import MainWindow, apply_ui_fonts
 from cbeta_publish.gui.theme.theme_manager import ThemeManager
+from cbeta_publish import APP_NAME, APP_ID, __version__
 
 def main():
     cfg_path=Path(__file__).resolve().parents[1]/"config/app.json"
     cfg=json.loads(cfg_path.read_text(encoding="utf-8"))
     ui=cfg.get("ui",{}) or {}
     app=QApplication(sys.argv)
+    app.setApplicationName(APP_NAME)
+    app.setApplicationDisplayName(APP_NAME)
+    app.setApplicationVersion(__version__)
+    app.setOrganizationName("CBETA")
+    app.setDesktopFileName(APP_ID)
     apply_ui_fonts(ui)
     tm=ThemeManager(Path(__file__).parent/"gui/theme/tokens.json")
     tm.apply(app, cfg.get("theme",{}).get("mode","light"))
