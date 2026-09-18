@@ -145,10 +145,45 @@ def write_run_wrapper(config, preset_path) -> Path | None:
         import os
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
+        _track_temp(path)
         return Path(path)
     except Exception as e:
         print("write run wrapper fail", e)
         return None
+
+
+#: 本进程登记在册、尚未删除的临时文件（退出兜底用；正常流程为零）
+_LIVE_TEMP_FILES = set()
+
+
+def _track_temp(path):
+    try:
+        import os
+        _LIVE_TEMP_FILES.add(os.path.normcase(os.path.abspath(str(path))))
+    except Exception:
+        pass
+
+
+def _untrack_temp(path):
+    try:
+        import os
+        _LIVE_TEMP_FILES.discard(os.path.normcase(os.path.abspath(str(path))))
+    except Exception:
+        pass
+
+
+def cleanup_live_wrappers():
+    """退出兜底：删除登记在册、尚未删除的临时 run/preset 文件；返回已处理路径列表。"""
+    import os
+    left = sorted(_LIVE_TEMP_FILES)
+    _LIVE_TEMP_FILES.clear()
+    for p in left:
+        try:
+            if p and os.path.isfile(p):
+                os.remove(p)
+        except Exception:
+            pass
+    return left
 
 
 # ---------- 预设（xml2pdf 仓库下 presets/，用上游公开 API） ----------
@@ -281,6 +316,7 @@ def write_temp_preset(config, data) -> Path | None:
         from pycbeta.gui.panel import write_temp_preset as _up
         p = _up(data)
         if p:
+            _track_temp(p)
             return Path(p)
     except Exception:
         pass
@@ -291,6 +327,7 @@ def write_temp_preset(config, data) -> Path | None:
         import os
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(data or {}, f, ensure_ascii=False, indent=2)
+        _track_temp(path)
         return Path(path)
     except Exception as e:
         print("write temp preset fail", e)
@@ -298,8 +335,9 @@ def write_temp_preset(config, data) -> Path | None:
 
 
 def remove_temp_preset(path):
-    """删除临时预设文件（尽力，失败忽略）。"""
+    """删除临时预设文件（尽力，失败忽略）；同时从在册集合注销。"""
     try:
+        _untrack_temp(path)
         if path:
             Path(path).unlink(missing_ok=True)
     except Exception:

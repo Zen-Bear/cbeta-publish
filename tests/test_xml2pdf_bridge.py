@@ -416,5 +416,77 @@ class BridgeVerifyWorkTest(unittest.TestCase):
         self.assertFalse(b.verify_report_pass(rp))    # 取的是新的 FAIL
 
 
+class BridgeTempTrackingTest(unittest.TestCase):
+    """临时 run/preset 登记与退出兜底：正常删除即注销；残留由 cleanup 删光。"""
+
+    def setUp(self):
+        import os
+        import sys
+        from types import ModuleType
+        import cbeta_publish.books.xml2pdf_bridge as b
+        self._b = b
+        self._saved_live = set(b._LIVE_TEMP_FILES)
+        b._LIVE_TEMP_FILES.clear()
+        self.dir = Path(tempfile.mkdtemp())
+        self.root = self.dir / "x2p"
+        (self.root / "pycbeta").mkdir(parents=True)
+        theme_py = self.root / "pycbeta" / "theme.py"
+        theme_py.write_text("# stub", encoding="utf-8")
+
+        def _load_run_config(*a, **k):
+            return {"a": "1"}
+
+        pkg = ModuleType("pycbeta")
+        pkg.__path__ = [str(self.root / "pycbeta")]
+        mod = ModuleType("pycbeta.theme")
+        mod.__file__ = str(theme_py)
+        mod.load_run_config = _load_run_config
+        mod.RUN_KEYS = ("a",)
+        self._saved_mods = {k: sys.modules.get(k) for k in ("pycbeta", "pycbeta.theme")}
+        sys.modules["pycbeta"] = pkg
+        sys.modules["pycbeta.theme"] = mod
+        self.cfg = {"xml2pdf": {"path": str(self.root)}}
+        self.preset = self.dir / "p.json"
+        self.preset.write_text("{}", encoding="utf-8")
+
+    def tearDown(self):
+        import sys
+        import cbeta_publish.books.xml2pdf_bridge as b
+        for k, v in self._saved_mods.items():
+            if v is None:
+                sys.modules.pop(k, None)
+            else:
+                sys.modules[k] = v
+        b._LIVE_TEMP_FILES.clear()
+        b._LIVE_TEMP_FILES.update(self._saved_live)
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def _key(self, p):
+        import os
+        return os.path.normcase(os.path.abspath(str(p)))
+
+    def test_wrapper_tracked_and_untracked_on_remove(self):
+        b = self._b
+        w = b.write_run_wrapper(self.cfg, self.preset)
+        self.assertIsNotNone(w)
+        self.assertTrue(w.exists())
+        self.assertIn(self._key(w), b._LIVE_TEMP_FILES)
+        b.remove_temp_preset(w)
+        self.assertFalse(w.exists())
+        self.assertNotIn(self._key(w), b._LIVE_TEMP_FILES)
+
+    def test_cleanup_deletes_leftovers(self):
+        b = self._b
+        w = b.write_run_wrapper(self.cfg, self.preset)
+        self.assertTrue(w.exists())
+        left = b.cleanup_live_wrappers()
+        self.assertIn(self._key(w), [self._key(p) for p in left])
+        self.assertFalse(w.exists())
+        self.assertEqual(b._LIVE_TEMP_FILES, set())
+
+    def test_cleanup_empty_is_noop(self):
+        self.assertEqual(self._b.cleanup_live_wrappers(), [])
+
+
 if __name__ == "__main__":
     unittest.main()

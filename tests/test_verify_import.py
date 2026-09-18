@@ -280,5 +280,52 @@ class VerifyRulesDialogTest(unittest.TestCase):
         self.assertIn("独立窗输出与导入规则…", acts)
 
 
+class ExitCleanupTest(unittest.TestCase):
+    """退出精确清理：临时预设删除、在途 wrapper 兜底删除、校验线程停止。"""
+
+    def test_close_deletes_transient_preset_and_live_wrappers(self):
+        import tempfile
+        from PySide6.QtGui import QCloseEvent
+        import cbeta_publish.books.xml2pdf_bridge as b
+        saved_live = set(b._LIVE_TEMP_FILES)
+        b._LIVE_TEMP_FILES.clear()
+        win, tmp = _make_window()
+        try:
+            self.assertFalse(win._coll_changed)
+            fd, preset = tempfile.mkstemp(prefix="cbeta-publish-preset-", suffix=".json")
+            os.close(fd)
+            win._tmp_preset = Path(preset)
+            b._track_temp(preset)
+            fd2, wrap = tempfile.mkstemp(prefix="cbeta-publish-run-", suffix=".json")
+            os.close(fd2)
+            b._track_temp(wrap)
+            calls = []
+
+            class _W:
+                def isRunning(self):
+                    return True
+
+                def stop(self):
+                    calls.append("stop")
+
+                def wait(self, ms=None):
+                    calls.append(("wait", ms))
+                    return True
+
+            win._verify_worker = _W()
+            ev = QCloseEvent()
+            win.closeEvent(ev)
+            self.assertTrue(ev.isAccepted())
+            self.assertFalse(Path(preset).exists())
+            self.assertFalse(Path(wrap).exists())
+            self.assertIsNone(win._tmp_preset)
+            self.assertIn("stop", calls)
+            self.assertEqual(b._LIVE_TEMP_FILES, set())
+        finally:
+            b._LIVE_TEMP_FILES.clear()
+            b._LIVE_TEMP_FILES.update(saved_live)
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
 if __name__ == "__main__":
     unittest.main()
