@@ -16,6 +16,7 @@ from cbeta_publish.utils import text_util
 from cbeta_publish.books import official_ebook_source
 from cbeta_publish.catalog import work_id
 from cbeta_publish.collection.collection_model import normalize_collection, write_index
+from cbeta_publish import APP_NAME, __version__
 
 WORK_RE = re.compile(r"[A-Z]+[0-9A-Za-z]+")
 CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "app.json"
@@ -244,7 +245,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.config=config
         self._config_path=config.get("_config_path") or CONFIG_PATH
-        self.setWindowTitle("CBETA 发布管理器")
+        self.setWindowTitle(f"{APP_NAME} v{__version__}")
         # 启动窗口大小：二栏收窄（中栏隐藏，不需要那么宽）；三栏用默认宽度
         if (config.get("ui",{}) or {}).get("layout")=="two":
             self.resize(1000,720)

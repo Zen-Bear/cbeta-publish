@@ -54,7 +54,10 @@
 - 深色/浅色/繁简：`ThemeManager`/`i18n` 现为桩；先用 OpenCC 全文案转 zh-Hant，`en` 后置。
 
 ### P3 — 打包 / 文档（待定）
-- Windows 启动器/打包（PyInstaller 或快捷方式）、`requirements.txt` 固定版本。
+- 软件名/版本**单一来源**：`cbeta_publish/__init__.py` 的 `APP_NAME`（显示名）、
+  `APP_ID="cbeta-publish"`（包/可执行短名）、`__version__`（语义化 `MAJOR.MINOR.PATCH`，
+  当前 `0.1.0`）。窗口标题、`QApplication` 元数据取此处；发布时手动升版本并打 `vX.Y.Z` tag。
+- Windows 启动器/打包（PyInstaller 或快捷方式，用 `APP_ID` 命名）、`requirements.txt` 固定版本。
 - README（安装/运行/配置说明）。
 
 ### P4 — 低优先可选
