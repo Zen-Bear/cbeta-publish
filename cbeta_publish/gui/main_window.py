@@ -5019,7 +5019,8 @@ class MainWindow(QMainWindow):
                         success.append(s)
                     _gdone=100*(gbase+len(gok))/total_units
                     for s in gfiles:
-                        update(_gdone, f"  → 已生成 {_flink(s)}", True)
+                        # 进度行仅纯文本（不加链接）；链接只在最终「合并成功」清单里
+                        update(_gdone, f"  → 已生成 {_html.escape(Path(s).name)}", True)
                     group_offset+=len(gok)
             except MergeCancelled:
                 cancelled=True
