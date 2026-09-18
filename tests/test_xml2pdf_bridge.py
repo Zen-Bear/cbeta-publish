@@ -488,5 +488,46 @@ class BridgeTempTrackingTest(unittest.TestCase):
         self.assertEqual(self._b.cleanup_live_wrappers(), [])
 
 
+class BridgeReportFormatsTest(unittest.TestCase):
+    """逐格式报告解析：CLI（标记行+【源】行）与独立窗（标记行含格式）两种。"""
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def test_cli_report(self):
+        import cbeta_publish.books.xml2pdf_bridge as b
+        p = self.dir / "report.txt"
+        p.write_text(
+            "=== T01n0032.xml\n"
+            "  [OK] (缺0/多0 ≤阈值10)\n"
+            "  pdf→docx 【源】a.docx\n"
+            "  pdf→docx 【新】b.docx\n"
+            "  [FAIL] (缺3/多1 >阈值10)\n"
+            "  epub 【源】c.epub\n"
+            "  epub 【新】d.epub\n",
+            encoding="utf-8")
+        self.assertEqual(b.verify_report_formats(p), {"pdf": True, "epub": False})
+
+    def test_gui_report(self):
+        import cbeta_publish.books.xml2pdf_bridge as b
+        p = self.dir / "T0001_verify_report.txt"
+        p.write_text(
+            "=== T0001\n"
+            "  [OK]  docx 缺0 多0\n"
+            "  [FAIL] epub 缺3 多1\n",
+            encoding="utf-8")
+        self.assertEqual(b.verify_report_formats(p), {"docx": True, "epub": False})
+
+    def test_covered_marker_ignored(self):
+        import cbeta_publish.books.xml2pdf_bridge as b
+        p = self.dir / "r.txt"
+        p.write_text("=== T1\n  [--] pdf 已覆盖（已由 docx 校验）\n"
+                     "  [OK] (缺0/多0)\n  docx 【源】a\n", encoding="utf-8")
+        self.assertEqual(b.verify_report_formats(p), {"docx": True})
+
+
 if __name__ == "__main__":
     unittest.main()

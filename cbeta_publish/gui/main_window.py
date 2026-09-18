@@ -41,13 +41,16 @@ VERIFY_IMPORT_RULES_HTML = """\
 <li>递归扫描 <code>*_verify_report.txt</code> 与 <code>report.txt</code>。</li>
 <li>书单匹配：<code>stem == work</code>，或 <code>stem</code> 以 <code>work + " "</code> 开头；
 匹配不上当前丛书书单的跳过。</li>
-<li>判读（入库的唯一质量门）：含 <code>[FAIL]</code> → 不通过；
-≥1 个 <code>[OK]</code> 且无 <code>[FAIL]</code> → 通过；否则未判定（<code>[--]</code>/空报告，需人工看）。</li>
+<li>判读<b>按格式</b>：报告里 <code>[OK]/[FAIL]</code> 逐 trial 映射回产物格式
+（<code>pdf→docx</code> 记在 <code>pdf</code>；独立窗标记行直接带格式），得
+<code>{fmt: 通过}</code>；缺逐格式信息时退回整体判定（含 <code>[FAIL]</code>→不通过；
+≥1 <code>[OK]</code> 无 <code>[FAIL]</code>→通过；否则未判定）。</li>
 <li>产物识别：只看目录<b>顶层</b> <code>{stem}*.{ext}</code>，后缀映射
 <code>pdf/epub/docx/odt/md/txt</code> → fmt；排除 <code>*_verify_report.txt</code>、<code>_ids.txt</code>；
 每格式取排序后第一个。</li>
-<li>入库：拷入 <code>{自制书根}/{fmt}/{work}.{fmt}</code>（自动建目录、覆盖同名），
-入库即被复用；通过但找不到产物记"缺产物"。</li>
+<li>入库（<b>逐格式</b>）：通过的格式拷入 <code>{自制书根}/{fmt}/{work}.{fmt}</code>
+（自动建目录、覆盖同名），入库即被复用；未通过的格式跳过、不拖累通过者
+（如 docx 过、epub 没过 → 只入 docx）。无产物记"缺产物"。</li>
 </ol>
 <h3>三、入口与目录优先级</h3>
 <ol>
@@ -4314,14 +4317,22 @@ class MainWindow(QMainWindow):
         self._verify_worker=None
         base=_b.xml_books_dir(self.config)
         imp=self._do_import_verified(works, vdir, base)
-        summary=[f"校验完成 {result['ok']}/{total} → {vdir}"]
+        import html as _html
+        def _dirlink(p):
+            from PySide6.QtCore import QUrl as _QU
+            return (f'<a href="{_QU.fromLocalFile(str(Path(p).resolve())).toString()}">'
+                    f'{_html.escape(str(p))}</a>')
+        def _warn(s):
+            return f'<span style="color:#c62828;">{_html.escape(s)}</span>'
+        summary=[f"校验完成 {result['ok']}/{total}"]
+        summary.append("验证输出目录：" + _dirlink(vdir))          # 目录可点开
         if result["failed"]:
-            summary.append(f"未通过 {len(result['failed'])}：{', '.join(result['failed'][:10])}")
-        summary.append(f"已自动导入 {len(imp['ok'])} 部 → {base}")
+            summary.append(_warn(f"未通过 {len(result['failed'])}：{', '.join(result['failed'][:10])}"))
+        summary.append(f"已自动导入 {len(imp['ok'])} 部 → " + _dirlink(base))
         if imp["fail"]:
-            summary.append(f"未入库 {len(imp['fail'])}：{', '.join(imp['fail'][:10])}")
+            summary.append(_warn(f"未入库 {len(imp['fail'])}：{', '.join(imp['fail'][:10])}"))
         if imp["undet"]:
-            summary.append(f"未判定 {len(imp['undet'])}（需人工看报告）")
+            summary.append(_warn(f"未判定 {len(imp['undet'])}（需人工看报告）"))
         if pstate.get("cancel"):
             summary.append("已取消。")
         pstate["finish"](summary)
@@ -4365,24 +4376,38 @@ class MainWindow(QMainWindow):
             if hit is None:
                 skip_list.append(done_label)
             else:
-                verdict=_b.verify_report_pass(rp)
-                if verdict is True:
-                    copied=[]
-                    for fmt, src in self._verify_products(vdir, hit):
-                        try:
-                            (base/fmt).mkdir(parents=True, exist_ok=True)
-                            shutil.copy2(src, base/fmt/f"{hit}.{fmt}")
-                            copied.append(fmt)
-                        except Exception as e:
-                            fail_list.append(f"{hit} {fmt} 拷贝失败: {e}")
-                    if copied:
-                        ok_list.append(f"{hit}（{'/'.join(copied)}）")
-                    else:
-                        fail_list.append(f"{hit} 缺产物")
-                elif verdict is False:
-                    fail_list.append(f"{hit} 校验未通过")
+                # 逐格式判定：某格式通过即入库该格式，未通过的格式跳过（不拖累通过者）
+                fmt_status=_b.verify_report_formats(rp)
+                overall=_b.verify_report_pass(rp)
+                products=self._verify_products(vdir, hit)
+                if not products:
+                    fail_list.append(f"{hit} 缺产物")
                 else:
-                    undet_list.append(f"{hit} 未判定")
+                    copied=[]; bad=[]; undet=[]
+                    for fmt, src in products:
+                        st=fmt_status.get(fmt)
+                        if st is None:
+                            st=overall          # 无逐格式信息：退回整体判定
+                        if st is True:
+                            try:
+                                (base/fmt).mkdir(parents=True, exist_ok=True)
+                                shutil.copy2(src, base/fmt/f"{hit}.{fmt}")
+                                copied.append(fmt)
+                            except Exception as e:
+                                fail_list.append(f"{hit} {fmt} 拷贝失败: {e}")
+                        elif st is False:
+                            bad.append(fmt)
+                        else:
+                            undet.append(fmt)
+                    if copied:
+                        label=f"{hit}（{'/'.join(copied)}）"
+                        if bad or undet:
+                            label+=f"；未入 {'/'.join(bad+undet)}"
+                        ok_list.append(label)
+                    elif bad:
+                        fail_list.append(f"{hit} 校验未通过（{'/'.join(bad)}）")
+                    else:
+                        undet_list.append(f"{hit} 未判定")
             done+=1
             if update is not None and not update(done, done_label):
                 break
