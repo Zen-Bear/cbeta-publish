@@ -21,6 +21,17 @@
     "last_collection": "E:\\dev\\cbeta\\publish\\collections\\custom\\测试丛书1.json"
   },
   "default_source": "official",
+  "default_formats": {
+    "merge": ["pdf", "epub"],
+    "zip": {
+      "official": ["pdf", "epub", "html", "docx", "odt", "txt", "txt_notes"],
+      "xml": ["pdf", "docx", "epub"]
+    },
+    "export": {
+      "official": ["pdf", "epub", "html", "docx", "odt", "txt", "txt_notes"],
+      "xml": ["pdf", "docx", "epub"]
+    }
+  },
   "pdf": {
     "split_pages": 5000
   },

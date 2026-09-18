@@ -108,7 +108,7 @@ class PackDirFormatTest(unittest.TestCase):
         real_prog = win._make_progress
         real_prompt = win._prompt_save_collection
         real_box = win._wrap_box
-        win._choose_pack_fmts = lambda: fmts
+        win._choose_pack_fmts = lambda *a, **k: fmts
         QFileDialog.getExistingDirectory = staticmethod(lambda *a, **k: str(outdir))
         win._make_progress = lambda title, total: (None, lambda *a, **k: True, {"finish": lambda *a, **k: None})
         win._prompt_save_collection = lambda *a, **k: None
@@ -154,7 +154,7 @@ class PackDirFormatTest(unittest.TestCase):
         win = self.win
         real_choose = win._choose_pack_fmts
         real_dir = QFileDialog.getExistingDirectory
-        win._choose_pack_fmts = lambda: None
+        win._choose_pack_fmts = lambda *a, **k: None
         QFileDialog.getExistingDirectory = staticmethod(
             lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not prompt")))
         try:

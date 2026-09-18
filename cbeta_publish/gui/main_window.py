@@ -530,14 +530,20 @@ class MainWindow(QMainWindow):
         from PySide6.QtWidgets import QCheckBox
         from PySide6.QtGui import QIcon
         icon_dir=Path(__file__).parent / "theme" / "icons"
+        _df = (self.config.get("default_formats", {}) or {})
+        _merge = set(_df.get("merge") or ["pdf", "epub"])
+        _xml_pack = (_df.get("zip") or {}).get("xml")
+        if _xml_pack is None:
+            _xml_pack = ["pdf", "docx", "epub"]
         self.chk_pdf=QCheckBox(" pdf")
         self.chk_pdf.setIcon(QIcon(str(icon_dir/"pdf.png")))
-        self.chk_pdf.setChecked(True)
+        self.chk_pdf.setChecked("pdf" in _merge)
         self.chk_epub=QCheckBox(" epub")
         self.chk_epub.setIcon(QIcon(str(icon_dir/"epub.png")))
+        self.chk_epub.setChecked("epub" in _merge)
         self.chk_docx=QCheckBox(" docx")
         self.chk_docx.setIcon(QIcon(str(icon_dir/"docx.png")))
-        self.chk_docx.setChecked(True)
+        self.chk_docx.setChecked("docx" in _xml_pack)
         fh.addWidget(self.chk_pdf); fh.addWidget(self.chk_epub); fh.addWidget(self.chk_docx)
         fh.addStretch()
         self.lbl_pack_hint=QLabel("（其它格式用ZIP/导出）")
@@ -4940,12 +4946,18 @@ class MainWindow(QMainWindow):
             return ["pdf", "epub", "docx"]
         return list(official_ebook_source.PACK_FORMATS)
 
-    def _choose_pack_fmts(self):
-        """ZIP/导出格式多选（独立于合并格式勾选；预选=当前勾选交集）。
+    def _choose_pack_fmts(self, scope="zip"):
+        """ZIP/导出格式多选（独立于合并格式勾选）。
+        预选＝设置里 `default_formats[scope][官方|自制]`；缺省回退当前格式勾选。
         返回 [fmt]（空即全不选）；取消返回 None。"""
         from PySide6.QtWidgets import QDialog, QVBoxLayout, QCheckBox, QDialogButtonBox
         avail = self._pack_avail_fmts()
-        pre = set(self._checked_fmts())
+        side = "xml" if self._run_source() == "xml" else "official"
+        df = (self.config.get("default_formats", {}) or {}).get(scope, {}) or {}
+        pre = df.get(side)
+        if pre is None:
+            pre = self._checked_fmts()
+        pre = set(pre) & set(avail)
         labels = {"txt": "txt（不含校注）", "txt_notes": "txt_notes（含校注）"}
         dlg = QDialog(self)
         dlg.setWindowTitle("选择打包格式")
@@ -4965,7 +4977,7 @@ class MainWindow(QMainWindow):
         return [f for f, b in boxes if b.isChecked()]
 
     def _zip(self):
-        fmts = self._choose_pack_fmts()
+        fmts = self._choose_pack_fmts("zip")
         if fmts is None:
             return
         if not fmts:
@@ -5108,7 +5120,7 @@ class MainWindow(QMainWindow):
         return QMessageBox(icon, title, text, buttons, self).exec()
 
     def _export(self):
-        fmts = self._choose_pack_fmts()
+        fmts = self._choose_pack_fmts("export")
         if fmts is None:
             return
         if not fmts:
