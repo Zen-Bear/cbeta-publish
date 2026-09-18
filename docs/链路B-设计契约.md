@@ -82,7 +82,12 @@ def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=No
 **`config/app.json`**
 ```json
 {
-  "default_source": "official",                        // official | xml（右栏来源单选，sticky）
+  "default_source": "official",                        // official | xml（右栏/设置来源单选，sticky）
+  "default_formats": {                                 // 默认勾选格式（设置页「E书默认来源和格式」）
+    "merge": ["pdf", "epub"],                          // 初始化右栏格式勾选
+    "zip":    {"official": [7种], "xml": ["pdf","docx","epub"]},   // ZIP 弹窗预选
+    "export": {"official": [7种], "xml": ["pdf","docx","epub"]}    // 导出弹窗预选
+  },
   "xml_to_ebooks_dir": "E:/dev/cbeta/publish/cbeta_xml_ebooks",   // 自制书输出根（可配，绝对路径）
   "xml2pdf": {
     "path": "E:/dev/cbeta/xml2pdf",                    // 自制程序仓库（预设目录=其 presets/）

@@ -156,6 +156,25 @@ class SettingsDialogTest(unittest.TestCase):
         d2 = SettingsDialog(cfg, None)
         self.assertTrue(d2.rb_src_made.isChecked())
 
+    def test_default_formats_roundtrip(self):
+        # 默认勾选格式：合并（pdf/epub）与 ZIP/导出（官方全列/自制 pdf,docx,epub）
+        from cbeta_publish.gui.settings_dialog import SettingsDialog as _SD
+        dlg = self._dlg()
+        dlg.fmt_merge_boxes["epub"].setChecked(False)
+        dlg.fmt_zip_boxes["xml"]["docx"].setChecked(False)
+        dlg.fmt_export_boxes["official"]["html"].setChecked(False)
+        df = dlg._collect()["default_formats"]
+        self.assertEqual(df["merge"], ["pdf"])
+        self.assertNotIn("docx", df["zip"]["xml"])
+        self.assertNotIn("html", df["export"]["official"])
+        self.assertEqual(df["zip"]["official"], _SD._official_pack_fmts())
+        # 恢复默认后控件回填
+        cfg = copy.deepcopy(DEFAULT_CONFIG)
+        cfg["default_formats"]["merge"] = ["epub"]
+        d2 = SettingsDialog(cfg, None)
+        self.assertFalse(d2.fmt_merge_boxes["pdf"].isChecked())
+        self.assertTrue(d2.fmt_merge_boxes["epub"].isChecked())
+
     def test_theme_language_are_radio(self):
         # 外观：主题（浅色/深色/跟随系统）与语言（简体/繁体/English）单选
         dlg = self._dlg()
@@ -225,15 +244,24 @@ class SettingsDialogTest(unittest.TestCase):
         self.assertIn("font", cv["styles"]["title"])
 
     def test_dirs_tab_groups_and_browse(self):
-        # 数据/输出：目录行都有浏览按钮；自制相关框成一组；路径标签叫自制程序路径
-        from PySide6.QtWidgets import QGroupBox, QPushButton
+        # 数据/输出：「E书默认来源和格式」框（来源单选+默认格式）；浏览按钮齐全
+        from PySide6.QtWidgets import QGroupBox, QPushButton, QTabWidget
         dlg = self._dlg()
-        groups = [g for g in dlg.findChildren(QGroupBox) if g.title() == "自制"]
+        groups = [g for g in dlg.findChildren(QGroupBox) if g.title() == "E书默认来源和格式"]
         self.assertEqual(len(groups), 1)
         box = groups[0]
-        for w in (dlg.src_default_box, dlg.ed_x2p, dlg.ed_x2p_ebook,
-                  dlg.ed_xmlbooks, dlg.cb_preset):
+        for w in (dlg.src_default_box, dlg.fmt_merge_boxes["pdf"],
+                  dlg.fmt_zip_boxes["official"]["pdf"], dlg.fmt_zip_boxes["xml"]["docx"],
+                  dlg.fmt_export_boxes["official"]["txt"], dlg.fmt_export_boxes["xml"]["epub"]):
             self.assertTrue(box.isAncestorOf(w), w)
+        # 自制路径已移到「自制E书」页签（不在来源/格式框内）
+        for w in (dlg.ed_x2p, dlg.ed_x2p_ebook, dlg.ed_xmlbooks, dlg.ed_verify,
+                  dlg.cb_preset):
+            self.assertFalse(box.isAncestorOf(w), w)
+        tabs = dlg.findChildren(QTabWidget)[0]
+        names = [tabs.tabText(i) for i in range(tabs.count())]
+        self.assertIn("自制E书", names)
+        self.assertIn("更新源", names)
         labels = []
 
         def _labels_of(form):
@@ -248,6 +276,7 @@ class SettingsDialogTest(unittest.TestCase):
         for f in dlg.findChildren(QFormLayout):
             labels.extend(_labels_of(f))
         self.assertIn("自制程序路径", labels)
+        self.assertIn("默认E书来源", labels)
         self.assertNotIn("xml2pdf 路径", labels)
         self.assertNotIn("链路B", "".join(labels))
         # 每个目录行都有浏览按钮

@@ -32,6 +32,13 @@ DEFAULT_CONFIG = {
            "app_font": "SimSun", "app_font_size": 9,
            "supplement_ttf": "E:/dev/cbeta/xml2pdf/cbeta/CBETA 補充字型/CBETASupplement.ttf"},
     "default_source": "official",
+    "default_formats": {
+        "merge": ["pdf", "epub"],
+        "zip": {"official": ["pdf", "epub", "html", "docx", "odt", "txt", "txt_notes"],
+                "xml": ["pdf", "docx", "epub"]},
+        "export": {"official": ["pdf", "epub", "html", "docx", "odt", "txt", "txt_notes"],
+                   "xml": ["pdf", "docx", "epub"]},
+    },
     "pdf": {"split_pages": 5000},
     "epub": {"split_items": 500},
     "merge": {"by_volume": False},
@@ -109,6 +116,7 @@ class SettingsDialog(QDialog):
         tabs = QTabWidget()
         tabs.addTab(self._tab_filters(), "目录过滤")
         tabs.addTab(self._tab_dirs(), "数据/输出")
+        tabs.addTab(self._tab_made(), "自制E书")
         tabs.addTab(self._tab_cover(), "封面/版式")
         tabs.addTab(self._tab_cache(), "缓存")
         tabs.addTab(self._tab_update(), "更新源")
@@ -184,20 +192,13 @@ class SettingsDialog(QDialog):
         self.ed_ebooks = QLineEdit(self._cfg.get("official_ebooks_dir", ""))
         self.ed_output = QLineEdit(
             self._native_path(self._resolve_out_dir(self._cfg.get("output_dir"))))
-        self.cb_interval = self._no_wheel_until_focused(QComboBox())
-        self.cb_interval.addItems(["daily", "weekly", "monthly", "manual"])
-        cur = self._cfg.get("update_interval", "weekly")
-        if cur in ["daily", "weekly", "monthly", "manual"]:
-            self.cb_interval.setCurrentText(cur)
         form.addRow("目录数据", self._dir_row(self.ed_mulu))
         form.addRow("丛书数据", self._dir_row(self.ed_collections))
         form.addRow("官方电子书", self._dir_row(self.ed_ebooks))
         form.addRow("输出目录", self._dir_row(self.ed_output))
-        form.addRow("更新频率", self.cb_interval)
-        # 自制一组：来源 + 程序路径 + 输出目录 + 预设
-        # （自制书由程序根据官方 XML 制作）
-        x2p_box = QGroupBox("自制")
-        x2p_form = QFormLayout(x2p_box)
+        # E书默认来源和格式（来源单选 + 合并/ZIP/导出 默认勾选格式）
+        def_box = QGroupBox("E书默认来源和格式")
+        def_form = QFormLayout(def_box)
         self.src_default_box = QWidget()
         _sdb = QHBoxLayout(self.src_default_box)
         _sdb.setContentsMargins(0, 0, 0, 0)
@@ -210,27 +211,17 @@ class SettingsDialog(QDialog):
             _sdb.addWidget(_rb)
             self.src_default_group.addButton(_rb, _i)
         _sdb.addStretch()
-        self.ed_x2p = QLineEdit(self._cfg.get("xml2pdf", {}).get("path", ""))
-        self.ed_x2p_ebook = QLineEdit(
-            (self._cfg.get("xml2pdf", {}) or {}).get("cbeta_ebook")
-            or str(PROJECT_ROOT / "cbeta_xml"))
-        self.ed_x2p_ebook.setPlaceholderText("CBETA XML 目录（不可为空；空则用默认 cbeta_xml）")
-        self.ed_xmlbooks = QLineEdit()
-        self.ed_verify = QLineEdit()
-        self.ed_verify.setPlaceholderText("校验工作目录（独立窗批量生成+校验，默认 cbeta_verify）")
-        self.cb_preset = self._no_wheel_until_focused(QComboBox())
-        self._reload_preset_combo()
-        x2p_form.addRow("默认来源", self.src_default_box)
-        x2p_form.addRow("自制程序路径", self._dir_row(self.ed_x2p))
-        x2p_form.addRow("CBETA XML 目录", self._dir_row(self.ed_x2p_ebook))
-        x2p_form.addRow("自制电子书", self._dir_row(self.ed_xmlbooks))
-        x2p_form.addRow("校验工作目录", self._dir_row(self.ed_verify))
-        x2p_form.addRow("默认预设", self.cb_preset)
-        hint = QLabel("自制：电子书由程序根据官方 XML 制作。默认预设用于来源选自制、且未另选预设时。")
-        hint.setWordWrap(True)
-        hint.setStyleSheet("color: gray;")
-        x2p_form.addRow(hint)
-        form.addRow(x2p_box)
+        def_form.addRow("默认E书来源", self.src_default_box)
+        df = self._cfg.get("default_formats", {}) or {}
+        r, self.fmt_merge_boxes = self._fmt_check_row(["pdf", "epub"], df.get("merge"))
+        def_form.addRow("合并默认格式", r)
+        z = df.get("zip", {}) or {}
+        r, self.fmt_zip_boxes = self._fmt_check_pair(z.get("official"), z.get("xml"))
+        def_form.addRow("ZIP 默认格式", r)
+        e = df.get("export", {}) or {}
+        r, self.fmt_export_boxes = self._fmt_check_pair(e.get("official"), e.get("xml"))
+        def_form.addRow("导出默认格式", r)
+        form.addRow(def_box)
         # 分册：0=不分册
         split_box = QGroupBox("分册（0=不分册）")
         split_form = QFormLayout(split_box)
@@ -250,6 +241,71 @@ class SettingsDialog(QDialog):
         self.chk_by_volume.setChecked(bool((self._cfg.get("merge", {}) or {}).get("by_volume", False)))
         form.addRow(self.chk_by_volume)
         return w
+
+    @staticmethod
+    def _official_pack_fmts():
+        return ["pdf", "epub", "html", "docx", "odt", "txt", "txt_notes"]
+
+    @staticmethod
+    def _made_pack_fmts():
+        return ["pdf", "docx", "epub"]
+
+    def _fmt_check_row(self, fmts, checked):
+        """一行多选（单侧）→ (row, {fmt: QCheckBox})；未给 checked 时按 fmts 全选。"""
+        row = QWidget()
+        h = QHBoxLayout(row)
+        h.setContentsMargins(0, 0, 0, 0)
+        boxes = {}
+        want = set(checked if checked is not None else fmts)
+        for f in fmts:
+            cb = QCheckBox(f)
+            cb.setChecked(f in want)
+            h.addWidget(cb)
+            boxes[f] = cb
+        h.addStretch()
+        return row, boxes
+
+    def _fmt_check_pair(self, off_checked, xml_checked):
+        """官方/自制两行多选 → (container, {"official": {…}, "xml": {…}})。"""
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setContentsMargins(0, 0, 0, 0)
+        r1, b1 = self._fmt_check_row(self._official_pack_fmts(), off_checked)
+        r2, b2 = self._fmt_check_row(self._made_pack_fmts(), xml_checked)
+        lab1 = QLabel("官方：")
+        lab1.setStyleSheet("color: gray;")
+        lab2 = QLabel("自制：")
+        lab2.setStyleSheet("color: gray;")
+        v.addWidget(lab1); v.addWidget(r1)
+        v.addWidget(lab2); v.addWidget(r2)
+        return w, {"official": b1, "xml": b2}
+
+    # ---------- 页签：自制E书 ----------
+    def _tab_made(self):
+        w = QWidget()
+        form = QFormLayout(w)
+        # 自制程序与目录（原在「数据/输出」的「自制」组框）
+        self.ed_x2p = QLineEdit(self._cfg.get("xml2pdf", {}).get("path", ""))
+        self.ed_x2p_ebook = QLineEdit(
+            (self._cfg.get("xml2pdf", {}) or {}).get("cbeta_ebook")
+            or str(PROJECT_ROOT / "cbeta_xml"))
+        self.ed_x2p_ebook.setPlaceholderText("CBETA XML 目录（不可为空；空则用默认 cbeta_xml）")
+        self.ed_xmlbooks = QLineEdit()
+        self.ed_verify = QLineEdit()
+        self.ed_verify.setPlaceholderText("校验工作目录（默认 cbeta_verify）")
+        self.cb_preset = self._no_wheel_until_focused(QComboBox())
+        self._reload_preset_combo()
+        form.addRow("自制程序路径", self._dir_row(self.ed_x2p))
+        form.addRow("CBETA XML 目录", self._dir_row(self.ed_x2p_ebook))
+        form.addRow("自制电子书", self._dir_row(self.ed_xmlbooks))
+        form.addRow("校验工作目录", self._dir_row(self.ed_verify))
+        form.addRow("默认预设", self.cb_preset)
+        hint = QLabel("自制：电子书由程序根据官方 XML 制作。默认预设用于来源选自制、且未另选预设时。")
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: gray;")
+        form.addRow(hint)
+        return w
+
 
     def _reload_preset_combo(self, keep=None):
         # 预设下拉：xml2pdf 仓库 presets/ 下的预设名 + 首项"出厂默认"（空值）
@@ -484,6 +540,16 @@ class SettingsDialog(QDialog):
             self.cb_interval.setCurrentText(iv)
         src = c.get("default_source", "official")
         (self.rb_src_made if src == "xml" else self.rb_src_official).setChecked(True)
+        df = c.get("default_formats", {}) or {}
+        for f, cb in self.fmt_merge_boxes.items():
+            cb.setChecked(f in (df.get("merge") or ["pdf", "epub"]))
+        for scope, key in ((self.fmt_zip_boxes, "zip"), (self.fmt_export_boxes, "export")):
+            d = df.get(key, {}) or {}
+            for side, default in (("official", self._official_pack_fmts()),
+                                  ("xml", self._made_pack_fmts())):
+                want = set(d.get(side) if d.get(side) is not None else default)
+                for f, cb in scope[side].items():
+                    cb.setChecked(f in want)
         x2p = c.get("xml2pdf", {}) or {}
         self.ed_x2p.setText(self._native_path(x2p.get("path", "")))
         self.ed_x2p_ebook.setText(self._native_path(
@@ -609,6 +675,21 @@ class SettingsDialog(QDialog):
     def _tab_update(self):
         w = QWidget()
         v = QVBoxLayout(w)
+        # 更新频率（原在「数据/输出」）：目录/元数据后台检查周期
+        interval_row = QWidget()
+        _ir = QHBoxLayout(interval_row)
+        _ir.setContentsMargins(0, 0, 0, 0)
+        _ir.addWidget(QLabel("更新频率"))
+        self.cb_interval = self._no_wheel_until_focused(QComboBox())
+        self.cb_interval.addItems(["daily", "weekly", "monthly", "manual"])
+        cur = self._cfg.get("update_interval", "weekly")
+        if cur in ["daily", "weekly", "monthly", "manual"]:
+            self.cb_interval.setCurrentText(cur)
+        self.cb_interval.setToolTip("启动时是否后台检查目录/元数据更新：daily=每天一次 / "
+                                    "weekly=每周 / monthly=每月 / manual=只手动检查")
+        _ir.addWidget(self.cb_interval)
+        _ir.addStretch()
+        v.addWidget(interval_row)
         self.lbl_last_check = QLabel()
         v.addWidget(self.lbl_last_check)
         self.tbl = QTableWidget(0, 5)
@@ -1018,6 +1099,13 @@ class SettingsDialog(QDialog):
         c["output_dir"] = self._native_path(self._resolve_out_dir(self.ed_output.text()))
         c["update_interval"] = self.cb_interval.currentText()
         c["default_source"] = "xml" if self.rb_src_made.isChecked() else "official"
+        c["default_formats"] = {
+            "merge": [f for f in ("pdf", "epub") if self.fmt_merge_boxes[f].isChecked()],
+            "zip": {k: [f for f, b in self.fmt_zip_boxes[k].items() if b.isChecked()]
+                    for k in ("official", "xml")},
+            "export": {k: [f for f, b in self.fmt_export_boxes[k].items() if b.isChecked()]
+                       for k in ("official", "xml")},
+        }
         c.setdefault("xml2pdf", {})
         # 旧逐项（page/font_lang/engine/vertical）照读兼容，不再写入/使用，preset 为准；
         # regen 生成策略已移除（合并/ZIP/导出恒仅缺，全部重生成用「重制」）
