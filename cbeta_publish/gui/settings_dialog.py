@@ -49,7 +49,7 @@ DEFAULT_CONFIG = {
         "imprint": "CBETA 電子佛典自選叢書",
         "mode": "print",
         "enabled": True,
-        "intro": {"enabled": True, "title": "说明", "list": True},
+        "intro": {"enabled": True, "title": "说明", "note": "依 CBETA XML 自制", "list": True},
         "images": {
             "buddha": {"file": "assets/images/buddha.jpg", "enabled": True},
             "weituo": {"file": "assets/images/weituo.jpg", "enabled": True},
@@ -70,6 +70,7 @@ DEFAULT_CONFIG = {
             "date": {"font": "C:/Windows/Fonts/simhei.ttf", "color": [100, 100, 100], "ratio": 1.0},
             "toc_title": {"font": "C:/Windows/Fonts/Source Han Serif SC Heavy (TrueType).ttf", "color": [0, 0, 0], "ratio": 2.0},
             "toc_item": {"font": "C:/Windows/Fonts/simhei.ttf", "color": [30, 30, 30], "delta": 2},
+            "intro_summary": {"font": "C:/Windows/Fonts/simfang.ttf", "color": [30, 30, 30]},
             "toc_page": {"font": "C:/Windows/Fonts/simhei.ttf", "color": [100, 100, 100], "ratio": 1.0},
             "background": {"color": [250, 245, 230]},
         },
@@ -429,12 +430,15 @@ class SettingsDialog(QDialog):
         hint_cover.setWordWrap(True)
         form.addRow(hint_cover)
         # 说明页（部类统计 + 完整清单，自动从书单推导；仅封面模式生效）
-        intro = cover.setdefault("intro", {"enabled": True, "title": "说明", "list": True})
+        intro = cover.setdefault("intro", {"enabled": True, "title": "说明", "note": "依 CBETA XML 自制", "list": True})
         self.chk_intro_enabled = QCheckBox("插入说明页（部类统计 + 完整清单）")
         self.chk_intro_enabled.setChecked(bool(intro.get("enabled", True)))
         form.addRow(self.chk_intro_enabled)
         self.ed_intro_title = QLineEdit(intro.get("title", "说明"))
         form.addRow("说明页标题", self.ed_intro_title)
+        self.ed_intro_note = QLineEdit(intro.get("note", "依 CBETA XML 自制"))
+        self.ed_intro_note.setToolTip("说明页标题下一行（居中）；仅来源=自制时显示。留空则不显示。")
+        form.addRow("说明页注明", self.ed_intro_note)
         hint_intro = QLabel("部类统计与清单自动从丛书书单推导；仅在「合并时使用封面/封底页」开启时插入。")
         hint_intro.setStyleSheet("color: gray;")
         hint_intro.setWordWrap(True)
@@ -507,12 +511,15 @@ class SettingsDialog(QDialog):
             ("cbeta", "左上角系列名"), ("title", "封面标题"), ("organizer", "整理者"),
             ("date", "日期"), ("toc_title", "目录/说明标题"),
             ("toc_item", "目录/说明条目"), ("toc_page", "目录页码"),
+            ("intro_summary", "说明页简介"),
         ]
+        _font_defaults = {"intro_summary": "C:/Windows/Fonts/simfang.ttf"}
         for key, label in font_labels:
             row = QWidget()
             h = QHBoxLayout(row)
             h.setContentsMargins(0, 0, 0, 0)
-            ed = QLineEdit(self._native_path(styles.get(key, {}).get("font", "")))
+            cur = styles.get(key, {}).get("font", "") or _font_defaults.get(key, "")
+            ed = QLineEdit(self._native_path(cur))
             ed.setReadOnly(True)
             ed.setToolTip("缺繁体字形时按顺序回退到系统全字库（黑体simhei → 微软雅黑msyh → 宋体simsun）")
             btn = QPushButton("浏览…")
@@ -613,6 +620,7 @@ class SettingsDialog(QDialog):
         intro = cover.setdefault("intro", {})
         self.chk_intro_enabled.setChecked(bool(intro.get("enabled", True)))
         self.ed_intro_title.setText(intro.get("title", "说明"))
+        self.ed_intro_note.setText(intro.get("note", "依 CBETA XML 自制"))
         sizes = cover.setdefault("sizes", {})
         for paper, sp in self.sp_body.items():
             sp.setValue(int(sizes.get(f"body_{paper}", {"a5":10,"a4":12,"16k":11,"32k":9}[paper])))
@@ -642,8 +650,10 @@ class SettingsDialog(QDialog):
         self.sp_split_epub.setValue(int(epub_cfg.get("split_items", 500) or 0))
         self._sync_merge_defaults(c)
         styles = cover.setdefault("styles", {})
+        _font_defaults = {"intro_summary": "C:/Windows/Fonts/simfang.ttf"}
         for key, ed in self.font_rows.items():
-            ed.setText(self._native_path(styles.get(key, {}).get("font", "")))
+            cur = styles.get(key, {}).get("font", "") or _font_defaults.get(key, "")
+            ed.setText(self._native_path(cur))
         theme = c.setdefault("theme", {"mode": "system", "accent": "#8B4513"})
         self._set_radio(self.theme_radios, theme.get("mode", "system"), "system")
         self.ed_accent.setText(theme.get("accent", "#8B4513"))
@@ -1174,6 +1184,7 @@ class SettingsDialog(QDialog):
         cover["enabled"] = self.chk_cover_enabled.isChecked()
         cover.setdefault("intro", {})["enabled"] = self.chk_intro_enabled.isChecked()
         cover["intro"]["title"] = self.ed_intro_title.text().strip() or "说明"
+        cover["intro"]["note"] = self.ed_intro_note.text().strip()
         sizes = cover.setdefault("sizes", {})
         for paper, sp in self.sp_body.items():
             sizes[f"body_{paper}"] = sp.value()

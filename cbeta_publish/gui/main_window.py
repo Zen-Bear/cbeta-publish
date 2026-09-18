@@ -4662,8 +4662,9 @@ class MainWindow(QMainWindow):
                 if not intro_cfg.get("list", True):
                     intro["sections"]=[]
                 if made_by_xml:
-                    # 自制来源整页注明（官方不加）；居中排在说明标题下一行
-                    intro["note"]="E书依 CBETA XML 自制"
+                    # 自制来源在「说明」标题下一行居中注明（文案可在设置「封面/版式」改）
+                    _note=(intro_cfg.get("note") or "").strip() or "依 CBETA XML 自制"
+                    intro["note"]=_note
             except Exception as e:
                 print("intro build fail", e)
                 intro=None

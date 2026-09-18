@@ -576,12 +576,14 @@ def _intro_pdf(intro: dict, first_src: Path, out_path: Path, config: dict=None) 
         return _register_font(name, path)
     f_title=reg("IntroTitle", _font("toc_title", "C:\\Windows\\Fonts\\Source Han Serif SC Heavy (TrueType).ttf"))
     f_body=reg("IntroBody", _font("toc_item", "C:\\Windows\\Fonts\\Source Han Serif SC Heavy (TrueType).ttf"))
+    # 简介三行（本丛书…/三藏分布/部类分布）：默认仿宋；可在「封面/版式 → 字体」改
+    f_summary=reg("IntroSummary", _font("intro_summary", "C:\\Windows\\Fonts\\simfang.ttf"))
     tm=_toc_text_style(cfg, width, height, paper)
     left=tm["left"]; right=tm["right"]; bottom=tm["bottom"]
     title_sz=tm["title_sz"]
     item_sz=tm["item_sz"]
-    # 正文行距与 EPUB 对齐：默认行高约 1.2，加上折叠后的段落边距。
-    summary_advance=item_sz*1.5
+    # 简介单行行距；清单条目沿用目录条目行距
+    summary_advance=item_sz*1.2
     row_advance=item_sz*1.35
     body_continue_y=tm["body_continue_y"]
     c=canvas.Canvas(str(out_path), pagesize=(width, height))
@@ -627,13 +629,14 @@ def _intro_pdf(intro: dict, first_src: Path, out_path: Path, config: dict=None) 
     for ln in intro.get("summary",[]) or []:
         if y<bottom+summary_advance:
             _new_page()
-        _draw(_fit(ln, f_body, item_sz, maxw), left, y, f_body, item_sz, _color("toc_item",[30,30,30]))
+        _draw(_fit(ln, f_summary, item_sz, maxw), left, y, f_summary, item_sz, _color("toc_item",[30,30,30]))
         y-=summary_advance
     for header, rows in intro.get("sections",[]) or []:
         y-=item_sz*0.5
         if y<bottom+summary_advance:
             _new_page()
-        _draw(_fit(header, f_title, item_sz, maxw), left, y, f_title, item_sz, _color("toc_title",[0,0,0]))
+        # 部类/刊本信息（分组标题）字体沿用目录条目
+        _draw(_fit(header, f_body, item_sz, maxw), left, y, f_body, item_sz, _color("toc_item",[30,30,30]))
         y-=summary_advance
         for r in rows:
             if y<bottom+row_advance:
@@ -916,7 +919,8 @@ def _epub_intro_page(intro: dict):
     if intro.get("note"):
         parts.append(f'<p style="text-align:center;margin:0.2em 0 0.6em;">{_html.escape(str(intro["note"]))}</p>')
     for ln in intro.get("summary",[]) or []:
-        parts.append(f'<p style="margin:0.3em 0;">{_html.escape(ln)}</p>')
+        parts.append(f'<p style="margin:0.3em 0;line-height:1.2;'
+                     f'font-family:\'FangSong\',\'仿宋\',serif;">{_html.escape(ln)}</p>')
     for header, rows in intro.get("sections",[]) or []:
         parts.append(f'<h2 style="font-size:1.3em;margin-top:1.2em;">{_html.escape(header)}</h2>')
         parts.append('<div style="margin-left:1em;">')
