@@ -254,6 +254,26 @@ class MergeModeTest(unittest.TestCase):
         self.assertAlmostEqual(sigmas[1][1] - sigmas[0][1], 13 * 1.2, places=1)
         self.assertAlmostEqual(items[1][1] - items[0][1], 13 * 1.35, places=1)
 
+    def test_intro_section_path_header_splits_lines(self):
+        # 部类/刊本分组标题含路径（" / "）时每段独立成行（用目录条目字体）
+        out = self.dir / "intro-path" / "intro.pdf"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        _intro_pdf(
+            {"title": "Intro", "summary": [],
+             "sections": [("13 中觀部類 / 三論宗 / 肇論／疏", ["T1858 肇論"])]},
+            self.srcs[0], out, config={},
+        )
+        page = pymupdf.open(out)[0]
+        texts = []
+        for block in page.get_text("dict")["blocks"]:
+            for line in block.get("lines", []):
+                t = "".join(span["text"] for span in line.get("spans", [])).strip()
+                if t:
+                    texts.append(t)
+        self.assertIn("13 中觀部類", texts)
+        self.assertIn("三論宗", texts)
+        self.assertIn("肇論／疏", texts)
+
     def test_intro_section_prespacing(self):
         out = self.dir / "intro-blank" / "intro.pdf"
         out.parent.mkdir(parents=True, exist_ok=True)
