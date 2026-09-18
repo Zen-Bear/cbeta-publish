@@ -53,7 +53,7 @@ VERIFY_IMPORT_RULES_HTML = """\
 <ol>
 <li>「导入校验通过E书…」优先读当前丛书 <code>verify_dir/&lt;slug&gt;/</code>；
 无报告则<b>弹目录选择</b>，可指向独立窗输出目录（或其任意上层，递归扫描）。</li>
-<li>「生成并校验」跑完走同一规则自动导入。</li>
+<li>右栏「校验重制」跑完走同一规则自动导入。</li>
 </ol>
 """
 
@@ -535,7 +535,10 @@ class MainWindow(QMainWindow):
         self.chk_pdf.setChecked(True)
         self.chk_epub=QCheckBox(" epub")
         self.chk_epub.setIcon(QIcon(str(icon_dir/"epub.png")))
-        fh.addWidget(self.chk_pdf); fh.addWidget(self.chk_epub)
+        self.chk_docx=QCheckBox(" docx")
+        self.chk_docx.setIcon(QIcon(str(icon_dir/"docx.png")))
+        self.chk_docx.setChecked(True)
+        fh.addWidget(self.chk_pdf); fh.addWidget(self.chk_epub); fh.addWidget(self.chk_docx)
         fh.addStretch()
         self.lbl_pack_hint=QLabel("（其它格式用ZIP/导出）")
         self.lbl_pack_hint.setStyleSheet("color: gray")
@@ -577,8 +580,8 @@ class MainWindow(QMainWindow):
         self.btn_make.setToolTip("生成缺失的自制电子书（已有书籍直接复用）")
         self.btn_remake=QPushButton("重制")
         self.btn_remake.setToolTip("重新生成全部自制电子书（忽略已有书籍）")
-        self.btn_verify=QPushButton("生成并校验")
-        self.btn_verify.setToolTip("逐本生成并校验自制电子书，跑完自动导入校验通过项")
+        self.btn_verify=QPushButton("校验重制")
+        self.btn_verify.setToolTip("重新生成E书，校验通过才导入")
         self.btn_merge=QPushButton("合并")
         self.btn_merge.setToolTip("PDF/ePub合并成一个文件（单一格式，允许分册）")
         self.btn_zip=QPushButton("ZIP")
@@ -756,6 +759,7 @@ class MainWindow(QMainWindow):
         self.coll_list.viewport().setMouseTracking(True)   # 图标 tooltip 需移动事件
         self.chk_pdf.stateChanged.connect(self._load_coll_works)
         self.chk_epub.stateChanged.connect(self._load_coll_works)
+        self.chk_docx.stateChanged.connect(self._load_coll_works)
         self.lbl_coll_info.linkActivated.connect(self._open_publish_link)
         self.tree.dragEnterEvent = lambda e: self._tree_drag_enter(e)
         self.tree.dragMoveEvent = lambda e: self._drop_move(e, self.tree)
@@ -1849,10 +1853,11 @@ class MainWindow(QMainWindow):
             pass
 
     def _checked_fmts(self):
-        """右栏「格式」勾选 → ["pdf"]/["epub"]/["pdf","epub"]（pdf 在前）。"""
+        """右栏「格式」勾选 → pdf/epub/docx 子集（pdf 在前；合并只取其中 pdf/epub）。"""
         fmts=[]
         if self.chk_pdf.isChecked(): fmts.append("pdf")
         if self.chk_epub.isChecked(): fmts.append("epub")
+        if self.chk_docx.isChecked(): fmts.append("docx")
         return fmts
 
     def _sync_source_preset_ui(self):
@@ -3737,7 +3742,7 @@ class MainWindow(QMainWindow):
         """
         from PySide6.QtGui import QDesktopServices
         from PySide6.QtCore import QUrl
-        fmts=[prefer] if only_prefer else [prefer] + [f for f in ("pdf","epub") if f!=prefer]
+        fmts=[prefer] if only_prefer else [prefer] + [f for f in ("pdf","epub","docx") if f!=prefer]
         for fmt in fmts:
             dest=self._ebook_path(work, fmt)
             if dest is not None and Path(dest).exists():
@@ -3874,7 +3879,7 @@ class MainWindow(QMainWindow):
             return
         fmts=self._checked_fmts()
         if not fmts:
-            self.detail.setText("请至少选择一种格式 pdf/epub")
+            self.detail.setText("请至少选择一种格式 pdf/epub/docx")
             return
         dest_dir=official_ebook_source.official_books_dir(self.config)
         pairs=[(w, f) for w in works for f in fmts]
@@ -3898,7 +3903,7 @@ class MainWindow(QMainWindow):
         #   自制 = 仅生成缺少（复用已有）；重制 = 全部重新生成
         fmts=self._checked_fmts()
         if not fmts:
-            QMessageBox.warning(self, "失败", "请至少选择一种格式 pdf/epub")
+            QMessageBox.warning(self, "失败", "请至少选择一种格式 pdf/epub/docx")
             return
         data=self.coll_combo.currentData()
         if self._is_coll_placeholder(data):
@@ -4243,7 +4248,7 @@ class MainWindow(QMainWindow):
         return data, d, works
 
     def _send_coll_to_verify(self):
-        """「当前丛书生成并校验」：进程内逐本生成+校验，跑完自动导入通过项。"""
+        """「校验重制」：进程内逐本生成+校验，跑完自动导入通过项。"""
         from cbeta_publish.books import xml2pdf_bridge as _b
         from cbeta_publish.books.verify_worker import VerifyWorker
         from PySide6.QtCore import QEventLoop
@@ -4257,7 +4262,7 @@ class MainWindow(QMainWindow):
             return
         fmts=self._checked_fmts()
         if not fmts:
-            self._wrap_box(QMessageBox.Warning, "失败", "请至少选择一种格式 pdf/epub")
+            self._wrap_box(QMessageBox.Warning, "失败", "请至少选择一种格式 pdf/epub/docx")
             return
         x2p=Path((self.config.get("xml2pdf",{}) or {}).get("path","") or "E:/dev/cbeta/xml2pdf")
         if not x2p.exists():
@@ -4272,7 +4277,7 @@ class MainWindow(QMainWindow):
             return
         preset=self._run_preset()
         total=max(1, len(works))
-        dlg, update, pstate=self._make_progress("生成并校验", total)
+        dlg, update, pstate=self._make_progress("校验重制", total)
         result={"ok": 0, "failed": []}
         def on_prog(done, label, level):
             update(done, label, is_html=False)
@@ -4707,9 +4712,9 @@ class MainWindow(QMainWindow):
         return ok_map, failed, cancelled
 
     def _merge(self):
-        fmts=self._checked_fmts()
+        fmts=[f for f in self._checked_fmts() if f in ("pdf", "epub")]
         if not fmts:
-            QMessageBox.warning(self,"失败","请至少选择一种格式 pdf/epub")
+            QMessageBox.warning(self,"失败","请至少选择一种格式 pdf/epub/docx（合并暂不支持 docx）")
             return
         data=self.coll_combo.currentData()
         if self._is_coll_placeholder(data):
@@ -4929,10 +4934,10 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self,"失败", "合并失败:\n" + "\n".join(failed))
 
     def _pack_avail_fmts(self):
-        """打包（ZIP/导出）可选格式：官方源 7 种，自制源仅 pdf/epub。"""
+        """打包（ZIP/导出）可选格式：官方源 7 种，自制源 pdf/epub/docx。"""
         from cbeta_publish.books import official_ebook_source
         if self._run_source() == "xml":
-            return ["pdf", "epub"]
+            return ["pdf", "epub", "docx"]
         return list(official_ebook_source.PACK_FORMATS)
 
     def _choose_pack_fmts(self):

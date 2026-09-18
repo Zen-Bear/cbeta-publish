@@ -40,7 +40,7 @@ def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=No
   配置 > 默认），所以 publish 只传 `-i / -f / -o / --config / --cbeta-ebook` 即可。
   详见 xml2pdf《第三方调用说明》§8.4 / §8.6 / §8.7 / §9。
 - **例外两处**：
-  - `formats` 与 `-f`：由命令行 `-f` 决定（publish 用自己的 pdf/epub 勾选）；
+  - `formats` 与 `-f`：由命令行 `-f` 决定（publish 用自己的 pdf/epub/docx 勾选）；
     打开「调整…」时已把面板「输出格式」预置为该勾选，避免误导。
   - **CSS 槽（样式表）属 run.json**：已由临时 run.json 包装保留仓库主题
     （命名/临时预设两条路径一致）。
@@ -108,7 +108,7 @@ def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=No
 **输出目录**（两缓存根同构 `{root}/{fmt}/…`，根分开防复用串源）
 - 官方：`cbeta_ebooks/{fmt}/{work}.{fmt}`；目录型 `cbeta_ebooks/{fmt}/{work}/`
   （`official_books_dir` 收敛配置键，`cbeta_ebooks_dir` 优先兼容 `official_ebooks_dir`）。
-- 自制：`xml_to_ebooks_dir/{fmt}/{work}.{fmt}`（pdf/epub 分格式目录；
+- 自制：`xml_to_ebooks_dir/{fmt}/{work}.{fmt}`（pdf/epub/docx 分格式目录；
   `find_built` 优先精确名，其次同 `{fmt}/` 下 `{work}*.{fmt}` 通配）。
 - **旧版平展布局作废**（不迁移、不双读、不自动删）：旧文件需用户手动删除；
   自制书按新布局会视为不存在 → 需重下/重生成。
@@ -127,11 +127,13 @@ def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=No
 - 说明页：来源=自制时在「说明」标题下一行居中注「E书依 CBETA XML 自制」；官方不加。
 - 打包格式（ZIP/导出点后弹窗选，独立于合并格式勾选）：官方源 7 种
  （`PACK_FORMATS`：pdf/epub 单文件＋html/docx/odt/txt/txt_notes 目录型），
-  自制源仅 pdf/epub。目录型只打包不合并：
+  自制源 3 种：pdf/epub/docx。目录型只打包不合并：
   ZIP 按 `部/相对路径` 写入 `{丛书名}_{fmt}.zip`，导出整树拷贝到 `{target}/{work}/`。
   纯 txt 端点（`text/{id}.txt.zip`，不含校注）放 publish 自有 `_EXTRA_DOWNLOADS`，
   vendor 共享层不动。
-- 校验（进程内「生成并校验」＋自动/手动导入）：右栏发布行 `[生成并校验]`
+- 自制格式勾选（右栏）：pdf/epub/**docx**（docx 默认勾选）；**合并只取 pdf/epub**，
+  docx 走 ZIP/导出/校验/打开。`ensure_one`/`find_built`/`xml_dest` 格式通用，无需特判。
+- 校验（进程内「校验重制」＋自动/手动导入）：右栏发布行 `[校验重制]`
   （来源=自制时显示）触发 `VerifyWorker` 逐本调 `bridge.verify_work` → 库调用
   `pycbeta.cli.main(["-i", work, "-f", <勾选>, "-o", <vdir>, [--config wrap],
   "--cbeta-ebook", <工作根>, "--verify"])`（上游 `cli.py` 修 work id 校验 `2a10d12`；
@@ -156,8 +158,8 @@ def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=No
 - [x] `publish`：`xml2pdf_bridge.py`（库调用＋预设（上游 API）＋分格式目录＋`ensure_one` 生成策略）
 - [x] `publish`：右栏来源单选＋预设下拉＋[调整…]（生成策略单选已移除：合并/ZIP/导出恒仅缺，「重制」按钮=全部重生成）
 - [x] `publish`：`[合并]` 整批同源、分格式目录、说明页注明；**ZIP/导出 亦支持自制**
-- [x] `publish`：**生成并校验**（进程内 `VerifyWorker`→`verify_work`，跑完自动导入；
-  「自制书籍」菜单三项＋校验目录＋临时预设拦截；见 §5）
+- [x] `publish`：**校验重制**（进程内 `VerifyWorker`→`verify_work`，跑完自动导入；
+  「自制书籍」菜单＋校验目录＋临时预设拦截；见 §5）
 - [x] `xml2pdf`：`--verify` 支持 work id 输入（`2a10d12`：改用已 materialize 的 `xmls`；
   `16df9cf`：官方基线源目录 `src` 按 work 目录修正，编号输入可定位官方基线）
 - [x] `xml2pdf`：`-i` 输入分类健壮性（`25eccb8`：cwd 下有同名**非 XML** 目录时不再
@@ -212,7 +214,7 @@ JSON）时只当 `config-json` 单槽，其余 CSS 槽回出厂，不取仓库�
 ## 9. 附：独立窗输出目录导入规范
 
 本附录约定"xml2pdf 独立窗输出目录 → publish 自制书目录"的导入规则。
-publish 的「生成并校验」产物目录天然符合本规范；独立窗手动输出只要同样符合，
+publish 的「校验重制」产物目录天然符合本规范；独立窗手动输出只要同样符合，
 即可经「导入校验通过E书…」入库。程序内「自制书籍 → 独立窗输出与导入规则…」
 弹窗与本节同文。
 
@@ -247,4 +249,4 @@ publish 的「生成并校验」产物目录天然符合本规范；独立窗手
 
 1. 「导入校验通过E书…」优先读当前丛书 `verify_dir/<slug>/`；
    无报告则**弹目录选择**，可指向独立窗输出目录（或其任意上层，递归扫描）。
-2. 「生成并校验」跑完走同一规则（`_do_import_verified`）自动导入。
+2. 右栏「校验重制」跑完走同一规则（`_do_import_verified`）自动导入。

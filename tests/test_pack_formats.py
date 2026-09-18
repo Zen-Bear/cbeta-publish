@@ -55,10 +55,10 @@ class PackAvailTest(unittest.TestCase):
         self.assertEqual(self.win._pack_avail_fmts(), list(oes.PACK_FORMATS))
         self.assertEqual(len(oes.PACK_FORMATS), 7)
 
-    def test_xml_lists_two(self):
+    def test_xml_lists_three(self):
         self.win.config["default_source"] = "xml"
         try:
-            self.assertEqual(self.win._pack_avail_fmts(), ["pdf", "epub"])
+            self.assertEqual(self.win._pack_avail_fmts(), ["pdf", "epub", "docx"])
         finally:
             self.win.config["default_source"] = "official"
 
