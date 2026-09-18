@@ -45,6 +45,8 @@
     "split_items": 500
   },
   "merge": {
+    "mode": "none",
+    "depth": 2,
     "by_volume": false
   },
   "xml2pdf": {

@@ -39,7 +39,7 @@ DEFAULT_CONFIG = {
     },
     "pdf": {"split_pages": 5000},
     "epub": {"split_items": 500},
-    "merge": {"by_volume": False},
+    "merge": {"mode": "none", "depth": 2, "by_volume": False},
     "xml2pdf": {"path": "E:/dev/cbeta/xml2pdf",
                 "cbeta_ebook": str(PROJECT_ROOT / "cbeta_xml"),
                 "preset": "", "verify_build": False},
@@ -236,13 +236,59 @@ class SettingsDialog(QDialog):
         self.sp_split_epub.setValue(int((self._cfg.get("epub", {}) or {}).get("split_items", 500) or 0))
         split_form.addRow("EPUB 分册文档数", self.sp_split_epub)
         form.addRow(split_box)
-        # 按册分册：按 mulu/vol.json 的刊本分册归属，每册输出一个文件
-        self.chk_by_volume = QCheckBox("按册分册（每册一个文件，文件名=刊本名 序号 显示名）")
-        self.chk_by_volume.setToolTip("按 mulu/vol.json 的刊本分册（册=原书分卷，如 法藏/制藏/論藏/雜藏）；\n"
-                                     "手动在丛书中设定的册标签优先于自动归属；不勾选则整部丛书合并为一个文件")
-        self.chk_by_volume.setChecked(bool((self._cfg.get("merge", {}) or {}).get("by_volume", False)))
-        form.addRow(self.chk_by_volume)
+        # 分册模式：合并时按此分组；「合并时选择」则每次点合并弹框
+        mode_box = QGroupBox("分册模式（合并）")
+        mv = QVBoxLayout(mode_box)
+        self.merge_mode_group = QButtonGroup(mode_box)
+        self.rb_merge_none = QRadioButton("不分册")
+        self.rb_merge_volume = QRadioButton("按刊本册")
+        self.rb_merge_catalog = QRadioButton("按目录（部类）")
+        self.rb_merge_ask = QRadioButton("合并时选择（每次弹框）")
+        self.rb_merge_volume.setToolTip("按 mulu/vol.json 的刊本/册分组（一册一个文件）")
+        self.rb_merge_catalog.setToolTip("按部类树路径分组（如 01 阿含部類 / 長阿含經）")
+        self.rb_merge_ask.setToolTip("每次点合并时弹框选择分册模式与深度")
+        for _i, _rb in enumerate((self.rb_merge_none, self.rb_merge_volume,
+                                  self.rb_merge_catalog, self.rb_merge_ask)):
+            mv.addWidget(_rb)
+            self.merge_mode_group.addButton(_rb, _i)
+        _drow = QWidget()
+        _dh = QHBoxLayout(_drow)
+        _dh.setContentsMargins(0, 0, 0, 0)
+        _dh.addWidget(QLabel("深度（按刊本册/按目录）"))
+        self.sp_merge_depth = self._no_wheel_until_focused(QSpinBox())
+        self.sp_merge_depth.setRange(1, 5)
+        self.sp_merge_depth.setValue(int((self._cfg.get("merge", {}) or {}).get("depth", 2) or 2))
+        self.sp_merge_depth.setToolTip("路径取前 N 段：1=按刊本名/顶层部类；2=刊本名_册、部类_子组（默认）")
+        _dh.addWidget(self.sp_merge_depth)
+        _dh.addStretch()
+        mv.addWidget(_drow)
+        form.addRow(mode_box)
+        self._set_merge_mode()
         return w
+
+    def _merge_mode_value(self):
+        if self.rb_merge_volume.isChecked():
+            return "volume"
+        if self.rb_merge_catalog.isChecked():
+            return "catalog"
+        if self.rb_merge_ask.isChecked():
+            return "ask"
+        return "none"
+
+    def _set_merge_mode(self):
+        m = (self._cfg.get("merge", {}) or {}).get("mode")
+        if m not in ("none", "volume", "catalog", "ask"):
+            m = "volume" if (self._cfg.get("merge", {}) or {}).get("by_volume") else "none"
+        ({"volume": self.rb_merge_volume, "catalog": self.rb_merge_catalog,
+          "ask": self.rb_merge_ask}.get(m, self.rb_merge_none)).setChecked(True)
+
+    def _sync_merge_defaults(self, c):
+        self._set_merge_mode()
+        try:
+            d = int((c.get("merge", {}) or {}).get("depth", 2) or 2)
+        except Exception:
+            d = 2
+        self.sp_merge_depth.setValue(max(1, min(5, d)))
 
     @staticmethod
     def _official_pack_fmts():
@@ -594,7 +640,7 @@ class SettingsDialog(QDialog):
         self.sp_split_pdf.setValue(int(pdf_cfg.get("split_pages", 5000) or 0))
         epub_cfg = c.setdefault("epub", {})
         self.sp_split_epub.setValue(int(epub_cfg.get("split_items", 500) or 0))
-        self.chk_by_volume.setChecked(bool((c.get("merge", {}) or {}).get("by_volume", False)))
+        self._sync_merge_defaults(c)
         styles = cover.setdefault("styles", {})
         for key, ed in self.font_rows.items():
             ed.setText(self._native_path(styles.get(key, {}).get("font", "")))
@@ -1143,7 +1189,9 @@ class SettingsDialog(QDialog):
             images[key] = {"file": ed.text().strip(), "enabled": chk.isChecked()}
         c.setdefault("pdf", {})["split_pages"] = self.sp_split_pdf.value()
         c.setdefault("epub", {})["split_items"] = self.sp_split_epub.value()
-        c.setdefault("merge", {})["by_volume"] = self.chk_by_volume.isChecked()
+        c.setdefault("merge", {})["by_volume"] = (self._merge_mode_value() == "volume")
+        c["merge"]["mode"] = self._merge_mode_value()
+        c["merge"]["depth"] = int(self.sp_merge_depth.value())
         # 外观
         c.setdefault("theme", {})["mode"] = self._radio_value(self.theme_group, self.theme_radios)
         c["theme"]["accent"] = self.ed_accent.text().strip()
