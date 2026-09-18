@@ -2003,20 +2003,13 @@ class MainWindow(QMainWindow):
         self.detail.setText(f"预设已保存：{path.name}")
 
     def _persist_last_collection(self, path):
-        # 记住上次工作的丛书，下次启动直接应用
+        # 记住上次工作的丛书，下次启动直接打开（写整份内存配置，避免与磁盘合并半途状态）
         try:
-            cfg=self.config
-            ui=cfg.setdefault("ui", {})
+            ui=self.config.setdefault("ui", {})
             if ui.get("last_collection")==path:
                 return
             ui["last_collection"]=path
-            p=Path(self._config_path)
-            if p.exists():
-                disk=json.loads(p.read_text(encoding="utf-8"))
-            else:
-                disk=cfg
-            disk.setdefault("ui", {})["last_collection"]=path
-            p.write_text(json.dumps(disk, ensure_ascii=False, indent=2), encoding="utf-8")
+            self._save_config()
         except Exception as e:
             print("persist last collection fail", e)
 
@@ -3547,9 +3540,7 @@ class MainWindow(QMainWindow):
             item=QListWidgetItem()
             item.setData(Qt.UserRole, w)
             item.setFlags(item.flags() | Qt.ItemIsDragEnabled | Qt.ItemIsEnabled | Qt.ItemIsSelectable)
-            tips=[f"{fmt.upper()} 双击打开" if ex else f"{fmt.upper()}未下载"
-                  for fmt, ex in fmts_status]
-            item.setToolTip("　".join(tips))
+            # 行级 tooltip 不再设置：与图标 tooltip 冲突/闪烁；图标提示由 eventFilter 悬停显示
             row=QWidget()
             # setItemWidget 的子控件会吞掉鼠标事件导致拖拽无法启动；
             # 让整行对鼠标透明，事件直达 viewport 从而可拖拽。

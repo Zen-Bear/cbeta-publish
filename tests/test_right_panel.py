@@ -591,12 +591,52 @@ class MadeBooksInfoTest(unittest.TestCase):
                      if getattr(lb, "fmt", None)}
             self.assertTrue(icons["pdf"].exists_flag)     # 已有 → 双击打开
             self.assertFalse(icons["epub"].exists_flag)   # 缺 → 未下载
-            # 行 tooltip：存在的显示「双击打开」，缺的显示「未下载」
-            tip = win.coll_list.item(0).toolTip()
-            self.assertIn("PDF 双击打开", tip)
-            self.assertIn("EPUB未下载", tip)
+            # 行级 tooltip 已移除（与图标提示冲突/闪烁）；图标提示由 eventFilter 悬停显示
+            self.assertEqual(win.coll_list.item(0).toolTip(), "")
         finally:
             win.config["default_source"] = "official"
+
+
+class LastCollectionTest(unittest.TestCase):
+    """上次工作的丛书：启动按 ui.last_collection 选中；切换即持久化到 config。"""
+
+    def _win(self, last=None):
+        _ensure_app()
+        tmp = Path(tempfile.mkdtemp())
+        c = tmp / "collections" / "custom"
+        c.mkdir(parents=True)
+        (tmp / "collections" / "categories.json").write_text("[]", encoding="utf-8")
+        for name, wid in (("甲", "T0001"), ("乙", "T0002")):
+            (c / f"{name}.json").write_text(json.dumps(
+                {"id": name, "name": name, "category": "custom", "tags": [],
+                 "work_ids": [wid]}, ensure_ascii=False), encoding="utf-8")
+        cfg = json.loads((ROOT / "config" / "app.json").read_text(encoding="utf-8"))
+        cfg["mulu_dir"] = str(ROOT / "mulu")
+        cfg["collections_dir"] = str(tmp / "collections")
+        cfg["update_interval"] = "manual"
+        cfg["_config_path"] = str(tmp / "app.json")
+        cfg.setdefault("ui", {})["last_collection"] = str(c / f"{last}.json") if last else ""
+        return MainWindow(cfg), tmp, c
+
+    def test_startup_selects_last_collection(self):
+        win, tmp, c = self._win(last="乙")
+        try:
+            self.assertEqual(win.coll_combo.currentText(), "乙")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_switch_persists(self):
+        win, tmp, c = self._win(last="乙")
+        try:
+            for i in range(win.coll_combo.count()):
+                if win.coll_combo.itemData(i) == str(c / "甲.json"):
+                    win.coll_combo.setCurrentIndex(i)
+                    break
+            _ensure_app().processEvents()
+            disk = json.loads((tmp / "app.json").read_text(encoding="utf-8"))
+            self.assertEqual(disk["ui"]["last_collection"], str(c / "甲.json"))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
 
 if __name__ == "__main__":

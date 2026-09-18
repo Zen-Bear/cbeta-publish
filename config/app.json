@@ -18,7 +18,7 @@
     "app_font": "SimSun",
     "app_font_size": 10,
     "supplement_ttf": "E:\\dev\\cbeta\\xml2pdf\\cbeta\\CBETA 補充字型\\CBETASupplement.ttf",
-    "last_collection": "E:\\dev\\cbeta\\publish\\collections\\custom\\测试丛书1.json"
+    "last_collection": "E:\\dev\\cbeta\\publish\\collections\\Bear\\多部类丛书.json"
   },
   "default_source": "xml",
   "default_formats": {
