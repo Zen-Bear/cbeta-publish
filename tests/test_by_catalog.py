@@ -69,6 +69,11 @@ class CatalogPathTest(unittest.TestCase):
     def test_clean_seg_strips_ids(self):
         self.assertEqual(cp._clean_bulei_seg("T0001-25 長阿含經 etc. T01"), "長阿含經")
         self.assertEqual(cp._clean_bulei_seg("01 阿含部類 T01-02,25,33 etc."), "01 阿含部類")
+        # 全角 ／ 保留；T/K/X/G 经号与 etc. 去掉
+        self.assertEqual(cp._clean_bulei_seg("T30a, K41 中觀部／疏 T42,85, X46, G151"),
+                         "中觀部／疏")
+        self.assertEqual(cp._clean_bulei_seg("T1564-67, K1482 中論 etc.／疏 T42"),
+                         "中論／疏")
 
 
 class CatalogGroupingTest(unittest.TestCase):
@@ -108,6 +113,41 @@ class CatalogGroupingTest(unittest.TestCase):
         self.assertEqual(self.win._merge_mode(), "volume")
         self.win.config["merge"] = {"mode": "catalog", "depth": 9}
         self.assertEqual(self.win._merge_depth(), 5)           # clamp 1..5
+
+
+    def test_merge_ask_dialog_reject_aborts(self):
+        # 「合并时选择」→ 弹框；取消则中止（并覆盖 QDialog.Accepted 判定）
+        import cbeta_publish.gui.merge_dialog as md
+        win = self.win
+        col = Path(win.config["collections_dir"]) / "custom" / "ask.json"
+        col.write_text(json.dumps({"id": "ask", "name": "ask", "category": "custom",
+                                   "tags": [], "work_ids": ["T0001"]},
+                                  ensure_ascii=False), encoding="utf-8")
+        win._load_collections()
+        for i in range(win.coll_combo.count()):
+            if str(win.coll_combo.itemData(i)).endswith("ask.json"):
+                win.coll_combo.setCurrentIndex(i)
+                break
+        win.config.setdefault("merge", {})["mode"] = "ask"
+
+        class _D:
+            def __init__(self, *a, **k):
+                pass
+
+            def exec(self):
+                return 0                     # != QDialog.Accepted
+
+            def chosen(self):
+                return ("none", 2)
+
+        real = md.MergeDialog
+        md.MergeDialog = _D
+        try:
+            win._merge()
+        finally:
+            md.MergeDialog = real
+            col.unlink(missing_ok=True)
+        self.assertIn("未选择分册模式", win.detail.text())
 
 
 class MergeDialogTest(unittest.TestCase):

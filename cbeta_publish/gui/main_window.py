@@ -4872,11 +4872,12 @@ class MainWindow(QMainWindow):
         merge_mode=self._merge_mode()
         merge_depth=self._merge_depth()
         if merge_mode=="ask":
+            from PySide6.QtWidgets import QDialog as _QD
             from cbeta_publish.gui.merge_dialog import MergeDialog
             last=self._merge_ask_last()
             dlg=MergeDialog(self, default_mode=last["mode"], default_depth=last["depth"],
                             preview=lambda m, dep: self._merge_preview(works, m, dep))
-            if dlg.exec()!=dlg.Accepted:
+            if dlg.exec()!=_QD.Accepted:
                 self.detail.setText("已取消合成（未选择分册模式）")
                 return
             merge_mode, merge_depth = dlg.chosen()
