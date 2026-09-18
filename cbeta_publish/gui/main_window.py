@@ -4152,6 +4152,25 @@ class MainWindow(QMainWindow):
                 self._save_collections()
             else:
                 self._revert_collections()
+        # 退出精确清理本进程临时文件（正常流程 wrapper 已删，此处兜底在途与临时预设）
+        try:
+            vw = getattr(self, "_verify_worker", None)
+            if vw is not None:
+                try:
+                    if vw.isRunning():
+                        vw.stop()
+                        vw.wait(5000)
+                except Exception:
+                    pass
+                self._verify_worker = None
+        except Exception:
+            pass
+        try:
+            from cbeta_publish.books import xml2pdf_bridge as _b
+            _b.cleanup_live_wrappers()
+        except Exception:
+            pass
+        self._clear_transient_preset()
         event.accept()
 
     # ---------- 合并 ----------
