@@ -2,7 +2,7 @@
 
 > 设计文档：`docs/设计总案.md`（总方案）、`docs/UI设计.md`（UI）、
 > `docs/链路B-设计契约.md`（与 xml2pdf 的跨仓调用契约）。
-> 测试：`python -m unittest discover tests`（当前 264 项通过）。
+> 测试：`python -m unittest discover tests`（当前 282 项通过）。
 
 ## 已完成（里程碑）
 
@@ -26,6 +26,10 @@
   目录行浏览按钮、本地分隔符、单选行（`_RadioBar`）。
 - **其它**：进度窗（合并日志/取消/无错自动关闭）、右下「书籍信息/丛书信息」页签、
   E书目录标签链接、产物可点击打开、更新源误报修复（`-gzip` ETag）。
+- **测试隔离**：所有 `MainWindow` 测试覆盖 `_config_path`/`collections_dir` 到临时目录，
+  全量不再写脏真实配置/丛书/备份；护栏 `tests/test_no_pollution.py`。
+- **软件名/版本**：单一来源 `cbeta_publish/__init__.py`（`APP_NAME`/`APP_ID`/`__version__`），
+  窗口标题与 `QApplication` 元数据取此处。
 
 ## 待办
 
@@ -40,11 +44,6 @@
 - ⑤ 设置页删「按册分册」勾选换只读提示；`by_volume` 仅留兼容读取。
 - ⑥ 单测 `tests/test_by_catalog.py` + 弹框 + 右栏用例。
 - **不做**：选择时记录来源、ZIP/导出弹框扩展、作者/朝代维度；三藏不单列。
-
-### P1 — 测试隔离（防污染真实配置）
-- 全量测试会写脏真实 `config/app.json` 与 `collections/custom/测试丛书1.json`
-  （`default_source` 往返、`last_publish_*`）。需排查把真实工程配置当落盘目标的测试路径，
-  全部改用临时 `_config_path`/临时 collections，或加断言防回归。
 
 ### P2 — 校验可配置阈值
 - 校验的 `maxDiff`/`diffLines` 目前取上游 CLI 默认（10/5），未接预设 `verify` 配置；
