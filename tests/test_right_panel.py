@@ -57,7 +57,7 @@ class RightPanelTest(unittest.TestCase):
         groups = [g for g in win.findChildren(QGroupBox) if g.title() == "发布"]
         self.assertEqual(len(groups), 1, [g.title() for g in win.findChildren(QGroupBox)])
         g = groups[0]
-        for w in (win.chk_pdf, win.chk_epub, win.btn_merge, win.btn_zip,
+        for w in (win.chk_pdf, win.chk_epub, win.chk_docx, win.btn_merge, win.btn_zip,
                   win.btn_export, win.btn_download, win.btn_verify):
             self.assertTrue(g.isAncestorOf(w), w)
         # 旧「发布:」标签已移除
@@ -113,7 +113,8 @@ class RightPanelTest(unittest.TestCase):
         self.assertTrue(win.btn_remake.isVisibleTo(win))
         self.assertTrue(win.btn_verify.isVisibleTo(win))
         self.assertEqual([win.btn_make.text(), win.btn_remake.text()], ["自制", "重制"])
-        self.assertEqual(win.btn_verify.text(), "生成并校验")
+        self.assertEqual(win.btn_verify.text(), "校验重制")
+        self.assertEqual(win.btn_verify.toolTip(), "重新生成E书，校验通过才导入")
         self.assertIn("缺失", win.btn_make.toolTip())
         self.assertIn("重新生成", win.btn_remake.toolTip())
         # 预设下拉 + 调整 紧跟「自制」单选右侧（同一行）
@@ -141,6 +142,7 @@ class RightPanelTest(unittest.TestCase):
         _ensure_app().processEvents()
         win.chk_pdf.setChecked(True)
         win.chk_epub.setChecked(False)
+        win.chk_docx.setChecked(False)
         calls = []
         real = b.convert
 
@@ -301,6 +303,7 @@ class RightPanelTest(unittest.TestCase):
         _ensure_app().processEvents()
         win.chk_pdf.setChecked(True)
         win.chk_epub.setChecked(False)
+        win.chk_docx.setChecked(False)
         win._wrap_box = lambda *a, **k: 0
         calls = []
         real = b.convert
@@ -336,6 +339,9 @@ class RightPanelTest(unittest.TestCase):
         win = self.win
         win.chk_pdf.setChecked(True)
         win.chk_epub.setChecked(True)
+        win.chk_docx.setChecked(True)
+        self.assertEqual(win._checked_fmts(), ["pdf", "epub", "docx"])
+        win.chk_docx.setChecked(False)
         self.assertEqual(win._checked_fmts(), ["pdf", "epub"])
         win.chk_epub.setChecked(False)
         self.assertEqual(win._checked_fmts(), ["pdf"])

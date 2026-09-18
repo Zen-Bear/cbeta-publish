@@ -145,6 +145,7 @@ class DownloadLogTest(unittest.TestCase):
         win._prompt_save_collection = lambda *a, **k: None
         win.chk_pdf.setChecked(True)
         win.chk_epub.setChecked(True)
+        win.chk_docx.setChecked(False)
         win._on_download_button()
         self.assertEqual(len(calls), 1)
         pairs, title = calls[0]
@@ -318,6 +319,7 @@ class MergeXmlSourceTest(unittest.TestCase):
         win.config["xml2pdf"]["preset"] = "my"
         win.chk_pdf.setChecked(True)
         win.chk_epub.setChecked(False)
+        win.chk_docx.setChecked(True)     # 勾了 docx：合并应过滤掉，只合 pdf
         calls = []
         real_convert, real_merge = b.convert, em.merge_pdfs
 
@@ -342,6 +344,25 @@ class MergeXmlSourceTest(unittest.TestCase):
         self.assertIsNone(xml)   # 只传 work id，XML 解析归 xml2pdf（P5a≠P5，不再自行定位）
         self.assertEqual(Path(preset_arg), preset)          # 预设透传
         self.assertEqual(out, str(self.tmp / "xb" / "pdf" / "T0001.pdf"))  # {fmt}/分层
+        self._coll_file.unlink(missing_ok=True)
+
+    def test_merge_only_docx_warns(self):
+        # 只勾 docx：合并不支持，直接警告，不进入合成
+        from PySide6.QtWidgets import QMessageBox
+        win = self.win
+        self._select_coll(["T0001"])
+        win.chk_pdf.setChecked(False)
+        win.chk_epub.setChecked(False)
+        win.chk_docx.setChecked(True)
+        warned = []
+        real = QMessageBox.warning
+        QMessageBox.warning = staticmethod(lambda *a, **k: warned.append(a))
+        try:
+            win._merge()
+        finally:
+            QMessageBox.warning = real
+            win.chk_pdf.setChecked(True)
+        self.assertTrue(warned, "只勾 docx 应弹警告")
         self._coll_file.unlink(missing_ok=True)
 
     def test_intro_note_only_for_made(self):

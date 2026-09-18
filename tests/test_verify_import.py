@@ -139,6 +139,9 @@ class VerifySendImportTest(unittest.TestCase):
 
     def test_send_runs_inprocess_and_autoimports(self):
         win = self.win
+        win.chk_pdf.setChecked(True)
+        win.chk_epub.setChecked(False)
+        win.chk_docx.setChecked(False)
         boxes, restore = self._patch_common()
         calls, restore_v = self._patch_verify()
         try:
