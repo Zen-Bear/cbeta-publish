@@ -51,6 +51,7 @@
 
 - **格式**：pdf/epub/docx 勾选（docx 默认勾选，是 xml2pdf 主要特点）；
   **合并只取其中 pdf/epub**（仅勾 docx 点合并会提示）；docx 走 ZIP/导出/校验/打开。
+  勾选职责（各框有 tooltip）＝用于「自制生成/下载/校验」与书单「已有」标志；
   其它格式走 ZIP/导出弹窗。
 - **来源**：互斥，读写全局 `default_source`（`official`/`xml`），改动即落盘。
 - **预设**：紧接「自制」单选右侧；xml2pdf 仓库 `presets/` 下 stem ＋「出厂默认」；改动写回全局。

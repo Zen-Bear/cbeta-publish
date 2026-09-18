@@ -71,6 +71,18 @@ class PackAvailTest(unittest.TestCase):
         stretch_at = next(i for i, it in enumerate(items) if it.spacerItem() is not None)
         self.assertGreater(hint_at, stretch_at)   # 提示在 stretch 之后 = 靠右
 
+    def test_format_checkbox_tooltips(self):
+        win = self.win
+        for cb in (win.chk_pdf, win.chk_epub, win.chk_docx):
+            self.assertTrue(cb.toolTip())
+        self.assertIn("不参与合并", win.chk_docx.toolTip())
+
+    def test_docx_icons_exist_and_differ(self):
+        d = Path(__file__).resolve().parents[1] / "cbeta_publish" / "gui" / "theme" / "icons"
+        c = (d / "docx.png").read_bytes()
+        g = (d / "docx_gray.png").read_bytes()
+        self.assertTrue(c and g and c != g)   # 有=蓝、无=灰，两图不同
+
 
 class PackDirFormatTest(unittest.TestCase):
     """目录型只打包：ZIP 按 部/相对路径 写入；导出整树拷贝。"""
