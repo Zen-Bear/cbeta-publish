@@ -12,8 +12,6 @@
 import re
 from pathlib import Path
 
-from cbeta_publish.catalog.bulei_index import _bulei_label
-
 WORK_RE = re.compile(r"[A-Z]+[0-9A-Za-z]*")
 
 #: 未归类分组用的排序权重（置末）
@@ -21,13 +19,35 @@ _LAST = 10 ** 6
 
 
 def _clean_bulei_seg(title: str) -> str:
-    """部类树节点标题 → 干净段名（去序号外的经号范围、`etc.`）。"""
-    t = _bulei_label(title or "", with_num=True) or (title or "")
-    t = re.sub(r"\betc\.?", "", t)
-    t = re.sub(r"^(\d+)\s+[A-Z]+\d+[-\dA-Za-z]*\s*", r"\1 ", t)   # "01 T01-02 阿含部類" → "01 阿含部類"
-    t = re.sub(r"^[A-Z]+\d+[-\dA-Za-z]*\s*", "", t)
+    """部类树节点标题 → 干净段名：去经号 token（T30a/T1564-67/K41/X46…）、
+    `etc.`、列表逗号；保留顶层序号前缀与全角 `／`（如 `中觀部／疏`）。
+
+    做法：截掉「从某处起已无 CJK」的尾部（那里都是经号/范围/etc.），
+    再剥去开头的经号 token。叶标题里的 `22卷` 因后随汉字而保留。
+    """
+    t = title or ""
+    m = re.match(r"^\s*(\d+)\s+", t)
+    num = m.group(1) if m else ""
+    if m:
+        t = t[m.end():]
+    # 截掉首个「其后全无非 CJK」的位置（经号范围、etc. 等）
+    for i in range(len(t)):
+        if not re.search(r"[\u3400-\u9fff]", t[i:]):
+            t = t[:i]
+            break
+    # 反复剥去开头的经号 token（可带逗号分隔的同类）
+    while True:
+        t2 = re.sub(r"^\s*[A-Za-z]{1,3}\d+[-\dA-Za-z]*\s*[,，、;；/]?\s*", "", t)
+        if t2 == t:
+            break
+        t = t2
+    t = re.sub(r"\betc\.?", " ", t, flags=re.I)
+    t = re.sub(r"[,，、;；/]+", " ", t)          # 去列表标点与半角斜杠
+    t = re.sub(r"\s*／\s*", "／", t)             # 全角斜杠两侧不留空格
     t = re.sub(r"\s+", " ", t).strip()
-    return t
+    if not re.search(r"[\u4e00-\u9fffA-Za-z]", t):
+        t = ""
+    return (f"{num} {t}".strip() if num else t).strip()
 
 
 def _safe_seg(seg: str) -> str:
