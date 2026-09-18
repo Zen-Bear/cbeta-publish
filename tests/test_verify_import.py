@@ -172,6 +172,37 @@ class VerifySendImportTest(unittest.TestCase):
             restore()
         self.assertFalse((base / "pdf" / "T0001.pdf").exists())
 
+    def test_make_button_dispatches_to_verify_when_configured(self):
+        # 设置「自制书籍=校验」→ 自制/重制 都走校验流程（regen_all 透传）
+        win = self.win
+        win.config.setdefault("xml2pdf", {})["verify_build"] = True
+        called = []
+        real = win._send_coll_to_verify
+        win._send_coll_to_verify = lambda regen_all=False: called.append(regen_all)
+        try:
+            win._on_make_button(False)
+            win._on_make_button(True)
+        finally:
+            win._send_coll_to_verify = real
+            win.config["xml2pdf"]["verify_build"] = False
+        self.assertEqual(called, [False, True])
+
+    def test_send_missing_only_skips_existing(self):
+        # 自制（regen_all=False）：只处理自制书目录里缺少的书
+        import cbeta_publish.books.xml2pdf_bridge as b
+        win = self.win
+        base = Path(win.config["xml_to_ebooks_dir"])
+        (base / "pdf").mkdir(parents=True, exist_ok=True)
+        (base / "pdf" / "T0001.pdf").write_bytes(b"old")   # T0001 已有 → 跳过
+        calls, restore_v = self._patch_verify()
+        boxes, restore = self._patch_common()
+        try:
+            win._send_coll_to_verify(regen_all=False)
+        finally:
+            restore_v()
+            restore()
+        self.assertEqual([c[0] for c in calls], ["T0002"])
+
     def test_send_blocks_on_tmp_preset(self):
         win = self.win
         boxes, restore = self._patch_common()

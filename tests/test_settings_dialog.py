@@ -157,23 +157,38 @@ class SettingsDialogTest(unittest.TestCase):
         self.assertTrue(d2.rb_src_made.isChecked())
 
     def test_default_formats_roundtrip(self):
-        # 默认勾选格式：合并（pdf/epub）与 ZIP/导出（官方全列/自制 pdf,docx,epub）
-        from cbeta_publish.gui.settings_dialog import SettingsDialog as _SD
+        # 默认勾选格式：合并（pdf/epub）与 官方/自制 两组（各自用于 ZIP/导出）
         dlg = self._dlg()
         dlg.fmt_merge_boxes["epub"].setChecked(False)
-        dlg.fmt_zip_boxes["xml"]["docx"].setChecked(False)
-        dlg.fmt_export_boxes["official"]["html"].setChecked(False)
+        dlg.fmt_made_boxes["docx"].setChecked(False)
+        dlg.fmt_off_boxes["html"].setChecked(False)
         df = dlg._collect()["default_formats"]
         self.assertEqual(df["merge"], ["pdf"])
-        self.assertNotIn("docx", df["zip"]["xml"])
-        self.assertNotIn("html", df["export"]["official"])
-        self.assertEqual(df["zip"]["official"], _SD._official_pack_fmts())
-        # 恢复默认后控件回填
+        self.assertNotIn("docx", df["xml"])
+        self.assertNotIn("html", df["official"])
+        self.assertEqual(set(df["xml"]) | set(), {"pdf"})
+        # 默认值：官方去掉 odt/txt_notes；自制不含 epub
+        self.assertEqual(DEFAULT_CONFIG["default_formats"]["official"],
+                         ["pdf", "epub", "html", "docx", "txt"])
+        self.assertEqual(DEFAULT_CONFIG["default_formats"]["xml"], ["pdf", "docx"])
         cfg = copy.deepcopy(DEFAULT_CONFIG)
         cfg["default_formats"]["merge"] = ["epub"]
         d2 = SettingsDialog(cfg, None)
         self.assertFalse(d2.fmt_merge_boxes["pdf"].isChecked())
         self.assertTrue(d2.fmt_merge_boxes["epub"].isChecked())
+        self.assertFalse(d2.fmt_off_boxes["odt"].isChecked())
+        self.assertFalse(d2.fmt_made_boxes["epub"].isChecked())
+
+    def test_build_verify_radio_and_roundtrip(self):
+        # 自制书籍：校验/无校验 单选，持久化到 xml2pdf.verify_build
+        dlg = self._dlg()
+        self.assertTrue(dlg.rb_build_noverify.isChecked())
+        dlg.rb_build_verify.setChecked(True)
+        self.assertTrue(dlg._collect()["xml2pdf"]["verify_build"])
+        cfg = copy.deepcopy(DEFAULT_CONFIG)
+        cfg["xml2pdf"]["verify_build"] = True
+        d2 = SettingsDialog(cfg, None)
+        self.assertTrue(d2.rb_build_verify.isChecked())
 
     def test_theme_language_are_radio(self):
         # 外观：主题（浅色/深色/跟随系统）与语言（简体/繁体/English）单选
@@ -251,8 +266,7 @@ class SettingsDialogTest(unittest.TestCase):
         self.assertEqual(len(groups), 1)
         box = groups[0]
         for w in (dlg.src_default_box, dlg.fmt_merge_boxes["pdf"],
-                  dlg.fmt_zip_boxes["official"]["pdf"], dlg.fmt_zip_boxes["xml"]["docx"],
-                  dlg.fmt_export_boxes["official"]["txt"], dlg.fmt_export_boxes["xml"]["epub"]):
+                  dlg.fmt_off_boxes["pdf"], dlg.fmt_made_boxes["docx"]):
             self.assertTrue(box.isAncestorOf(w), w)
         # 自制路径已移到「自制E书」页签（不在来源/格式框内）
         for w in (dlg.ed_x2p, dlg.ed_x2p_ebook, dlg.ed_xmlbooks, dlg.ed_verify,

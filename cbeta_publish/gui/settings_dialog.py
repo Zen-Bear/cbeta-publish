@@ -34,17 +34,15 @@ DEFAULT_CONFIG = {
     "default_source": "official",
     "default_formats": {
         "merge": ["pdf", "epub"],
-        "zip": {"official": ["pdf", "epub", "html", "docx", "odt", "txt", "txt_notes"],
-                "xml": ["pdf", "docx", "epub"]},
-        "export": {"official": ["pdf", "epub", "html", "docx", "odt", "txt", "txt_notes"],
-                   "xml": ["pdf", "docx", "epub"]},
+        "official": ["pdf", "epub", "html", "docx", "txt"],
+        "xml": ["pdf", "docx"],
     },
     "pdf": {"split_pages": 5000},
     "epub": {"split_items": 500},
     "merge": {"by_volume": False},
     "xml2pdf": {"path": "E:/dev/cbeta/xml2pdf",
                 "cbeta_ebook": str(PROJECT_ROOT / "cbeta_xml"),
-                "preset": ""},
+                "preset": "", "verify_build": False},
     "catalog": {"filters": {"tripitaka": {"hidden": []}, "dynasty": {"hidden": []}, "vol": {"hidden": []}}},
     "cover": {
         "organizer": "CBETA 整理",
@@ -210,17 +208,21 @@ class SettingsDialog(QDialog):
         for _i, _rb in enumerate((self.rb_src_official, self.rb_src_made)):
             _sdb.addWidget(_rb)
             self.src_default_group.addButton(_rb, _i)
+        _made_note = QLabel("（PDF/DOCX 优化，其它格式推荐官方）")
+        _made_note.setStyleSheet("color: gray;")
+        _sdb.addWidget(_made_note)
         _sdb.addStretch()
         def_form.addRow("默认E书来源", self.src_default_box)
         df = self._cfg.get("default_formats", {}) or {}
         r, self.fmt_merge_boxes = self._fmt_check_row(["pdf", "epub"], df.get("merge"))
         def_form.addRow("合并默认格式", r)
-        z = df.get("zip", {}) or {}
-        r, self.fmt_zip_boxes = self._fmt_check_pair(z.get("official"), z.get("xml"))
-        def_form.addRow("ZIP 默认格式", r)
-        e = df.get("export", {}) or {}
-        r, self.fmt_export_boxes = self._fmt_check_pair(e.get("official"), e.get("xml"))
-        def_form.addRow("导出默认格式", r)
+        # 官方/自制两组默认格式（各自同时用于 ZIP 与 导出）
+        ro, self.fmt_off_boxes = self._fmt_check_row(self._official_pack_fmts(),
+                                                     df.get("official"))
+        rx, self.fmt_made_boxes = self._fmt_check_row(self._made_pack_fmts(),
+                                                      df.get("xml"))
+        def_form.addRow("官方 ZIP/导出默认", ro)
+        def_form.addRow("自制 ZIP/导出默认", rx)
         form.addRow(def_box)
         # 分册：0=不分册
         split_box = QGroupBox("分册（0=不分册）")
@@ -265,21 +267,6 @@ class SettingsDialog(QDialog):
         h.addStretch()
         return row, boxes
 
-    def _fmt_check_pair(self, off_checked, xml_checked):
-        """官方/自制两行多选 → (container, {"official": {…}, "xml": {…}})。"""
-        w = QWidget()
-        v = QVBoxLayout(w)
-        v.setContentsMargins(0, 0, 0, 0)
-        r1, b1 = self._fmt_check_row(self._official_pack_fmts(), off_checked)
-        r2, b2 = self._fmt_check_row(self._made_pack_fmts(), xml_checked)
-        lab1 = QLabel("官方：")
-        lab1.setStyleSheet("color: gray;")
-        lab2 = QLabel("自制：")
-        lab2.setStyleSheet("color: gray;")
-        v.addWidget(lab1); v.addWidget(r1)
-        v.addWidget(lab2); v.addWidget(r2)
-        return w, {"official": b1, "xml": b2}
-
     # ---------- 页签：自制E书 ----------
     def _tab_made(self):
         w = QWidget()
@@ -295,6 +282,22 @@ class SettingsDialog(QDialog):
         self.ed_verify.setPlaceholderText("校验工作目录（默认 cbeta_verify）")
         self.cb_preset = self._no_wheel_until_focused(QComboBox())
         self._reload_preset_combo()
+        # 自制书籍：右栏「自制/重制」按钮是否带校验（校验通过才导入）
+        self.build_verify_box = QWidget()
+        _bvb = QHBoxLayout(self.build_verify_box)
+        _bvb.setContentsMargins(0, 0, 0, 0)
+        self.build_verify_group = QButtonGroup(self.build_verify_box)
+        self.rb_build_verify = QRadioButton("校验")
+        self.rb_build_noverify = QRadioButton("无校验")
+        self.rb_build_verify.setToolTip("右栏「自制/重制」生成后逐本校验，仅校验通过的才导入自制书目录")
+        self.rb_build_noverify.setToolTip("右栏「自制/重制」只生成，不校验（默认）")
+        for _i, _rb in enumerate((self.rb_build_verify, self.rb_build_noverify)):
+            _bvb.addWidget(_rb)
+            self.build_verify_group.addButton(_rb, _i)
+        _bvb.addStretch()
+        (self.rb_build_verify if (self._cfg.get("xml2pdf", {}) or {}).get("verify_build")
+         else self.rb_build_noverify).setChecked(True)
+        form.addRow("自制书籍", self.build_verify_box)
         form.addRow("自制程序路径", self._dir_row(self.ed_x2p))
         form.addRow("CBETA XML 目录", self._dir_row(self.ed_x2p_ebook))
         form.addRow("自制电子书", self._dir_row(self.ed_xmlbooks))
@@ -543,18 +546,17 @@ class SettingsDialog(QDialog):
         df = c.get("default_formats", {}) or {}
         for f, cb in self.fmt_merge_boxes.items():
             cb.setChecked(f in (df.get("merge") or ["pdf", "epub"]))
-        for scope, key in ((self.fmt_zip_boxes, "zip"), (self.fmt_export_boxes, "export")):
-            d = df.get(key, {}) or {}
-            for side, default in (("official", self._official_pack_fmts()),
-                                  ("xml", self._made_pack_fmts())):
-                want = set(d.get(side) if d.get(side) is not None else default)
-                for f, cb in scope[side].items():
-                    cb.setChecked(f in want)
+        for boxes, key, default in ((self.fmt_off_boxes, "official", self._official_pack_fmts()),
+                                    (self.fmt_made_boxes, "xml", self._made_pack_fmts())):
+            want = set(df.get(key) if df.get(key) is not None else default)
+            for f, cb in boxes.items():
+                cb.setChecked(f in want)
         x2p = c.get("xml2pdf", {}) or {}
         self.ed_x2p.setText(self._native_path(x2p.get("path", "")))
         self.ed_x2p_ebook.setText(self._native_path(
             x2p.get("cbeta_ebook") or str(PROJECT_ROOT / "cbeta_xml")))
         self._reload_preset_combo(keep=x2p.get("preset", ""))
+        (self.rb_build_verify if x2p.get("verify_build") else self.rb_build_noverify).setChecked(True)
         cover = c.setdefault("cover", {})
         self._migrate_series_imprint(cover)
         self.ed_organizer.setText(cover.get("organizer", "CBETA 整理"))
@@ -1101,10 +1103,8 @@ class SettingsDialog(QDialog):
         c["default_source"] = "xml" if self.rb_src_made.isChecked() else "official"
         c["default_formats"] = {
             "merge": [f for f in ("pdf", "epub") if self.fmt_merge_boxes[f].isChecked()],
-            "zip": {k: [f for f, b in self.fmt_zip_boxes[k].items() if b.isChecked()]
-                    for k in ("official", "xml")},
-            "export": {k: [f for f, b in self.fmt_export_boxes[k].items() if b.isChecked()]
-                       for k in ("official", "xml")},
+            "official": [f for f, b in self.fmt_off_boxes.items() if b.isChecked()],
+            "xml": [f for f, b in self.fmt_made_boxes.items() if b.isChecked()],
         }
         c.setdefault("xml2pdf", {})
         # 旧逐项（page/font_lang/engine/vertical）照读兼容，不再写入/使用，preset 为准；
@@ -1116,6 +1116,7 @@ class SettingsDialog(QDialog):
             "cbeta_ebook": self._native_path(self.ed_x2p_ebook.text().strip())
             or str(PROJECT_ROOT / "cbeta_xml"),
             "preset": self.cb_preset.currentData() or "",
+            "verify_build": self.rb_build_verify.isChecked(),
         })
         # 封面/版式
         cover = c.setdefault("cover", {})
