@@ -20,6 +20,43 @@ from cbeta_publish.collection.collection_model import normalize_collection, writ
 WORK_RE = re.compile(r"[A-Z]+[0-9A-Za-z]+")
 CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "app.json"
 
+#: 独立窗输出目录导入规范（HTML，用于「自制书籍 → 独立窗输出与导入规则…」弹窗；
+#: 规范正文见 docs/链路B-设计契约.md §9，两处同文，改一处须同步另一处）
+VERIFY_IMPORT_RULES_HTML = """\
+<h3>一、独立窗侧输出要求</h3>
+<ol>
+<li>输出目录下，每本成功生成的书有<b>正式产物</b>：<code>{id 书名}.{ext}</code>
+（如 <code>T0032 四谛经.pdf</code>），放在目录<b>顶层</b>。</li>
+<li>必须勾选「转换后校验」：每书在 <code>{id 书名}（验证）/</code> 子目录下有一份
+<b>报告</b>，命名二选一：
+<ul>
+<li><code>{stem}_verify_report.txt</code>（独立窗；<code>stem</code> = work id，如 <code>T0032</code>）；</li>
+<li><code>report.txt</code>（CLI；work 取父目录名去<code>（验证）</code>后缀后的首 token）。</li>
+</ul></li>
+<li>同一书两份报告并存时，以 <b>mtime 最新者</b>为准（同刻优先 <code>report.txt</code>）。
+只转换、未校验的产物<b>没有判据，一律不入库</b>。</li>
+</ol>
+<h3>二、publish 侧导入规则</h3>
+<ol>
+<li>递归扫描 <code>*_verify_report.txt</code> 与 <code>report.txt</code>。</li>
+<li>书单匹配：<code>stem == work</code>，或 <code>stem</code> 以 <code>work + " "</code> 开头；
+匹配不上当前丛书书单的跳过。</li>
+<li>判读（入库的唯一质量门）：含 <code>[FAIL]</code> → 不通过；
+≥1 个 <code>[OK]</code> 且无 <code>[FAIL]</code> → 通过；否则未判定（<code>[--]</code>/空报告，需人工看）。</li>
+<li>产物识别：只看目录<b>顶层</b> <code>{stem}*.{ext}</code>，后缀映射
+<code>pdf/epub/docx/odt/md/txt</code> → fmt；排除 <code>*_verify_report.txt</code>、<code>_ids.txt</code>；
+每格式取排序后第一个。</li>
+<li>入库：拷入 <code>{自制书根}/{fmt}/{work}.{fmt}</code>（自动建目录、覆盖同名），
+入库即被复用；通过但找不到产物记"缺产物"。</li>
+</ol>
+<h3>三、入口与目录优先级</h3>
+<ol>
+<li>「导入校验通过E书…」优先读当前丛书 <code>verify_dir/&lt;slug&gt;/</code>；
+无报告则<b>弹目录选择</b>，可指向独立窗输出目录（或其任意上层，递归扫描）。</li>
+<li>「生成并校验」跑完走同一规则自动导入。</li>
+</ol>
+"""
+
 
 class _PanelHandle(QSplitterHandle):
     # 分隔条上的收起/恢复按钮（操作其左侧的那一栏）
@@ -4139,6 +4176,9 @@ class MainWindow(QMainWindow):
         act_verify_import=m_tools.addAction("导入校验通过E书…")
         act_verify_import.setToolTip("从校验目录（或另选目录）把验证通过的书拷入自制书目录")
         act_verify_import.triggered.connect(self._import_verified)
+        act_verify_rules=m_tools.addAction("独立窗输出与导入规则…")
+        act_verify_rules.setToolTip("独立窗输出目录的结构要求与导入判读规则（见契约 §9）")
+        act_verify_rules.triggered.connect(self._show_verify_rules)
         # 视图 → 布局（三栏含选书区 / 二栏隐藏选书区）
         from PySide6.QtGui import QActionGroup
         m_view=bar.addMenu("视图")
@@ -4346,6 +4386,28 @@ class MainWindow(QMainWindow):
             msg.append(f"跳过 {len(imp['skip'])}（不在丛书中）")
         pstate["finish"](msg)
         self._load_coll_works()
+
+    def _verify_rules_text(self):
+        """导入规范正文（HTML；与契约 §9 同文）。"""
+        return VERIFY_IMPORT_RULES_HTML
+
+    def _show_verify_rules(self):
+        """「自制书籍 → 独立窗输出与导入规则…」：只读可滚动弹窗。"""
+        from PySide6.QtWidgets import QDialog, QVBoxLayout, QTextBrowser, QPushButton
+        dlg = QDialog(self)
+        dlg.setWindowTitle("独立窗输出与导入规则")
+        dlg.resize(560, 480)
+        lay = QVBoxLayout(dlg)
+        view = QTextBrowser(dlg)
+        view.setReadOnly(True)
+        view.setOpenLinks(False)
+        view.setHtml(self._verify_rules_text())
+        lay.addWidget(view, 1)
+        btn = QPushButton("关闭", dlg)
+        btn.clicked.connect(dlg.accept)
+        lay.addWidget(btn)
+        dlg.exec()
+        return dlg
 
     def _open_settings(self):
         from cbeta_publish.gui.settings_dialog import SettingsDialog

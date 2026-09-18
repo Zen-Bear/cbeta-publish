@@ -257,5 +257,28 @@ class VerifySendImportTest(unittest.TestCase):
             shutil.rmtree(other, ignore_errors=True)
 
 
+class VerifyRulesDialogTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.win, cls.tmp = _make_window()
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def test_rules_text_covers_spec(self):
+        txt = self.win._verify_rules_text()
+        for key in ("（验证）", "[FAIL]", "[OK]", "{fmt}/{work}", "目录选择",
+                    "_verify_report.txt", "report.txt", "顶层"):
+            self.assertIn(key, txt)
+
+    def test_menu_has_rules_action(self):
+        menus = [a for a in self.win.menuBar().actions()
+                 if a.text().replace("&", "") == "自制书籍"]
+        self.assertEqual(len(menus), 1)
+        acts = [a.text() for a in menus[0].menu().actions()]
+        self.assertIn("独立窗输出与导入规则…", acts)
+
+
 if __name__ == "__main__":
     unittest.main()
