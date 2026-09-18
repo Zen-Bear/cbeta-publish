@@ -153,10 +153,12 @@ def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=No
   报告落 `{id 书名}（验证）/`（`verify_dir/<丛书>/`，默认 `<工程>/cbeta_verify`，
   与自制书目录分离）。跑完自动导入（可手动重试）：报告兼容
   `{stem}_verify_report.txt` / `report.txt` 两种命名（`bridge.verify_reports`，
-  同一 work 只取最新），`bridge.verify_report_pass` 判读（有 `[FAIL]`→不通过；
-  ≥1 个 `[OK]` 且无 `[FAIL]`→通过；否则未判定）→ 产物按扩展名全收
-  （pdf/epub/docx/odt/md/txt），通过的拷入自制书目录改名
-  `{fmt}/{work}.{fmt}`（入库即被 `ensure_one(missing)` 复用）；不通过/未判定不入库。
+  同一 work 只取最新）。**判读按格式**（`bridge.verify_report_formats`）：把报告里
+  `[OK]/[FAIL]`/`[--]` 逐 trial 映射回产物格式（`pdf→docx` 记在 pdf 名下；独立窗标记行
+  直接带格式），得 {fmt: 通过}；缺逐格式信息时退回整体判定
+  （`bridge.verify_report_pass`：有 `[FAIL]`→不通过；≥1 `[OK]` 无 `[FAIL]`→通过；否则未判定）。
+  **逐格式入库**：通过的格式拷入 `{fmt}/{work}.{fmt}`（入库即被 `ensure_one(missing)` 复用），
+  未通过的格式跳过、不拖累通过者（如 docx 过、epub 没过 → 只入 docx）。
   临时预设未保存时拒绝执行。手动导入（菜单「导入校验通过E书…」）优先读当前丛书的
   `verify_dir/<丛书>/`；无报告时**弹目录选择**，可指向独立窗输出目录（同样兼容两种报告名），
   便于把独立窗已校验的产物入库。独立窗（「xml2pdf 独立窗…」）保留为手动工作台。
@@ -243,15 +245,18 @@ publish 的「自制/重制（校验）」产物目录天然符合本规范；�
 1. 报告发现：递归扫描 `*_verify_report.txt` 与 `report.txt`
   （`bridge.verify_reports`）。
 2. 书单匹配：`stem == work`，或 `stem` 以 `work + " "` 开头；匹配不上当前丛书书单的跳过。
-3. 判读（`bridge.verify_report_pass`，**入库的唯一质量门**）：
-   含 `[FAIL]` → 不通过；≥1 个 `[OK]` 且无 `[FAIL]` → 通过；
-   否则未判定（`[--]`/空报告/读失败，需人工看报告）。
+3. 判读**按格式**（`bridge.verify_report_formats`）：把报告 `[OK]/[FAIL]` 逐 trial
+   映射回产物格式（`pdf→docx` 记在 `pdf`；独立窗标记行直接带格式），得 `{fmt: 通过}`。
+   缺逐格式信息时退回整体判定（`bridge.verify_report_pass`：含 `[FAIL]`→不通过；
+   ≥1 `[OK]` 无 `[FAIL]`→通过；否则未判定）。
 4. 产物识别（`MainWindow._verify_products`）：只看目录**顶层** `{stem}*.{ext}`，
    后缀映射 `pdf/epub/docx/odt/md/txt` → fmt；排除 `*_verify_report.txt`、`_ids.txt`；
    每格式取排序后第一个。
-5. 入库：`shutil.copy2` 到 `{自制书根}/{fmt}/{work}.{fmt}`（自动建目录、覆盖同名），
-   入库即被 `ensure_one(missing)` 复用。
-6. 通过但找不到产物 → 记"缺产物"（失败）；不通过/未判定不入库。
+5. 入库（**逐格式**）：某格式判通过 → `shutil.copy2` 到 `{自制书根}/{fmt}/{work}.{fmt}`
+   （自动建目录、覆盖同名），入库即被 `ensure_one(missing)` 复用；
+   未通过/未判定的格式跳过，**不拖累**通过的格式（如 docx 过、epub 没过 → 只入 docx）。
+6. 无任何产物 → 记"缺产物"（失败）；全部格式都未通过 → 记"校验未通过"；
+   都未判定 → "未判定"。
 
 ### 9.3 入口与目录优先级
 

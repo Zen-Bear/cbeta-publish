@@ -34,8 +34,24 @@ class VerifyWorker(QThread):
             self.progress.emit(i - 1, f"生成并校验 {w} ...", "run")
             report = b.verify_work(w, self.fmts, self.out_dir, self.config,
                                    preset=self.preset, stop=lambda: self._stop)
+            # 逐格式判定：全通过=通过；部分通过=部分通过（入库靠 import 逐格式处理）
+            fmts_status = b.verify_report_formats(report) if report is not None else {}
             verdict = b.verify_report_pass(report) if report is not None else None
-            if verdict is True:
+            if fmts_status:
+                passed = [f for f, v in fmts_status.items() if v]
+                failed_f = [f for f, v in fmts_status.items() if not v]
+                if passed and not failed_f:
+                    ok += 1
+                    self.progress.emit(i, f"{REPLACE_LAST}生成并校验 {w} ...通过", "ok")
+                elif passed:
+                    ok += 1
+                    self.progress.emit(
+                        i, f"{REPLACE_LAST}生成并校验 {w} ...部分通过"
+                           f"（{'/'.join(passed)} 过，{'/'.join(failed_f)} 未过）", "ok")
+                else:
+                    failed.append(w)
+                    self.progress.emit(i, f"{REPLACE_LAST}生成并校验 {w} ...未通过", "fail")
+            elif verdict is True:
                 ok += 1
                 self.progress.emit(i, f"{REPLACE_LAST}生成并校验 {w} ...通过", "ok")
             elif verdict is False:

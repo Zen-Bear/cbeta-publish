@@ -251,6 +251,32 @@ class VerifySendImportTest(unittest.TestCase):
         self.assertTrue(any("入库 1 部" in x for f in self._finishes for x in f),
                         self._finishes)
 
+    def test_import_partial_formats(self):
+        # docx 通过、epub 未通过 → 只入 docx，epub 不入；不计失败
+        from cbeta_publish.books import xml2pdf_bridge as b
+        win = self.win
+        vdir = b.verify_coll_dir(win.config, "v")
+        vdir.mkdir(parents=True, exist_ok=True)
+        (vdir / "T0001 大般若經.docx").write_bytes(b"DOCX")
+        (vdir / "T0001 大般若經.epub").write_bytes(b"EPUB")
+        vd = vdir / "T0001 大般若經（验证）"
+        vd.mkdir(parents=True, exist_ok=True)
+        (vd / "report.txt").write_text(
+            "=== T01n0001.xml\n"
+            "  [OK] (缺0/多0 ≤阈值10)\n  docx 【源】a\n  docx 【新】b\n"
+            "  [FAIL] (缺3/多1 >阈值10)\n  epub 【源】c\n  epub 【新】d\n",
+            encoding="utf-8")
+        base = Path(win.config["xml_to_ebooks_dir"])
+        res = self._do_import(win, ["T0001"], vdir, base)
+        self.assertEqual((base / "docx" / "T0001.docx").read_bytes(), b"DOCX")
+        self.assertFalse((base / "epub" / "T0001.epub").exists())
+        self.assertEqual(len(res["ok"]), 1)
+        self.assertEqual(res["fail"], [])
+        self.assertIn("未入 epub", res["ok"][0])
+
+    def _do_import(self, win, works, vdir, base):
+        return win._do_import_verified(works, vdir, base)
+
     def test_import_no_reports_cancel(self):
         # 本丛书校验目录无报告 → 弹目录选择；取消则什么都不做
         from PySide6.QtWidgets import QFileDialog

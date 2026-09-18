@@ -531,3 +531,50 @@ def verify_report_pass(path) -> bool | None:
     if fail:
         return False
     return True if ok else None
+
+
+def verify_report_formats(path) -> dict:
+    """解析报告的**逐格式**结果 → {product_fmt: True/False}（True=通过）。
+
+    - CLI `report.txt`：标记行 `[OK]/[FAIL] (…)` 后跟 `{disp} 【源】…`，
+      `disp` 形如 `pdf→docx`（取 `→` 左侧为产物格式）或 `epub`/`docx`。
+    - 独立窗 `{stem}_verify_report.txt`：标记行内直接含 trial 格式
+      `[OK] docx …` / `[FAIL] pdf→docx …`。
+    只收录明确 `[OK]/[FAIL]` 的格式；`[--]`（覆盖/无基线）不入表。
+    """
+    try:
+        text = Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return {}
+    out = {}
+    pending = None
+    for raw in text.splitlines():
+        s = raw.strip()
+        if not s:
+            continue
+        mark = None
+        if s.startswith("[OK]"):
+            mark = True
+        elif s.startswith("[FAIL]"):
+            mark = False
+        elif s.startswith("[--]"):
+            pending = None
+            continue
+        if mark is not None:
+            rest = s[s.index("]") + 1:].strip()
+            if not rest or rest.startswith("("):
+                pending = mark          # CLI：格式在随后的 【源】 行
+            else:
+                tok = rest.split()[0]   # 独立窗：格式紧跟标记
+                fmt = tok.split("→")[0].strip()
+                if fmt:
+                    out[fmt] = mark
+                pending = None
+            continue
+        if pending is not None and "【源】" in s:
+            disp = s.split("【源】")[0].strip()
+            fmt = disp.split("→")[0].strip()
+            if fmt:
+                out[fmt] = pending
+            pending = None
+    return out
