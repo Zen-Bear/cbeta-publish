@@ -1,8 +1,8 @@
 {
-  "official_ebooks_dir": "E:/dev/cbeta/publish/cbeta_ebooks",
-  "verify_dir": "E:/dev/cbeta/publish/cbeta_verify",
-  "mulu_dir": "E:/dev/cbeta/publish/mulu",
-  "collections_dir": "E:/dev/cbeta/publish/collections",
+  "official_ebooks_dir": "E:\\dev\\cbeta\\publish\\cbeta_ebooks",
+  "verify_dir": "E:\\dev\\cbeta\\publish\\cbeta_verify",
+  "mulu_dir": "E:\\dev\\cbeta\\publish\\mulu",
+  "collections_dir": "E:\\dev\\cbeta\\publish\\collections",
   "theme": {
     "mode": "system",
     "accent": "#8B4513"
@@ -17,20 +17,26 @@
     "layout": "two",
     "app_font": "SimSun",
     "app_font_size": 10,
-    "supplement_ttf": "E:/dev/cbeta/xml2pdf/cbeta/CBETA 補充字型/CBETASupplement.ttf",
+    "supplement_ttf": "E:\\dev\\cbeta\\xml2pdf\\cbeta\\CBETA 補充字型\\CBETASupplement.ttf",
     "last_collection": "E:\\dev\\cbeta\\publish\\collections\\custom\\测试丛书1.json"
   },
-  "default_source": "official",
+  "default_source": "xml",
   "default_formats": {
-    "merge": ["pdf", "epub"],
-    "zip": {
-      "official": ["pdf", "epub", "html", "docx", "odt", "txt", "txt_notes"],
-      "xml": ["pdf", "docx", "epub"]
-    },
-    "export": {
-      "official": ["pdf", "epub", "html", "docx", "odt", "txt", "txt_notes"],
-      "xml": ["pdf", "docx", "epub"]
-    }
+    "merge": [
+      "pdf",
+      "epub"
+    ],
+    "official": [
+      "pdf",
+      "epub",
+      "html",
+      "docx",
+      "txt"
+    ],
+    "xml": [
+      "pdf",
+      "docx"
+    ]
   },
   "pdf": {
     "split_pages": 5000
@@ -42,8 +48,10 @@
     "by_volume": false
   },
   "xml2pdf": {
-    "path": "E:/dev/cbeta/xml2pdf",
-    "preset": "Publish A5 简体"
+    "path": "E:\\dev\\cbeta\\xml2pdf",
+    "preset": "Publish A5 简体",
+    "cbeta_ebook": "E:\\dev\\cbeta\\publish\\cbeta_xml",
+    "verify_build": false
   },
   "catalog": {
     "filters": {
@@ -201,5 +209,6 @@
       "toc_y_ratio": 0.15,
       "toc_item_y_ratio": 0.25
     }
-  }
+  },
+  "xml_to_ebooks_dir": "E:\\dev\\cbeta\\publish\\cbeta_xml_ebooks"
 }

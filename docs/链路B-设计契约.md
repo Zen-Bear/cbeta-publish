@@ -84,15 +84,16 @@ def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=No
 {
   "default_source": "official",                        // official | xml（右栏/设置来源单选，sticky）
   "default_formats": {                                 // 默认勾选格式（设置页「E书默认来源和格式」）
-    "merge": ["pdf", "epub"],                          // 初始化右栏格式勾选
-    "zip":    {"official": [7种], "xml": ["pdf","docx","epub"]},   // ZIP 弹窗预选
-    "export": {"official": [7种], "xml": ["pdf","docx","epub"]}    // 导出弹窗预选
+    "merge": ["pdf", "epub"],                          // 初始化右栏格式勾选（合并只取 pdf/epub）
+    "official": ["pdf","epub","html","docx","txt"],    // 官方 ZIP/导出 预选（默认去 odt/txt_notes）
+    "xml": ["pdf","docx"]                              // 自制 ZIP/导出 预选（默认不勾 epub）
   },
   "xml_to_ebooks_dir": "E:/dev/cbeta/publish/cbeta_xml_ebooks",   // 自制书输出根（可配，绝对路径）
   "xml2pdf": {
     "path": "E:/dev/cbeta/xml2pdf",                    // 自制程序仓库（预设目录=其 presets/）
     "cbeta_ebook": "E:/dev/cbeta/publish/cbeta_xml",   // CBETA XML 目录（--cbeta-ebook；不可空，空则用默认）
-    "preset": ""                                     // 默认预设名（presets/ 下 stem）；空=对面默认
+    "preset": "",                                    // 默认预设名（presets/ 下 stem）；空=对面默认
+    "verify_build": false                            // 自制书籍：true=自制/重制后校验并仅导入通过项
   }
 }
 ```
@@ -138,8 +139,10 @@ def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=No
   vendor 共享层不动。
 - 自制格式勾选（右栏）：pdf/epub/**docx**（docx 默认勾选）；**合并只取 pdf/epub**，
   docx 走 ZIP/导出/校验/打开。`ensure_one`/`find_built`/`xml_dest` 格式通用，无需特判。
-- 校验（进程内「校验重制」＋自动/手动导入）：右栏发布行 `[校验重制]`
-  （来源=自制时显示）触发 `VerifyWorker` 逐本调 `bridge.verify_work` → 库调用
+- 校验（进程内「自制/重制」＋自动/手动导入）：设置「自制书籍」=`校验`
+  （`xml2pdf.verify_build`）时，右栏 `[自制]/[重制]` 转为校验式——`[自制]` 只处理
+  自制书目录里**缺少**的书，`[重制]` 整批全部重做；触发 `VerifyWorker` 逐本调
+  `bridge.verify_work` → 库调用
   `pycbeta.cli.main(["-i", work, "-f", <勾选>, "-o", <vdir>, [--config wrap],
   "--cbeta-ebook", <工作根>, "--verify"])`（上游 `cli.py` 修 work id 校验 `2a10d12`；
   官方基线源目录 `src` 亦按 work id 修正 `16df9cf`：文件→其目录 / 目录→该目录 /
@@ -163,7 +166,7 @@ def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=No
 - [x] `publish`：`xml2pdf_bridge.py`（库调用＋预设（上游 API）＋分格式目录＋`ensure_one` 生成策略）
 - [x] `publish`：右栏来源单选＋预设下拉＋[调整…]（生成策略单选已移除：合并/ZIP/导出恒仅缺，「重制」按钮=全部重生成）
 - [x] `publish`：`[合并]` 整批同源、分格式目录、说明页注明；**ZIP/导出 亦支持自制**
-- [x] `publish`：**校验重制**（进程内 `VerifyWorker`→`verify_work`，跑完自动导入；
+- [x] `publish`：**自制/重制（设置=校验）**（进程内 `VerifyWorker`→`verify_work`，跑完自动导入；
   「自制书籍」菜单＋校验目录＋临时预设拦截；见 §5）
 - [x] `xml2pdf`：`--verify` 支持 work id 输入（`2a10d12`：改用已 materialize 的 `xmls`；
   `16df9cf`：官方基线源目录 `src` 按 work 目录修正，编号输入可定位官方基线）
@@ -219,7 +222,7 @@ JSON）时只当 `config-json` 单槽，其余 CSS 槽回出厂，不取仓库�
 ## 9. 附：独立窗输出目录导入规范
 
 本附录约定"xml2pdf 独立窗输出目录 → publish 自制书目录"的导入规则。
-publish 的「校验重制」产物目录天然符合本规范；独立窗手动输出只要同样符合，
+publish 的「自制/重制（校验）」产物目录天然符合本规范；独立窗手动输出只要同样符合，
 即可经「导入校验通过E书…」入库。程序内「自制书籍 → 独立窗输出与导入规则…」
 弹窗与本节同文。
 
@@ -254,4 +257,4 @@ publish 的「校验重制」产物目录天然符合本规范；独立窗手动
 
 1. 「导入校验通过E书…」优先读当前丛书 `verify_dir/<slug>/`；
    无报告则**弹目录选择**，可指向独立窗输出目录（或其任意上层，递归扫描）。
-2. 右栏「校验重制」跑完走同一规则（`_do_import_verified`）自动导入。
+2. 右栏「自制/重制（设置=校验）」跑完走同一规则（`_do_import_verified`）自动导入。

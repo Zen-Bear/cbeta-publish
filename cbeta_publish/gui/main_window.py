@@ -53,7 +53,7 @@ VERIFY_IMPORT_RULES_HTML = """\
 <ol>
 <li>「导入校验通过E书…」优先读当前丛书 <code>verify_dir/&lt;slug&gt;/</code>；
 无报告则<b>弹目录选择</b>，可指向独立窗输出目录（或其任意上层，递归扫描）。</li>
-<li>右栏「校验重制」跑完走同一规则自动导入。</li>
+<li>右栏「自制/重制」（设置「自制书籍」=校验）跑完走同一规则自动导入。</li>
 </ol>
 """
 
@@ -532,9 +532,9 @@ class MainWindow(QMainWindow):
         icon_dir=Path(__file__).parent / "theme" / "icons"
         _df = (self.config.get("default_formats", {}) or {})
         _merge = set(_df.get("merge") or ["pdf", "epub"])
-        _xml_pack = (_df.get("zip") or {}).get("xml")
+        _xml_pack = _df.get("xml")
         if _xml_pack is None:
-            _xml_pack = ["pdf", "docx", "epub"]
+            _xml_pack = ["pdf", "docx"]
         self.chk_pdf=QCheckBox(" pdf")
         self.chk_pdf.setIcon(QIcon(str(icon_dir/"pdf.png")))
         self.chk_pdf.setChecked("pdf" in _merge)
@@ -586,8 +586,6 @@ class MainWindow(QMainWindow):
         self.btn_make.setToolTip("生成缺失的自制电子书（已有书籍直接复用）")
         self.btn_remake=QPushButton("重制")
         self.btn_remake.setToolTip("重新生成全部自制电子书（忽略已有书籍）")
-        self.btn_verify=QPushButton("校验重制")
-        self.btn_verify.setToolTip("重新生成E书，校验通过才导入")
         self.btn_merge=QPushButton("合并")
         self.btn_merge.setToolTip("PDF/ePub合并成一个文件（单一格式，允许分册）")
         self.btn_zip=QPushButton("ZIP")
@@ -596,7 +594,7 @@ class MainWindow(QMainWindow):
         self.btn_export.setToolTip("拷贝到指定目录")
         hb2.addWidget(self.btn_merge); hb2.addWidget(self.btn_zip); hb2.addWidget(self.btn_export)
         hb2.addWidget(self.btn_download)
-        hb2.addWidget(self.btn_make); hb2.addWidget(self.btn_remake); hb2.addWidget(self.btn_verify)
+        hb2.addWidget(self.btn_make); hb2.addWidget(self.btn_remake)
         hb2.addStretch()
         pg.addWidget(publish_box)
         self._sync_source_preset_ui()   # 依赖上面按钮存在（来源=自制时换按钮）
@@ -741,7 +739,6 @@ class MainWindow(QMainWindow):
         self.btn_download.clicked.connect(self._on_download_button)
         self.btn_make.clicked.connect(lambda: self._on_make_button(False))
         self.btn_remake.clicked.connect(lambda: self._on_make_button(True))
-        self.btn_verify.clicked.connect(self._send_coll_to_verify)
         self.btn_merge.clicked.connect(self._merge)
         self.btn_zip.clicked.connect(self._zip)
         self.btn_export.clicked.connect(self._export)
@@ -1906,7 +1903,6 @@ class MainWindow(QMainWindow):
         self.btn_download.setVisible(not on)
         self.btn_make.setVisible(on)
         self.btn_remake.setVisible(on)
-        self.btn_verify.setVisible(on)
 
     def _on_source_changed(self, *_):
         # 右栏来源切换：sticky 写回全局，下次默认上次的选择
@@ -3926,6 +3922,9 @@ class MainWindow(QMainWindow):
         if not works:
             QMessageBox.warning(self, "失败", "丛书为空")
             return
+        # 设置「自制书籍=校验」时，自制/重制走生成+校验+导入；否则只生成
+        if (self.config.get("xml2pdf", {}) or {}).get("verify_build"):
+            return self._send_coll_to_verify(regen_all=bool(regen_all))
         title="重新生成全部自制电子书" if regen_all else "生成自制电子书"
         from cbeta_publish.books import xml2pdf_bridge
         ok_map, failed, cancelled = self._ensure_xml_batch(
@@ -4253,8 +4252,12 @@ class MainWindow(QMainWindow):
             return None
         return data, d, works
 
-    def _send_coll_to_verify(self):
-        """「校验重制」：进程内逐本生成+校验，跑完自动导入通过项。"""
+    def _send_coll_to_verify(self, regen_all=False):
+        """自制/重制（设置选「校验」时）：进程内逐本生成+校验，跑完自动导入通过项。
+
+        regen_all=False（自制）＝只处理自制书目录里**缺少**的书；
+        regen_all=True（重制）＝整批全部重做。
+        """
         from cbeta_publish.books import xml2pdf_bridge as _b
         from cbeta_publish.books.verify_worker import VerifyWorker
         from PySide6.QtCore import QEventLoop
@@ -4274,6 +4277,14 @@ class MainWindow(QMainWindow):
         if not x2p.exists():
             self._wrap_box(QMessageBox.Warning,"未找到",f"xml2pdf 路径不存在：{x2p}")
             return
+        if not regen_all:
+            base_dir=_b.xml_books_dir(self.config)
+            missing=[w for w in works
+                     if not any(_b.find_built(w, f, base_dir) is not None for f in fmts)]
+            if not missing:
+                self.detail.setText("没有缺少的自制书（改用「重制」可全部重做）")
+                return
+            works=missing
         slug=str(d.get("id") or d.get("name") or "")
         vdir=_b.verify_coll_dir(self.config, slug)
         try:
@@ -4283,7 +4294,8 @@ class MainWindow(QMainWindow):
             return
         preset=self._run_preset()
         total=max(1, len(works))
-        dlg, update, pstate=self._make_progress("校验重制", total)
+        title="重制并校验" if regen_all else "自制并校验"
+        dlg, update, pstate=self._make_progress(title, total)
         result={"ok": 0, "failed": []}
         def on_prog(done, label, level):
             update(done, label, is_html=False)
@@ -4946,15 +4958,14 @@ class MainWindow(QMainWindow):
             return ["pdf", "epub", "docx"]
         return list(official_ebook_source.PACK_FORMATS)
 
-    def _choose_pack_fmts(self, scope="zip"):
+    def _choose_pack_fmts(self):
         """ZIP/导出格式多选（独立于合并格式勾选）。
-        预选＝设置里 `default_formats[scope][官方|自制]`；缺省回退当前格式勾选。
+        预选＝设置里 `default_formats[官方|自制]`；缺省回退当前格式勾选。
         返回 [fmt]（空即全不选）；取消返回 None。"""
         from PySide6.QtWidgets import QDialog, QVBoxLayout, QCheckBox, QDialogButtonBox
         avail = self._pack_avail_fmts()
         side = "xml" if self._run_source() == "xml" else "official"
-        df = (self.config.get("default_formats", {}) or {}).get(scope, {}) or {}
-        pre = df.get(side)
+        pre = (self.config.get("default_formats", {}) or {}).get(side)
         if pre is None:
             pre = self._checked_fmts()
         pre = set(pre) & set(avail)
@@ -4977,7 +4988,7 @@ class MainWindow(QMainWindow):
         return [f for f, b in boxes if b.isChecked()]
 
     def _zip(self):
-        fmts = self._choose_pack_fmts("zip")
+        fmts = self._choose_pack_fmts()
         if fmts is None:
             return
         if not fmts:
@@ -5120,7 +5131,7 @@ class MainWindow(QMainWindow):
         return QMessageBox(icon, title, text, buttons, self).exec()
 
     def _export(self):
-        fmts = self._choose_pack_fmts("export")
+        fmts = self._choose_pack_fmts()
         if fmts is None:
             return
         if not fmts:

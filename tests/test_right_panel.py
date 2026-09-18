@@ -58,7 +58,7 @@ class RightPanelTest(unittest.TestCase):
         self.assertEqual(len(groups), 1, [g.title() for g in win.findChildren(QGroupBox)])
         g = groups[0]
         for w in (win.chk_pdf, win.chk_epub, win.chk_docx, win.btn_merge, win.btn_zip,
-                  win.btn_export, win.btn_download, win.btn_verify):
+                  win.btn_export, win.btn_download):
             self.assertTrue(g.isAncestorOf(w), w)
         # 旧「发布:」标签已移除
         texts = [lb.text() for lb in g.findChildren(QLabel)]
@@ -104,17 +104,14 @@ class RightPanelTest(unittest.TestCase):
         self.assertTrue(win.btn_download.isVisibleTo(win))
         self.assertFalse(win.btn_make.isVisibleTo(win))
         self.assertFalse(win.btn_remake.isVisibleTo(win))
-        self.assertFalse(win.btn_verify.isVisibleTo(win))
         win.config["default_source"] = "xml"
         win._sync_source_preset_ui()
         _ensure_app().processEvents()
         self.assertFalse(win.btn_download.isVisibleTo(win))
         self.assertTrue(win.btn_make.isVisibleTo(win))
         self.assertTrue(win.btn_remake.isVisibleTo(win))
-        self.assertTrue(win.btn_verify.isVisibleTo(win))
         self.assertEqual([win.btn_make.text(), win.btn_remake.text()], ["自制", "重制"])
-        self.assertEqual(win.btn_verify.text(), "校验重制")
-        self.assertEqual(win.btn_verify.toolTip(), "重新生成E书，校验通过才导入")
+        self.assertFalse(hasattr(win, "btn_verify"))    # 「校验重制」按钮已取消
         self.assertIn("缺失", win.btn_make.toolTip())
         self.assertIn("重新生成", win.btn_remake.toolTip())
         # 预设下拉 + 调整 紧跟「自制」单选右侧（同一行）
