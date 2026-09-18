@@ -438,7 +438,7 @@ class SettingsDialog(QDialog):
         form.addRow("说明页标题", self.ed_intro_title)
         self.ed_intro_note = QLineEdit(intro.get("note", "依 CBETA XML 自制"))
         self.ed_intro_note.setToolTip("说明页标题下一行（居中）；仅来源=自制时显示。留空则不显示。")
-        form.addRow("说明页注明", self.ed_intro_note)
+        form.addRow("自制书说明", self.ed_intro_note)
         hint_intro = QLabel("部类统计与清单自动从丛书书单推导；仅在「合并时使用封面/封底页」开启时插入。")
         hint_intro.setStyleSheet("color: gray;")
         hint_intro.setWordWrap(True)

@@ -45,13 +45,17 @@
     "split_items": 500
   },
   "merge": {
-    "mode": "catalog",
+    "mode": "ask",
     "depth": 2,
-    "by_volume": false
+    "by_volume": false,
+    "ask_last": {
+      "mode": "catalog",
+      "depth": 3
+    }
   },
   "xml2pdf": {
     "path": "E:\\dev\\cbeta\\xml2pdf",
-    "preset": "Publish A5 简体",
+    "preset": "A5 页面加框",
     "cbeta_ebook": "E:\\dev\\cbeta\\publish\\cbeta_xml",
     "verify_build": false
   },
@@ -80,7 +84,8 @@
     "intro": {
       "enabled": true,
       "title": "说明",
-      "list": true
+      "list": true,
+      "note": "依 CBETA XML 自制"
     },
     "images": {
       "buddha": {
@@ -200,6 +205,9 @@
           245,
           230
         ]
+      },
+      "intro_summary": {
+        "font": "C:\\Windows\\Fonts\\simfang.ttf"
       }
     },
     "positions": {

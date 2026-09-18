@@ -132,9 +132,9 @@ def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=No
 右栏来源 = xml      → xml2pdf_bridge.ensure_one(work_id, preset, regen_all) → xml_to_ebooks_dir/{fmt}/{work}.{fmt}
 → ebook_merger 单一格式合并 / ZIP 打包 / 拷贝导出
 ```
-- 说明页：来源=自制时在「说明」标题下一行居中注 `intro["note"]`（默认「依 CBETA XML 自制」，
-  设置「封面/版式」可改）；官方不加。简介三行默认仿宋单行距（`styles.intro_summary`），
-  部类/刊本分组信息沿用目录条目字体。
+- 说明页：来源=自制时在「说明」标题下一行居中注 `intro["note"]`（设置「自制书说明」，
+  默认「依 CBETA XML 自制」，其后空一行）；官方不加。简介三行默认仿宋单行距
+  （`styles.intro_summary`），部类/刊本分组信息按 ` / ` 每段一行、沿用目录条目字体。
 - 打包格式（ZIP/导出点后弹窗选，独立于合并格式勾选）：官方源 7 种
  （`PACK_FORMATS`：pdf/epub 单文件＋html/docx/odt/txt/txt_notes 目录型），
   自制源 3 种：pdf/epub/docx。目录型只打包不合并：
