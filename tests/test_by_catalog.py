@@ -74,6 +74,11 @@ class CatalogPathTest(unittest.TestCase):
                          "中觀部／疏")
         self.assertEqual(cp._clean_bulei_seg("T1564-67, K1482 中論 etc.／疏 T42"),
                          "中論／疏")
+        # 经号后的裸卷号列表（X46,54 / T42,85）也要去掉
+        self.assertEqual(cp._clean_bulei_seg("T45, X46,54 三論宗"), "三論宗")
+        # 作者等正文（含 】）保留，不被截断
+        self.assertEqual(cp._clean_bulei_seg("T2034 二諦義 (3卷)【隋 吉藏撰】"),
+                         "二諦義 (3卷)【隋 吉藏撰】")
 
 
 class CatalogGroupingTest(unittest.TestCase):

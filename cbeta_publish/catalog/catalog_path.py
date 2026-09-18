@@ -19,28 +19,19 @@ _LAST = 10 ** 6
 
 
 def _clean_bulei_seg(title: str) -> str:
-    """部类树节点标题 → 干净段名：去经号 token（T30a/T1564-67/K41/X46…）、
-    `etc.`、列表逗号；保留顶层序号前缀与全角 `／`（如 `中觀部／疏`）。
-
-    做法：截掉「从某处起已无 CJK」的尾部（那里都是经号/范围/etc.），
-    再剥去开头的经号 token。叶标题里的 `22卷` 因后随汉字而保留。
+    """部类树节点标题 → 干净段名：去经号 token 及其逗号连带的卷号列表
+    （`T30a,42,45`/`X46,54`/`T1564-67`/`K1482`…）、`etc.`、列表标点；
+    保留顶层序号前缀、全角 `／`（如 `中觀部／疏`）与作者等正文（`【隋 吉藏撰】`）。
     """
     t = title or ""
     m = re.match(r"^\s*(\d+)\s+", t)
     num = m.group(1) if m else ""
     if m:
         t = t[m.end():]
-    # 截掉首个「其后全无非 CJK」的位置（经号范围、etc. 等）
-    for i in range(len(t)):
-        if not re.search(r"[\u3400-\u9fff]", t[i:]):
-            t = t[:i]
-            break
-    # 反复剥去开头的经号 token（可带逗号分隔的同类）
-    while True:
-        t2 = re.sub(r"^\s*[A-Za-z]{1,3}\d+[-\dA-Za-z]*\s*[,，、;；/]?\s*", "", t)
-        if t2 == t:
-            break
-        t = t2
+    # 经号 token（含其后逗号分隔的裸卷号列表）
+    t = re.sub(r"[A-Za-z]{1,3}\d+[-\dA-Za-z]*(?:\s*[,，、;；]\s*\d+[-\d]*)*", " ", t)
+    # 残留的「逗号+裸卷号」（其前导经号已先被去掉）
+    t = re.sub(r"[,，、;；]\s*\d+[-\d]*", " ", t)
     t = re.sub(r"\betc\.?", " ", t, flags=re.I)
     t = re.sub(r"[,，、;；/]+", " ", t)          # 去列表标点与半角斜杠
     t = re.sub(r"\s*／\s*", "／", t)             # 全角斜杠两侧不留空格

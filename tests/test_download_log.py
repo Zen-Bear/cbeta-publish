@@ -39,6 +39,7 @@ def _make_window():
     cfg["mulu_dir"] = str(ROOT / "mulu")
     cfg["collections_dir"] = str(tmp / "collections")
     cfg["update_interval"] = "manual"
+    cfg.setdefault("merge", {})["mode"] = "none"   # 测试确定性：不随实时配置弹合并框
     cfg["_config_path"] = str(tmp / "app.json")
     return MainWindow(cfg), tmp
 
