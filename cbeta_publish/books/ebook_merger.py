@@ -160,6 +160,7 @@ def _cover_pdf(first_src: Path, title: str, out_path: Path, organizer: str="", c
     # 字体：优先 styles，其次 fonts（正文基准已统一）
     font_cbeta = reg("CoverSeries", _font("cbeta", "C:\\Windows\\Fonts\\simhei.ttf"))
     font_title = reg("CoverTitle", _font("title", "C:\\Windows\\Fonts\\Source Han Serif SC Heavy (TrueType).ttf"))
+    font_toc_item = reg("CoverTocItem", _font("toc_item", "C:\\Windows\\Fonts\\simhei.ttf"))
     font_org = reg("CoverOrg", _font("organizer", "C:\\Windows\\Fonts\\Source Han Serif SC Heavy (TrueType).ttf"))
     font_date = reg("CoverDate", _font("date", "C:\\Windows\\Fonts\\simhei.ttf"))
     for n in [font_cbeta, font_title, font_org, font_date]:
@@ -313,7 +314,22 @@ def _cover_pdf(first_src: Path, title: str, out_path: Path, organizer: str="", c
                     c.drawString(cur_x, y, " ")
                     cur_x+=c.stringWidth(" ", "Helvetica", size)
             return y-size-6
-    draw_centred_with_spaces(y_title, title, font_title, t_sz)
+    _segs=[s for s in str(title or "").split("｜")]
+    _main=_segs[0] if _segs else ""
+    _group=_segs[1] if len(_segs)>1 else ""
+    y_after=draw_centred_with_spaces(y_title, _main, font_title, t_sz) if _main else y_title
+    if _group:
+        # 部类/刊本分组路径：按 " / " 每段一行（不再整行折行）；字体字号沿用目录条目
+        _tm=_toc_text_style(cfg, width, height, paper)
+        _isz=_tm["item_sz"]
+        c.setFillColor(Color(*[v/255 for v in _color("toc_item",[30,30,30])]))
+        for _lv in [s for s in re.split(r"\s*/\s*", _group) if s]:
+            try:
+                c.setFont(font_toc_item, _isz)
+            except Exception:
+                c.setFont("Helvetica", _isz)
+            c.drawCentredString(cx, y_after, _lv)
+            y_after-=_isz*1.6
     # 整理者 135% Y 84%（Y 位置读 positions.organizer_y_ratio）
     if organizer:
         y_org=height*(1 - pos.get("organizer_y_ratio", 0.84))
@@ -975,11 +991,19 @@ def _epub_cover_page(collection_name: str, organizer: str, titles: list=None, co
     date=datetime.date.today().isoformat()
     org=organizer or ""
     topleft=_html.escape(cfg.get("imprint", "CBETA 電子佛典自選叢書") or "")
+    _cn=str(collection_name or "")
+    _cp=_cn.split("｜")
+    _cmain=_cp[0] if _cp else ""
+    _cgroup=_cp[1] if len(_cp)>1 else ""
+    _group_html="".join(
+        f'<p style="font-size:1em;margin:0.2em 0;color:{col_title};">{_html.escape(x)}</p>'
+        for x in re.split(r"\s*/\s*", _cgroup) if x)
     c.content=(
         '<html xmlns="http://www.w3.org/1999/xhtml"><head/><body>'
         '<div style="text-align:center;">'
         f'<p style="text-align:left;font-size:{r_cb}em;color:{col_cb};">{topleft}</p>'
-        f'<h1 style="font-size:{r_title}em;line-height:1.5;margin-top:1.5em;color:{col_title};">{_html.escape(collection_name or "").replace("｜", "<br/>")}</h1>'
+        f'<h1 style="font-size:{r_title}em;line-height:1.5;margin-top:1.5em;color:{col_title};">{_html.escape(_cmain)}</h1>'
+        + _group_html +
         f'<p style="font-size:{r_org}em;margin-top:19em;color:{col_org};">{org}</p>'
         f'<p style="font-size:{r_date}em;color:{col_date};">{date}</p>'
         '</div></body></html>'
