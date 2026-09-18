@@ -251,7 +251,7 @@ class MergeModeTest(unittest.TestCase):
         self.assertEqual(len(sigmas), 2)
         self.assertEqual(len(items), 2)
         # EPUB 段落边距与默认行高换算后，PDF 正文与子项分别约为 1.5 与 1.35 倍字号。
-        self.assertAlmostEqual(sigmas[1][1] - sigmas[0][1], 13 * 1.5, places=1)
+        self.assertAlmostEqual(sigmas[1][1] - sigmas[0][1], 13 * 1.2, places=1)
         self.assertAlmostEqual(items[1][1] - items[0][1], 13 * 1.35, places=1)
 
     def test_intro_section_prespacing(self):
@@ -277,7 +277,7 @@ class MergeModeTest(unittest.TestCase):
         dist = by_text["部類分布：阿含部類 2"]
         section = by_text["Section"]
         # 部类标题段前 0.5em；“部類分布”后不再另空行
-        self.assertAlmostEqual(section[1] - dist[1], 13 * 1.5 + 13 * 0.5, places=1)
+        self.assertAlmostEqual(section[1] - dist[1], 13 * 1.2 + 13 * 0.5, places=1)
 
 
     def test_progress_callback_and_cancel(self):

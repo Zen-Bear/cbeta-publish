@@ -159,6 +159,14 @@ class RightPanelTest(unittest.TestCase):
         calls.clear()
         b.convert = fake
         try:
+            win._on_make_button(False)          # 再次「自制」= 已有 → 复用，不重生成
+            _ensure_app().processEvents()
+        finally:
+            b.convert = real
+        self.assertEqual(len(calls), 0)          # 复用关键回归
+        calls.clear()
+        b.convert = fake
+        try:
             win._on_make_button(True)           # 重制 = 全部
             _ensure_app().processEvents()
         finally:

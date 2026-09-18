@@ -370,9 +370,12 @@ class MergeXmlSourceTest(unittest.TestCase):
         win = self.win
         cfg = {"enabled": True, "intro": {"enabled": True, "list": False}}
         made = win._intro_for(["T0001"], cfg, made_by_xml=True)
-        self.assertEqual(made.get("note"), "E书依 CBETA XML 自制")
+        self.assertEqual(made.get("note"), "依 CBETA XML 自制")   # 默认文案
         off = win._intro_for(["T0001"], cfg, made_by_xml=False)
         self.assertIsNone(off.get("note"))
+        # 设置里可改注明文字
+        cfg2 = {"enabled": True, "intro": {"enabled": True, "list": False, "note": "自訂註記"}}
+        self.assertEqual(win._intro_for(["T0001"], cfg2, made_by_xml=True).get("note"), "自訂註記")
 
     def _xml_env(self):
         win = self.win

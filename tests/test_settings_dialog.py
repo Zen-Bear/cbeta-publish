@@ -205,6 +205,17 @@ class SettingsDialogTest(unittest.TestCase):
         d2 = SettingsDialog(cfg, None)
         self.assertTrue(d2.rb_build_verify.isChecked())
 
+    def test_intro_note_and_summary_font(self):
+        # 「说明页注明」可改；说明页简介字体在「字体」子页签
+        dlg = self._dlg()
+        self.assertIn("intro_summary", dlg.font_rows)
+        dlg.ed_intro_note.setText("測試註記")
+        dlg.font_rows["intro_summary"].setText("C:/Windows/Fonts/simfang.ttf")
+        out = dlg._collect()
+        self.assertEqual(out["cover"]["intro"]["note"], "測試註記")
+        self.assertEqual(out["cover"]["styles"]["intro_summary"]["font"],
+                         "C:/Windows/Fonts/simfang.ttf")
+
     def test_theme_language_are_radio(self):
         # 外观：主题（浅色/深色/跟随系统）与语言（简体/繁体/English）单选
         dlg = self._dlg()
