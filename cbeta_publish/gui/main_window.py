@@ -541,12 +541,16 @@ class MainWindow(QMainWindow):
             _xml_pack = ["pdf", "docx"]
         self.chk_pdf=QCheckBox(" pdf")
         self.chk_pdf.setIcon(QIcon(str(icon_dir/"pdf.png")))
+        self.chk_pdf.setToolTip("勾选＝自制生成/下载/校验与「已有」标志；合并也用它")
         self.chk_pdf.setChecked("pdf" in _merge)
         self.chk_epub=QCheckBox(" epub")
         self.chk_epub.setIcon(QIcon(str(icon_dir/"epub.png")))
+        self.chk_epub.setToolTip("勾选＝自制生成/下载/校验与「已有」标志；合并也用它")
         self.chk_epub.setChecked("epub" in _merge)
         self.chk_docx=QCheckBox(" docx")
         self.chk_docx.setIcon(QIcon(str(icon_dir/"docx.png")))
+        self.chk_docx.setToolTip("勾选＝自制生成/校验/下载与「已有」标志；\n"
+                                 "docx 不参与合并（合并只用 pdf/epub），打包走 ZIP/导出")
         self.chk_docx.setChecked("docx" in _xml_pack)
         fh.addWidget(self.chk_pdf); fh.addWidget(self.chk_epub); fh.addWidget(self.chk_docx)
         fh.addStretch()
