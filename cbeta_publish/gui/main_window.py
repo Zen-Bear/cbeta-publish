@@ -4541,9 +4541,44 @@ class MainWindow(QMainWindow):
         # 直接使用内存配置，避免 CWD 相对读取
         return self.config.get("cover", {})
 
-    # ---------- 按册分册 ----------
+    # ---------- 分册模式（合并） ----------
     def _by_volume(self):
+        # 兼容旧配置：无 merge.mode 时看 by_volume
         return bool((self.config.get("merge", {}) or {}).get("by_volume", False))
+
+    def _merge_mode(self):
+        """none=不分册｜volume=按刊本册｜catalog=按目录(部类)｜ask=合并时选择。"""
+        m = (self.config.get("merge", {}) or {}).get("mode")
+        if m in ("none", "volume", "catalog", "ask"):
+            return m
+        return "volume" if self._by_volume() else "none"
+
+    def _merge_depth(self):
+        try:
+            d = int((self.config.get("merge", {}) or {}).get("depth", 2))
+        except Exception:
+            d = 2
+        return max(1, min(5, d))
+
+    def _merge_ask_last(self):
+        v = (self.config.get("merge", {}) or {}).get("ask_last") or {}
+        mode = v.get("mode") if v.get("mode") in ("none", "volume", "catalog") else "none"
+        try:
+            depth = int(v.get("depth", 2))
+        except Exception:
+            depth = 2
+        return {"mode": mode, "depth": max(1, min(5, depth))}
+
+    def _set_merge_ask_last(self, mode, depth):
+        self.config.setdefault("merge", {})["ask_last"] = {
+            "mode": mode, "depth": int(depth)}
+        self._save_config()
+
+    def _catalog_bulei_map(self):
+        if getattr(self, "_catalog_bulei_cache", None) is None:
+            from cbeta_publish.catalog import catalog_path as _cp
+            self._catalog_bulei_cache = _cp.build_bulei_map(self._bulei_roots)
+        return self._catalog_bulei_cache
 
     def _safe_name(self, label, fallback="未分册"):
         import re as _re
@@ -4563,50 +4598,62 @@ class MainWindow(QMainWindow):
                 self._wvol_cache={}
         return self._wvol_cache
 
-    def _group_works(self, d, ok, ok_titles, ok_works):
-        """按册分组，返回 [ {label, stem, ok, titles, works, sortkey}, ... ]。
+    def _group_works(self, d, ok, ok_titles, ok_works, mode=None, depth=None):
+        """按 mode 分组，返回 [ {label, stem, ok, titles, works, sortkey}, ... ]。
 
-        标签来源：丛书 work_groups（拖拽/编辑记录）优先，其次 mulu/vol.json 的册；
-        刊本直属经取书名；未知则「未分册」。文件名 stem = `刊本名 序号 显示名`
-        （序号按刊本内原书顺序；手动标签同样按其成员的册归属补刊本名+序号）。
-        不开启「按册分册」时返回单组（label/stem 为 None）。
+        mode：none=单组；volume=按刊本册；catalog=按部类目录（路径取前 depth 段）。
+        depth 默认取配置（默认 2）。文件名 stem = 清洗后路径段用 `_` 连接。
+        volume 模式仍支持丛书 work_groups 的人工册标签（拖拽记录）覆盖自动归属。
         """
-        if not self._by_volume():
+        from cbeta_publish.catalog import catalog_path as _cp
+        if mode is None:
+            mode = self._merge_mode()
+            if mode == "ask":
+                mode = "none"
+        if depth is None:
+            depth = self._merge_depth()
+        if mode == "none":
             return [{"label": None, "stem": None, "ok": ok, "titles": ok_titles,
                      "works": ok_works, "sortkey": (9, "")}]
-        manual=d.get("work_groups") or {}
-        auto=self._work_vol_map()
-        buckets={}   # key -> dict
+        manual = (d.get("work_groups") or {}) if mode == "volume" else {}
+        volume_map = self._work_vol_map() if mode == "volume" else None
+        bulei_map = self._catalog_bulei_map() if mode == "catalog" else None
+        buckets = {}
         for f, t, w in zip(ok, ok_titles, ok_works):
-            nw=self._normalize_work(w)
-            info=auto.get(w) or auto.get(nw)
-            mlab=manual.get(w) or manual.get(nw)
-            if info:
-                ed=info.get("edition") or ""
-                auto_lab=info.get("label") or "未分册"
-                # 手动标签若与刊本名相同，视为拖拽回退值而非有效覆盖，用自动册名/书名
-                lab=(mlab if (mlab and mlab != ed) else None) or auto_lab
-                seq=int(info.get("seq") or 0)
-                stem=(f"{ed} {seq:02d} {lab}".strip() if ed else lab)
-                key=("a", ed, seq, lab)
-                g=buckets.setdefault(key, {"label": lab, "stem": stem,
-                                           "edition": ed, "seq": seq,
-                                           "ok": [], "titles": [], "works": [],
-                                           "sortkey": (1, ed, seq, lab)})
-            elif mlab:
-                key=("m", mlab)
-                g=buckets.setdefault(key, {"label": mlab, "stem": mlab,
-                                           "edition": "", "seq": 0,
-                                           "ok": [], "titles": [], "works": [],
-                                           "sortkey": (0, "", 0, mlab)})
-            else:
-                key=("z", "未分册")
-                g=buckets.setdefault(key, {"label": "未分册", "stem": "未分册",
-                                           "edition": "", "seq": 0,
-                                           "ok": [], "titles": [], "works": [],
-                                           "sortkey": (8, "未分册")})
+            nw = self._normalize_work(w)
+            if mode == "volume":
+                info = volume_map.get(w) or volume_map.get(nw)
+                ed = (info or {}).get("edition") or ""
+                mlab = manual.get(w) or manual.get(nw)
+                if mlab and mlab != ed:
+                    key = ("m", mlab); label = mlab; stem = mlab
+                    sortkey = (0, "", 0, mlab)
+                else:
+                    r = _cp.resolve(w, "volume", depth, volume_map=volume_map)
+                    key = ("v",) + tuple(r["segments"]); label = r["label"]; stem = r["stem"]
+                    sortkey = (1,) + tuple(r["order"])
+            else:  # catalog（部类）
+                r = _cp.resolve(w, "bulei", depth, bulei_map=bulei_map)
+                key = ("c",) + tuple(r["segments"]); label = r["label"]; stem = r["stem"]
+                sortkey = (1,) + tuple(r["order"])
+            g = buckets.setdefault(key, {"label": label, "stem": stem,
+                                         "ok": [], "titles": [], "works": [],
+                                         "sortkey": sortkey})
             g["ok"].append(f); g["titles"].append(t); g["works"].append(w)
         return sorted(buckets.values(), key=lambda g: g["sortkey"])
+
+    def _merge_preview(self, works, mode, depth):
+        """合并弹框预览：[(label, 部数, 文件名说明), ...]。"""
+        groups = self._group_works({}, list(works), list(works), list(works),
+                                   mode=mode, depth=depth)
+        out = []
+        for g in groups:
+            if g["label"] is None:
+                out.append(("（不分册）", len(g["ok"]), "整部一个文件"))
+            else:
+                out.append((g["label"], len(g["ok"]),
+                            f"{self._safe_name(g['stem'])}.pdf / .epub"))
+        return out
 
     def _intro_for(self, ok_works, cover_cfg, made_by_xml=False):
         intro=None
@@ -4821,6 +4868,19 @@ class MainWindow(QMainWindow):
             if not works:
                 QMessageBox.warning(self,"失败","丛书为空")
                 return
+        # 分册模式：设置固定则不弹；「合并时选择」每次弹框（记住上次选择）
+        merge_mode=self._merge_mode()
+        merge_depth=self._merge_depth()
+        if merge_mode=="ask":
+            from cbeta_publish.gui.merge_dialog import MergeDialog
+            last=self._merge_ask_last()
+            dlg=MergeDialog(self, default_mode=last["mode"], default_depth=last["depth"],
+                            preview=lambda m, dep: self._merge_preview(works, m, dep))
+            if dlg.exec()!=dlg.Accepted:
+                self.detail.setText("已取消合成（未选择分册模式）")
+                return
+            merge_mode, merge_depth = dlg.chosen()
+            self._set_merge_ask_last(merge_mode, merge_depth)
         from cbeta_publish.books.ebook_merger import merge_pdfs, merge_epubs, MergeCancelled
         from cbeta_publish.books import xml2pdf_bridge
         from cbeta_publish.books import official_ebook_source
@@ -4917,7 +4977,8 @@ class MainWindow(QMainWindow):
             _si = self.config.get("epub", {}).get("split_items", 500)
             split_items = 500 if _si is None else max(0, int(_si))
             organizer=cover_cfg.get("organizer","")
-            groups=self._group_works(d, ok, ok_titles, ok_works)
+            groups=self._group_works(d, ok, ok_titles, ok_works,
+                                     mode=merge_mode, depth=merge_depth)
             import html as _html
             from PySide6.QtCore import QUrl as _QU
             def _flink(path):

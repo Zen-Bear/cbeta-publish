@@ -73,8 +73,11 @@ class GroupWorksTest(unittest.TestCase):
     def tearDownClass(cls):
         shutil.rmtree(cls.tmp, ignore_errors=True)
 
+    def _set_mode(self, mode, depth=2):
+        self.win.config.setdefault("merge", {}).update({"mode": mode, "depth": depth})
+
     def test_single_group_when_disabled(self):
-        self.win.config.setdefault("merge", {})["by_volume"] = False
+        self._set_mode("none")
         d = {"work_groups": {"T0001": "甲"}}
         groups = self.win._group_works(d, ["a", "b"], ["ta", "tb"], ["T0001", "T0002"])
         self.assertEqual(len(groups), 1)
@@ -82,7 +85,7 @@ class GroupWorksTest(unittest.TestCase):
         self.assertIsNone(groups[0]["stem"])
 
     def test_group_by_label_order(self):
-        self.win.config.setdefault("merge", {})["by_volume"] = True
+        self._set_mode("volume")
         d = {"work_groups": {"T0001": "乙册", "T0002": "甲册"}}
         groups = self.win._group_works(
             d, ["f1", "f2", "f3"], ["t1", "t2", "t3"], ["T0001", "T0002", "T0003"])
@@ -92,7 +95,7 @@ class GroupWorksTest(unittest.TestCase):
         self.assertEqual(groups[2]["works"], ["T0003"])
 
     def test_auto_file_map_with_edition_and_seq(self):
-        self.win.config.setdefault("merge", {})["by_volume"] = True
+        self._set_mode("volume")
         self.win._wvol_cache = {
             "T0001": {"edition": "太虛大師全書", "seq": 2, "label": "法藏"},
             "T0002": {"edition": "太虛大師全書", "seq": 3, "label": "制藏"},
@@ -100,25 +103,38 @@ class GroupWorksTest(unittest.TestCase):
         d = {}
         groups = self.win._group_works(
             d, ["a", "b", "c"], ["ta", "tb", "tc"], ["T0002", "T0001", "T9999"])
-        # 按 (edition, seq) 排序：法藏(2) 在 制藏(3) 前；未知在最后
-        self.assertEqual([g["label"] for g in groups], ["法藏", "制藏", "未分册"])
-        self.assertEqual(groups[0]["stem"], "太虛大師全書 02 法藏")
-        self.assertEqual(groups[1]["stem"], "太虛大師全書 03 制藏")
+        # 按 seq 排序：法藏(2) 在 制藏(3) 前；未知在最后（label 为完整路径）
+        self.assertEqual([g["label"] for g in groups],
+                         ["太虛大師全書 / 法藏", "太虛大師全書 / 制藏", "未分册"])
+        self.assertEqual(groups[0]["stem"], "太虛大師全書_法藏")
+        self.assertEqual(groups[1]["stem"], "太虛大師全書_制藏")
         self.assertEqual(groups[2]["stem"], "未分册")
         self.win._wvol_cache = None
 
+    def test_volume_depth1_is_one_file(self):
+        # depth=1：只按刊本名（太虚=1 个文件）
+        self._set_mode("volume", depth=1)
+        self.win._wvol_cache = {
+            "T0001": {"edition": "太虛大師全書", "seq": 2, "label": "法藏"},
+            "TXa001": {"edition": "太虛大師全書", "seq": 1, "label": "編纂說明"},
+        }
+        groups = self.win._group_works({}, ["a", "b"], ["t1", "t2"], ["T0001", "TXa001"])
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(groups[0]["stem"], "太虛大師全書")
+        self.assertEqual(groups[0]["works"], ["T0001", "TXa001"])
+        self.win._wvol_cache = None
+
     def test_manual_overrides_auto(self):
-        self.win.config.setdefault("merge", {})["by_volume"] = True
+        self._set_mode("volume")
         self.win._wvol_cache = {"T0001": {"edition": "X", "seq": 1, "label": "自动册"}}
         d = {"work_groups": {"T0001": "手动册"}}
         groups = self.win._group_works(d, ["a", "b"], ["ta", "tb"], ["T0001", "T0002"])
         self.assertEqual([g["label"] for g in groups], ["手动册", "未分册"])
-        # 手动标签同样按其成员的册归属补刊本名+序号
-        self.assertEqual(groups[0]["stem"], "X 01 手动册")
+        self.assertEqual(groups[0]["stem"], "手动册")
         self.win._wvol_cache = None
 
     def test_manual_without_auto_keeps_label(self):
-        self.win.config.setdefault("merge", {})["by_volume"] = True
+        self._set_mode("volume")
         self.win._wvol_cache = {}
         d = {"work_groups": {"T0001": "手动册"}}
         groups = self.win._group_works(d, ["a"], ["ta"], ["T0001"])
@@ -128,16 +144,16 @@ class GroupWorksTest(unittest.TestCase):
 
     def test_manual_edition_falls_back_to_auto(self):
         # 老拖拽回退值（直属经记成刊本名）让位给自动书名
-        self.win.config.setdefault("merge", {})["by_volume"] = True
+        self._set_mode("volume")
         self.win._wvol_cache = {"TXa001": {"edition": "太虛大師全書", "seq": 1, "label": "編纂說明"}}
         d = {"work_groups": {"TXa001": "太虛大師全書"}}
         groups = self.win._group_works(d, ["a"], ["ta"], ["TXa001"])
-        self.assertEqual(groups[0]["label"], "編纂說明")
-        self.assertEqual(groups[0]["stem"], "太虛大師全書 01 編纂說明")
+        self.assertEqual(groups[0]["label"], "太虛大師全書 / 編纂說明")
+        self.assertEqual(groups[0]["stem"], "太虛大師全書_編纂說明")
         self.win._wvol_cache = None
 
     def test_same_label_still_grouped(self):
-        self.win.config.setdefault("merge", {})["by_volume"] = True
+        self._set_mode("volume")
         d = {"work_groups": {"T0001": "甲册", "T0002": "甲册"}}
         groups = self.win._group_works(d, ["a", "b"], ["ta", "tb"], ["T0001", "T0002"])
         self.assertEqual(len(groups), 1)

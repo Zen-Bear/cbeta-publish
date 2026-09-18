@@ -126,10 +126,24 @@ class SettingsDialogTest(unittest.TestCase):
         self.assertTrue(dlg._btn_default.toolTip())
         self.assertTrue(dlg._btn_original.toolTip())
 
-    def test_by_volume_label_mentions_file_naming(self):
+    def test_merge_mode_radios_and_roundtrip(self):
+        # 分册模式四选一 + 深度；持久化 merge.mode/depth
         dlg = self._dlg()
-        self.assertIn("每册一个文件", dlg.chk_by_volume.text())
-        self.assertTrue(dlg.chk_by_volume.toolTip())
+        self.assertEqual([dlg.rb_merge_none.text(), dlg.rb_merge_volume.text(),
+                          dlg.rb_merge_catalog.text(), dlg.rb_merge_ask.text()],
+                         ["不分册", "按刊本册", "按目录（部类）", "合并时选择（每次弹框）"])
+        dlg.rb_merge_catalog.setChecked(True)
+        dlg.sp_merge_depth.setValue(3)
+        out = dlg._collect()["merge"]
+        self.assertEqual(out["mode"], "catalog")
+        self.assertEqual(out["depth"], 3)
+        self.assertFalse(out["by_volume"])
+        cfg = copy.deepcopy(DEFAULT_CONFIG)
+        cfg["merge"] = {"mode": "volume", "depth": 1, "by_volume": True}
+        d2 = SettingsDialog(cfg, None)
+        self.assertTrue(d2.rb_merge_volume.isChecked())
+        self.assertEqual(d2.sp_merge_depth.value(), 1)
+        self.assertTrue(d2._collect()["merge"]["by_volume"])
 
     def test_cover_labels_renamed(self):
         # 「发布模式」→「PDF 合并模式」

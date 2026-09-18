@@ -2,7 +2,7 @@
 
 > 设计文档：`docs/设计总案.md`（总方案）、`docs/UI设计.md`（UI）、
 > `docs/链路B-设计契约.md`（与 xml2pdf 的跨仓调用契约）。
-> 测试：`python -m unittest discover tests`（当前 282 项通过）。
+> 测试：`python -m unittest discover tests`（当前 292 项通过）。
 
 ## 已完成（里程碑）
 
@@ -30,20 +30,15 @@
   全量不再写脏真实配置/丛书/备份；护栏 `tests/test_no_pollution.py`。
 - **软件名/版本**：单一来源 `cbeta_publish/__init__.py`（`APP_NAME`/`APP_ID`/`__version__`），
   窗口标题与 `QApplication` 元数据取此处。
+- **分册模式**：`catalog/catalog_path.py`（部类/刊本路径+序+`_` 命名）；`_group_works(mode, depth)`；
+  `gui/merge_dialog.py`（「合并时选择」每次弹框，记忆 `merge.ask_last`）；设置页四选一 + 深度；
+  单测 `tests/test_by_catalog.py`。右栏不做分组。
 
 ## 待办
 
-### P1 — 按目录分册 + 右栏分组 + 合并弹框
-- ① 新建 `catalog/catalog_path.py`（`work_path(work, dim)`；dim=部类/刊本；部类走
-  `build_index` 取顶层/子分组+深度，刊本走 `work_file_map` 取册；未命中「未歸類」，结果缓存）。
-- ② `_group_works` 加 `catalog` 分支（`mode/dim/depth` 可选，老调用兼容；`by_volume` 视为 volume）。
-- ③ 新建 `gui/merge_dialog.py`（模式：不分册/按刊本册/按目录 + 维度 + 深度 + 预览；
-  选择回写 config）。
-- ④ 右栏加「分组」勾选（`ui.coll_grouped`，维度跟合并维度；`_render_coll_rows` 插不可选分组头，
-  删除/全选/排序写回自动跳过）。
-- ⑤ 设置页删「按册分册」勾选换只读提示；`by_volume` 仅留兼容读取。
-- ⑥ 单测 `tests/test_by_catalog.py` + 弹框 + 右栏用例。
-- **不做**：选择时记录来源、ZIP/导出弹框扩展、作者/朝代维度；三藏不单列。
+### 后续可扩展（分册）
+- ZIP/导出 也按分册模式（当前仅合并）；「合并时选择」与 ZIP/导出共用弹框；
+  作者/朝代维度；三藏不单列。
 
 ### P2 — 校验可配置阈值
 - 校验的 `maxDiff`/`diffLines` 目前取上游 CLI 默认（10/5），未接预设 `verify` 配置；
