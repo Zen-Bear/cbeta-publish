@@ -4337,6 +4337,36 @@ class MainWindow(QMainWindow):
             summary.append("已取消。")
         pstate["finish"](summary)
         self._load_coll_works()
+        self._show_verify_results(imp, vdir, base)
+
+    def _show_verify_results(self, imp, vdir, base):
+        """把逐本/逐格式校验结果写入「书籍信息」页签（含目录链接），并切到该页。"""
+        import html as _html
+        from PySide6.QtCore import QUrl as _QU
+        def _dirlink(p):
+            return (f'<a href="{_QU.fromLocalFile(str(Path(p).resolve())).toString()}">'
+                    f'{_html.escape(str(p))}</a>')
+        WARN='<span style="color:#c62828;">%s</span>'
+        parts=["<b>校验结果</b>",
+               "验证输出目录：" + _dirlink(vdir)]
+        if imp["ok"]:
+            parts.append(f"<b>已入库 {len(imp['ok'])} 部</b>")
+            parts += [f"・{_html.escape(x)}" for x in imp["ok"]]
+        if imp["fail"]:
+            parts += [WARN % f"未入库 {len(imp['fail'])} 部："]
+            parts += [WARN % f"・{_html.escape(x)}" for x in imp["fail"]]
+        if imp["undet"]:
+            parts += [WARN % f"未判定 {len(imp['undet'])} 部（需人工看报告）："]
+            parts += [WARN % f"・{_html.escape(x)}" for x in imp["undet"]]
+        if imp["skip"]:
+            parts += [f"跳过 {len(imp['skip'])} 部（不在丛书中）"]
+        parts.append("已入库目录：" + _dirlink(base))
+        self.detail.setText("<br>".join(parts))
+        self.tab_bottom.setCurrentIndex(0)
+        try:
+            self.detail_scroll.verticalScrollBar().setValue(0)
+        except Exception:
+            pass
 
     @staticmethod
     def _verify_products(vdir, stem):
@@ -4453,6 +4483,7 @@ class MainWindow(QMainWindow):
             msg.append(f"跳过 {len(imp['skip'])}（不在丛书中）")
         pstate["finish"](msg)
         self._load_coll_works()
+        self._show_verify_results(imp, vdir, base)
 
     def _verify_rules_text(self):
         """导入规范正文（HTML；与契约 §9 同文）。"""

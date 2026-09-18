@@ -178,6 +178,7 @@ class SettingsDialogTest(unittest.TestCase):
         self.assertTrue(d2.fmt_merge_boxes["epub"].isChecked())
         self.assertFalse(d2.fmt_off_boxes["odt"].isChecked())
         self.assertFalse(d2.fmt_made_boxes["epub"].isChecked())
+        self.assertEqual(d2.fmt_off_boxes["txt_notes"].text(), "txt含注释")
 
     def test_build_verify_radio_and_roundtrip(self):
         # 自制书籍：校验/无校验 单选，持久化到 xml2pdf.verify_build

@@ -277,6 +277,21 @@ class VerifySendImportTest(unittest.TestCase):
     def _do_import(self, win, works, vdir, base):
         return win._do_import_verified(works, vdir, base)
 
+    def test_show_verify_results_in_book_info_tab(self):
+        # 逐本/逐格式结果（含部分通过）显示在「书籍信息」页签，含可点目录
+        win = self.win
+        imp = {"ok": ["T0001（docx）；未入 epub"],
+               "fail": ["T0002 校验未通过（epub）"], "undet": [], "skip": []}
+        win.tab_bottom.setCurrentIndex(1)
+        win._show_verify_results(imp, Path(win.config["verify_dir"]),
+                                 Path(win.config["xml_to_ebooks_dir"]))
+        txt = win.detail.text()
+        self.assertIn("未入 epub", txt)
+        self.assertIn("验证输出目录", txt)
+        self.assertIn("未入库", txt)
+        self.assertIn("href=", txt)
+        self.assertEqual(win.tab_bottom.currentIndex(), 0)
+
     def test_import_no_reports_cancel(self):
         # 本丛书校验目录无报告 → 弹目录选择；取消则什么都不做
         from PySide6.QtWidgets import QFileDialog

@@ -259,8 +259,9 @@ class SettingsDialog(QDialog):
         h.setContentsMargins(0, 0, 0, 0)
         boxes = {}
         want = set(checked if checked is not None else fmts)
+        label_map = {"txt_notes": "txt含注释"}
         for f in fmts:
-            cb = QCheckBox(f)
+            cb = QCheckBox(label_map.get(f, f))
             cb.setChecked(f in want)
             h.addWidget(cb)
             boxes[f] = cb
