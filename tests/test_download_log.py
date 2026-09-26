@@ -40,6 +40,8 @@ def _make_window():
     cfg["collections_dir"] = str(tmp / "collections")
     cfg["update_interval"] = "manual"
     cfg.setdefault("merge", {})["mode"] = "none"   # 测试确定性：不随实时配置弹合并框
+    cfg.setdefault("cover", {})["enabled"] = True
+    cfg["cover"]["edit_note"] = {"file": "", "enabled": False}  # 同上：不弹编辑说明守卫框
     cfg["_config_path"] = str(tmp / "app.json")
     return MainWindow(cfg), tmp
 
@@ -172,7 +174,7 @@ class DownloadMissingTest(unittest.TestCase):
         from cbeta_publish.books import official_ebook_source as oes
         real = oes.download_ebook
 
-        def fake(w, fmt, dest_dir):
+        def fake(w, fmt, dest_dir, config=None):
             if w not in ok_works:
                 return None
             p = oes.dest_path(w, fmt, dest_dir)
@@ -318,6 +320,10 @@ class MergeXmlSourceTest(unittest.TestCase):
         preset.write_text("{}", encoding="utf-8")
         win.config["xml2pdf"]["path"] = str(root)
         win.config["xml2pdf"]["preset"] = "my"
+        # 工作根隔离到 tmp：直生命名取工作目录名（L2 带书名）
+        _old_ebook = (win.config.get("xml2pdf") or {}).get("cbeta_ebook")
+        (self.tmp / "xml" / "T0001 测经").mkdir(parents=True, exist_ok=True)
+        win.config["xml2pdf"]["cbeta_ebook"] = str(self.tmp / "xml")
         win.chk_pdf.setChecked(True)
         win.chk_epub.setChecked(False)
         win.chk_docx.setChecked(True)     # 勾了 docx：合并应过滤掉，只合 pdf
@@ -339,12 +345,16 @@ class MergeXmlSourceTest(unittest.TestCase):
             _ensure_app().processEvents()
         finally:
             b.convert, em.merge_pdfs = real_convert, real_merge
+            if _old_ebook is None:
+                win.config["xml2pdf"].pop("cbeta_ebook", None)
+            else:
+                win.config["xml2pdf"]["cbeta_ebook"] = _old_ebook
         self.assertEqual(len(calls), 1)
         w, xml, fmt, preset_arg, out = calls[0]
         self.assertEqual((w, fmt), ("T0001", "pdf"))
         self.assertIsNone(xml)   # 只传 work id，XML 解析归 xml2pdf（P5a≠P5，不再自行定位）
         self.assertEqual(Path(preset_arg), preset)          # 预设透传
-        self.assertEqual(out, str(self.tmp / "xb" / "pdf" / "T0001.pdf"))  # {fmt}/分层
+        self.assertEqual(out, str(self.tmp / "xb" / "pdf" / "T0001 测经.pdf"))  # {fmt}/分层+L2带书名
         self._coll_file.unlink(missing_ok=True)
 
     def test_merge_only_docx_warns(self):
@@ -368,13 +378,13 @@ class MergeXmlSourceTest(unittest.TestCase):
 
     def test_intro_note_only_for_made(self):
         win = self.win
-        cfg = {"enabled": True, "intro": {"enabled": True, "list": False}}
+        cfg = {"enabled": True, "intro": {"enabled": True}}
         made = win._intro_for(["T0001"], cfg, made_by_xml=True)
         self.assertEqual(made.get("note"), "依 CBETA XML 自制")   # 默认文案
         off = win._intro_for(["T0001"], cfg, made_by_xml=False)
         self.assertIsNone(off.get("note"))
         # 设置里可改注明文字
-        cfg2 = {"enabled": True, "intro": {"enabled": True, "list": False, "note": "自訂註記"}}
+        cfg2 = {"enabled": True, "intro": {"enabled": True, "note": "自訂註記"}}
         self.assertEqual(win._intro_for(["T0001"], cfg2, made_by_xml=True).get("note"), "自訂註記")
 
     def _xml_env(self):
@@ -429,6 +439,115 @@ class MergeXmlSourceTest(unittest.TestCase):
         self.assertIn("T0001", ok_map["pdf"])
         self.assertEqual(len(failed), 1)
         self.assertIn("T9999", failed[0])
+
+
+class MergeEditNoteGuardTest(unittest.TestCase):
+    """编辑说明前置检查：启用但无文件/文件无效/封面总开关关闭 → 弹框问是否继续。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.win, cls.tmp = _make_window()
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def _select_coll(self, work_ids):
+        win = self.win
+        col = Path(win.config["collections_dir"]) / "custom" / "合测.json"
+        col.write_text(json.dumps({"id": "m", "name": "合测", "category": "custom",
+                                   "tags": [], "work_ids": list(work_ids)},
+                                  ensure_ascii=False), encoding="utf-8")
+        win._load_collections()
+        for i in range(win.coll_combo.count()):
+            if str(win.coll_combo.itemData(i)).endswith("合测.json"):
+                win.coll_combo.setCurrentIndex(i)
+                break
+        _ensure_app().processEvents()
+
+    def _run_merge_no(self, cover):
+        # 返回 (boxes, generated_calls)
+        import cbeta_publish.books.xml2pdf_bridge as b
+        from PySide6.QtWidgets import QMessageBox
+        win = self.win
+        self._select_coll(["T0001"])
+        win.config["default_source"] = "xml"
+        win.config["xml_to_ebooks_dir"] = str(self.tmp / "xb")
+        root = self.tmp / "x2p"
+        (root / "presets").mkdir(parents=True, exist_ok=True)
+        win.config["xml2pdf"]["path"] = str(root)
+        win.config["xml2pdf"]["preset"] = ""
+        win.config["cover"] = cover
+        win.chk_pdf.setChecked(True)
+        win.chk_epub.setChecked(False)
+        win.chk_docx.setChecked(False)
+        boxes = []
+        real_box = win._wrap_box
+        win._wrap_box = lambda *a, **k: boxes.append(a) or QMessageBox.No
+        calls = []
+        real_convert = b.convert
+
+        def fake_convert(*a, **k):
+            calls.append(a)
+            raise AssertionError("should not generate after abort")
+
+        b.convert = fake_convert
+        try:
+            win._merge()
+            _ensure_app().processEvents()
+        finally:
+            win._wrap_box = real_box
+            b.convert = real_convert
+        return boxes, calls
+
+    def test_no_file_asks_and_aborts(self):
+        boxes, calls = self._run_merge_no(
+            {"enabled": True, "edit_note": {"file": "", "enabled": True}})
+        self.assertTrue(any("未选择说明文件" in str(a) for a in boxes), boxes)
+        self.assertEqual(calls, [])
+        self.assertIn("已取消合成", self.win.detail.text())
+
+    def test_cover_off_asks_and_aborts(self):
+        f = self.tmp / "n.txt"
+        f.write_text("<title>T\n正文\n", encoding="utf-8")
+        boxes, calls = self._run_merge_no(
+            {"enabled": False, "edit_note": {"file": str(f), "enabled": True}})
+        self.assertTrue(any("封面总开关" in str(a) for a in boxes), boxes)
+        self.assertEqual(calls, [])
+
+    def test_ok_proceeds_without_question(self):
+        import cbeta_publish.books.xml2pdf_bridge as b
+        import cbeta_publish.books.ebook_merger as em
+        win = self.win
+        self._select_coll(["T0001"])
+        win.config["default_source"] = "xml"
+        win.config["xml_to_ebooks_dir"] = str(self.tmp / "xb")
+        win.config["cover"] = {"enabled": True,
+                               "edit_note": {"file": "", "enabled": False}}
+        win.chk_pdf.setChecked(True)
+        win.chk_epub.setChecked(False)
+        win.chk_docx.setChecked(False)
+        boxes = []
+        real_box = win._wrap_box
+        win._wrap_box = lambda *a, **k: boxes.append(a) or None
+        real_convert, real_merge = b.convert, em.merge_pdfs
+
+        def fake_convert(w, xml, out, config, fmt="pdf", preset=None, stop=None):
+            Path(out).parent.mkdir(parents=True, exist_ok=True)
+            Path(out).write_bytes(b"x")
+            return Path(out)
+
+        def fake_merge(sources, out, **kw):
+            Path(out).write_bytes(b"PDF")
+            return [Path(out)]
+        b.convert, em.merge_pdfs = fake_convert, fake_merge
+        try:
+            win._merge()
+            _ensure_app().processEvents()
+        finally:
+            win._wrap_box = real_box
+            b.convert, em.merge_pdfs = real_convert, real_merge
+        self.assertFalse(any("编辑说明" in str(a) for a in boxes), boxes)
 
 
 if __name__ == "__main__":

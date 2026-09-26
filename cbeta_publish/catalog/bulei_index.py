@@ -4,7 +4,7 @@
 """
 import re
 
-from cbeta_publish.catalog.tripitaka_service import pitaka_of, PITAKA_ORDER
+from cbeta_publish.catalog.tripitaka_service import pitaka_of, pitaka_of_work, PITAKA_SUMMARY_ORDER
 
 WORK_RE = re.compile(r"[A-Z]+[0-9A-Za-z]*")
 
@@ -66,11 +66,13 @@ def summarize(work_ids, roots, title_of=None) -> dict:
     title_of: 可选 work→标题 解析器（如 SutraList 的 title_of）；给出时行标签与
               目录页完全一致（不含作者），否则回退用部類叶标题（含作者）。
     返回 {"title": "说明",
-          "summary": ["本丛书共收录 N 部", "三藏：…", "部類：…"],
+          "summary": ["本丛书共收录 N 部", "三藏分布：…"],
           "sections": [("01 阿含部類（12 部）", ["T0001 長阿含經", …]), …]}
+    三藏按经号查（T0001–1420經/T1421–1504律/T1505–1692論/其余其他），
+    与部类归属无关。
     """
     index = build_index(roots)
-    pitaka_count = {k: 0 for k in PITAKA_ORDER}
+    pitaka_count = {}
     bulei_order = []          # 保持部類树序（按首次出现）
     bulei_map = {}            # bulei -> [work 行...]
     seen = set()
@@ -82,23 +84,17 @@ def summarize(work_ids, roots, title_of=None) -> dict:
         total += 1
         info = index.get(w)
         bulei = info["bulei"] if info else "未歸類"
-        pitaka = info["pitaka"] if info and info["pitaka"] != "其他" else "其他"
+        pitaka = pitaka_of_work(w)
         pitaka_count[pitaka] = pitaka_count.get(pitaka, 0) + 1
         if bulei not in bulei_map:
             bulei_map[bulei] = []
             bulei_order.append(bulei)
         bulei_map[bulei].append(w)
 
-    pitaka_txt = "、".join(f"{k} {pitaka_count.get(k, 0)}" for k in PITAKA_ORDER if pitaka_count.get(k))
+    pitaka_txt = "、".join(f"{k} {pitaka_count.get(k, 0)}" for k in PITAKA_SUMMARY_ORDER if pitaka_count.get(k))
     summary = [f"本丛书共收录 {total} 部"]
     if pitaka_txt:
         summary.append(f"三藏分布：{pitaka_txt}")
-    if bulei_order:
-        # 部類分布：名 N
-        dist = []
-        for b in bulei_order:
-            dist.append(f"{_bulei_label(b)} {len(bulei_map[b])}")
-        summary.append("部類分布：" + "、".join(dist))
 
     sections = []
     for b in bulei_order:

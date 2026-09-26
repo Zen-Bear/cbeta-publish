@@ -351,36 +351,67 @@ def xml_books_dir(config) -> Path:
     return _abs((config or {}).get("xml_to_ebooks_dir") or XML_BOOKS_DEFAULT_DIR)
 
 
-def xml_dest(work: str, fmt: str, base_dir) -> Path:
-    """自制书目标路径（`{fmt}/{work}.{fmt}`，publish 定名保证合并可寻址）。"""
-    return Path(base_dir) / fmt / f"{work}.{fmt}"
+def work_dir_of(config, work: str):
+    """工作根下该 work 的平展目录（`{id} {书名}` 或恰为 `{id}`）；无则 None。
+
+    与上游 `fetch._find_work_dir` 同规则：排除更长編號误命中（如查 T0349 不命中
+    T0349a）。用于推导与上游一致的产物基名 `{id} {书名}`。
+    """
+    root = xml_work_dir(config)
+    try:
+        for entry in sorted(root.glob(f"{work}*")):
+            if not entry.is_dir():
+                continue
+            rest = entry.name[len(work):]
+            if rest and rest[0].isalnum():
+                continue
+            return entry
+    except Exception:
+        pass
+    return None
+
+
+def built_name(config, work: str) -> str:
+    """自制书产物基名（不含扩展名）：优先用工作根目录名 `{id} {书名}`
+    （与上游 `default_output_name` 同源，保证导入项与直生项同名），
+    无工作目录时退回 `{work}`。"""
+    d = work_dir_of(config, work)
+    return d.name if d is not None else work
+
+
+def xml_dest(work: str, fmt: str, base_dir, name: str = None):
+    """自制书目标路径（`{fmt}/{name}.{fmt}`；name 缺省=work，publish 定名保证合并可寻址）。"""
+    return Path(base_dir) / fmt / f"{name or work}.{fmt}"
 
 
 def find_built(work: str, fmt: str, base_dir):
-    """已生成的自制书：精确名 `{fmt}/{work}.{fmt}` 优先，其次同目录通配；
-    都没有返回 None（旧版平展/`{id 书名}` 兼容已删除，不双读）。"""
+    """已生成的自制书：精确名 `{fmt}/{work}.{fmt}` 优先，
+    其次带书名 `{fmt}/{work} *.{fmt}`（L2 命名，边界=空格，避免 T185 误命中 T1858）；
+    都没有返回 None（旧版平展/顶层不双读）。"""
     base = Path(base_dir)
     exact = base / fmt / f"{work}.{fmt}"
     if exact.exists():
         return exact
     try:
-        cands = sorted((base / fmt).glob(f"{work}*.{fmt}"))
+        cands = sorted((base / fmt).glob(f"{work} *.{fmt}"))
     except Exception:
         return None
     return cands[0] if cands else None
 
 
 def ensure_one(work: str, fmt: str, base_dir, config, preset=None,
-               regen_all: bool = False):
+               regen_all: bool = False, name: str = None):
     """确保一部自制书存在，返回 (产物 Path | None, reused: bool)。
 
+    name: 产物基名（不含扩展名）；缺省=work。调用方传 `built_name(config, work)`
+    以统一到 L2 带书名布局。
     regen_all=False（仅生成缺少）：已有产物直接复用（`find_built`）；
     否则一律重新生成并覆盖原路径。
     """
     hit = find_built(work, fmt, base_dir)
     if not regen_all and hit is not None:
         return hit, True
-    out = hit if hit is not None else xml_dest(work, fmt, base_dir)
+    out = hit if hit is not None else xml_dest(work, fmt, base_dir, name)
     got = convert(work, None, out, config, fmt=fmt, preset=preset)
     if got is not None and got.exists():
         return got, False
@@ -430,6 +461,20 @@ def verify_work(work: str, fmts, out_dir, config: dict, preset=None, stop=None) 
     except Exception:
         pass
     fmt_arg = ",".join(f for f in (fmts or []) if f) or "pdf"
+    # 本地库预填校验基线（只补缺失；工作目录不存在则跳过，上游 auto_fetch 兜底）
+    try:
+        from cbeta_publish.books import official_ebook_source as _oes
+        _need = {"md": ["txt_notes"], "docx": ["docx", "html"],
+                 "txt": ["txt_notes"], "html": ["html"],
+                 "epub": ["epub"], "pdf": ["docx"]}
+        _kinds = sorted({k for f in (fmts or []) for k in _need.get(f, [])})
+        _wdir = work_dir_of(config, work)
+        if _wdir is not None and _kinds:
+            _seeded = _oes.seed_baselines_from_library(work, _kinds, _wdir, config)
+            if _seeded:
+                print("seed baselines from library", work, sorted(_seeded))
+    except Exception as e:
+        print("seed baselines fail", e)
     run_wrap = write_run_wrapper(config, preset) if preset else None
     argv = ["-i", str(work), "-f", fmt_arg, "-o", str(out_dir), "--verify"]
     if run_wrap is not None:
@@ -514,9 +559,187 @@ def verify_reports(out_dir):
     return [(p, stem) for stem, p in by_stem.items()]
 
 
+def parse_work_summary_line(line) -> list:
+    """解析上游总结行 `[id] N format: 1[docx=OK(0/0)], 2[pdf=1], 3[epub=FAIL(48/97)]`
+    （见上游 docs/第三方调用说明.md `format_work_summary`）。
+
+    返回 [(fmt, verdict, missing, extra, reason)]（按行内顺序）：
+    verdict True/False/None；missing/extra 为 int 或 None（`?`）；
+    reason 为 None（有明确结论）或 "covered:<src_fmt>" / "covered" /
+    "no baseline" / "gen not found" / "error…"（未判定原因）。
+    fmt 含 `→` 取左侧（产物格式，与上游一致）。
+    """
+    import re as _re
+    m = _re.match(r"^\[([^\]]+)\]\s+\d+\s+format:\s*(.*)$", (line or "").strip())
+    if not m:
+        return []
+    raw_items = _re.findall(r"(\d+)\[([^\]=\s]+)=([^\]]+)\]", m.group(2))
+    items = []  # (fmt, kind, payload)
+    for _i, fmt_raw, x_raw in raw_items:
+        fmt = (fmt_raw or "").split("→")[0].strip()
+        if not fmt:
+            continue
+        x = (x_raw or "").strip()
+        mu = _re.match(r"^(OK|FAIL)\(([^/]*)/([^)]*)\)$", x, _re.IGNORECASE)
+        if mu:
+            def _num(t):
+                t = (t or "").strip()
+                if t == "" or t == "?":
+                    return None
+                try:
+                    return int(t)
+                except ValueError:
+                    return None
+            items.append((fmt, mu.group(1).upper(),
+                          _num(mu.group(2)), _num(mu.group(3))))
+        elif x.isdigit():
+            items.append((fmt, "ref", int(x), None))
+        elif x.upper() == "COVERED":
+            items.append((fmt, "covered", None, None))
+        elif x.upper() == "NO_BASELINE":
+            items.append((fmt, "pending", "no baseline", None))
+        elif x.upper() == "NOGEN":
+            items.append((fmt, "pending", "gen not found", None))
+        else:
+            items.append((fmt, "pending", x.lower() or "error", None))
+    # 消解被覆盖项（`2[pdf=1]`：结论看同行第 1 条；防环）
+    verdicts = []
+    for fmt, kind, a, b in items:
+        if kind == "OK":
+            verdicts.append((True, a, b, None))
+        elif kind == "FAIL":
+            verdicts.append((False, a, b, None))
+        elif kind == "pending":
+            verdicts.append((None, None, None, a))
+        elif kind == "covered":
+            verdicts.append((None, None, None, "covered"))
+        else:  # ref
+            seen = set()
+            tgt = a
+            v = None
+            while isinstance(tgt, int) and 1 <= tgt <= len(items) and tgt not in seen:
+                seen.add(tgt)
+                tfmt, tkind, ta, tb = items[tgt - 1]
+                if tkind == "OK":
+                    v = (True, ta, tb, f"covered:{tfmt}")
+                    break
+                elif tkind == "FAIL":
+                    v = (False, ta, tb, f"covered:{tfmt}")
+                    break
+                elif tkind == "ref":
+                    tgt = ta
+                    continue
+                break
+            verdicts.append(v if v is not None else (None, None, None, "covered"))
+    return [(fmt, v, mi, ex, r) for (fmt, *_), (v, mi, ex, r)
+            in zip(items, verdicts)]
+
+
+def _summary_entries(path) -> dict:
+    """读报告中全部总结行 → {fmt: (verdict, missing, extra, reason)}。
+    多总结行（非常见）时同格式首个胜出；无总结行返回 {}（调用方回退 trial 解析）。"""
+    try:
+        text = Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return {}
+    out = {}
+    for raw in text.splitlines():
+        if "format:" not in raw:
+            continue
+        for fmt, v, mi, ex, r in parse_work_summary_line(raw):
+            if fmt and fmt not in out:
+                out[fmt] = (v, mi, ex, r)
+    return out
+
+
+def verify_report_numbers(path) -> dict:
+    """总结行缺数/多余数 → {fmt: (missing, extra)}（`?`→None）。
+    供导入标签与人工检验显示"缺48/多97"；无总结行返回 {}。"""
+    return {f: (mi, ex) for f, (v, mi, ex, r) in _summary_entries(path).items()
+            if mi is not None or ex is not None}
+
+
+def verify_report_pending(path) -> dict:
+    """解析报告中的 `[--]` 行 → {product_fmt: reason}（未判定原因，供展示/导入标注）。
+
+    - `[--]  pdf 已覆盖（已由 docx 校验）` → {"pdf": "covered:docx"}
+    - `[--]  {disp} no baseline` → {fmt: "no baseline"}（disp 形如 epub 或 pdf→docx，取 → 左侧）
+    - `[--]  {disp} gen not found: ...` → {fmt: "gen not found"}
+    - 其他 `[--]` → {fmt: 原文}（fmt 取不到时键为 ""，调用方可忽略）
+
+    有上游总结行（`[id] N format: …`）时优先用它：
+    `NO_BASELINE`→"no baseline"、`NOGEN`→"gen not found"、
+    `ERROR`等→小写原文、`COVERED`（无 ref）→"covered"。
+    """
+    import re as _re
+    summ = _summary_entries(path)
+    if summ:
+        return {f: r for f, (v, mi, ex, r) in summ.items() if r}
+    try:
+        text = Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return {}
+    out = {}
+    for raw in text.splitlines():
+        s = raw.strip()
+        if not s.startswith("[--]"):
+            continue
+        rest = s[len("[--]"):].strip()
+        m = _re.search(r"已由\s*(\S+?)\s*校验", rest)
+        if m:
+            # 「pdf 已覆盖（已由 docx 校验）」：fmt 在行首
+            head = _re.split(r"\s+", rest, maxsplit=1)[0]
+            fmt = head.split("→")[0].strip()
+            out[fmt] = f"covered:{m.group(1)}"
+            continue
+        low = rest.lower()
+        if "no baseline" in low:
+            head = _re.split(r"\s+", rest, maxsplit=1)[0]
+            out[head.split("→")[0].strip()] = "no baseline"
+        elif "gen not found" in low:
+            head = _re.split(r"\s+", rest, maxsplit=1)[0]
+            out[head.split("→")[0].strip()] = "gen not found"
+        else:
+            head = _re.split(r"\s+", rest, maxsplit=1)[0]
+            out[head.split("→")[0].strip()] = rest
+    return out
+
+
+def apply_verify_coverage(fmt_status: dict, pending: dict) -> dict:
+    """docx通过即pdf通过：某格式被记为「已由 src 校验覆盖」，
+    且 src 逐格式通过 → 该格式视为通过（返回新 dict，不改入参）。
+
+    覆盖标记两处来源：老报告 `[--] pdf 已覆盖（已由 docx 校验）`（pending
+    值为 "covered:docx"）；新总结行无 ref 的 `COVERED`（pending 值为 "covered"，
+    此时仅 pdf←docx 套用启发式：docx 通过即 pdf 通过）。
+    src 未过/未验时不套用（该格式退回整体判定或未判定）。
+    """
+    out = dict(fmt_status or {})
+    for fmt, reason in (pending or {}).items():
+        if not fmt or fmt in out:
+            continue
+        if isinstance(reason, str) and reason.startswith("covered:"):
+            src = reason.split(":", 1)[1]
+            if src and out.get(src) is True:
+                out[fmt] = True
+        elif reason == "covered" and fmt == "pdf" and out.get("docx") is True:
+            out[fmt] = True
+    return out
+
+
 def verify_report_pass(path) -> bool | None:
-    """判读上游 `{stem}_verify_report.txt`：有 `[FAIL]`→False；
-    ≥1 个 `[OK]` 且无 `[FAIL]`→True；否则 None（未判定，`[--]`/空报告，需人工看）。"""
+    """判读上游报告：有 `[FAIL]`→False；
+    ≥1 个 `[OK]` 且无 `[FAIL]`→True；否则 None（未判定，需人工看）。
+
+    有上游总结行（`[id] N format: …`）时优先用它：
+    含 FAIL verdict→False；≥1 OK（含消解为通过的被覆盖项）→True；否则 None。
+    """
+    summ = _summary_entries(path)
+    if summ:
+        vals = [v for v, mi, ex, r in summ.values()]
+        if any(v is False for v in vals):
+            return False
+        return True if any(v is True for v in vals) else None
     try:
         text = Path(path).read_text(encoding="utf-8", errors="replace")
     except OSError:
@@ -536,12 +759,17 @@ def verify_report_pass(path) -> bool | None:
 def verify_report_formats(path) -> dict:
     """解析报告的**逐格式**结果 → {product_fmt: True/False}（True=通过）。
 
+    有上游总结行（`[id] N format: …`）时优先用它（被覆盖项按 ref 消解）；
+    无则回退 trial 解析：
     - CLI `report.txt`：标记行 `[OK]/[FAIL] (…)` 后跟 `{disp} 【源】…`，
       `disp` 形如 `pdf→docx`（取 `→` 左侧为产物格式）或 `epub`/`docx`。
     - 独立窗 `{stem}_verify_report.txt`：标记行内直接含 trial 格式
       `[OK] docx …` / `[FAIL] pdf→docx …`。
     只收录明确 `[OK]/[FAIL]` 的格式；`[--]`（覆盖/无基线）不入表。
     """
+    summ = _summary_entries(path)
+    if summ:
+        return {f: v for f, (v, mi, ex, r) in summ.items() if v is not None}
     try:
         text = Path(path).read_text(encoding="utf-8", errors="replace")
     except OSError:

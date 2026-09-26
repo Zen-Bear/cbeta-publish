@@ -1,0 +1,37 @@
+{
+  "id": "custom_kongbaicongshu_20260915",
+  "slug": "author_xufadashizhuzuo_20260925",
+  "name": "续法大师著作",
+  "category": "author",
+  "tags": [
+    "custom"
+  ],
+  "work_ids": [
+    "X0311",
+    "X0413",
+    "X0431",
+    "X0445",
+    "X0447",
+    "X0559",
+    "X0560",
+    "X0671",
+    "X0673",
+    "X0768",
+    "X1024",
+    "X1025",
+    "X1026",
+    "X1027",
+    "X1028",
+    "X1530",
+    "X1656"
+  ],
+  "works": [],
+  "source": "official",
+  "work_sources": {},
+  "work_groups": {},
+  "xml_options": {},
+  "created_at": "2026-09-15T22:28:47.799501Z",
+  "updated_at": "2026-09-25T22:31:15.662796Z",
+  "last_publish_at": "2026-09-25T22:45:09.494727Z",
+  "last_publish_dir": "E:\\dev\\cbeta\\publish\\collections_books\\续法大师著作"
+}

@@ -5,7 +5,8 @@ import unittest
 from pathlib import Path
 
 from cbeta_publish.catalog.bulei_parser import parse_bulei
-from cbeta_publish.catalog.tripitaka_service import pitaka_of, group_by_pitaka, PITAKA_ORDER
+from cbeta_publish.catalog.tripitaka_service import (
+    pitaka_of, group_by_pitaka, PITAKA_ORDER, pitaka_of_work)
 
 MULU = Path(__file__).resolve().parents[1] / "mulu" / "bulei.txt"
 
@@ -35,6 +36,26 @@ class TripitakaCoverageTest(unittest.TestCase):
         self.assertEqual(groups.get("律"), 1)
         self.assertEqual(groups.get("論"), 4)
         self.assertEqual(groups.get("藏外"), 8)
+
+
+class PitakaOfWorkTest(unittest.TestCase):
+    """经号查三藏（说明页统计用）：T0001–1420經/T1421–1504律/
+    T1505–1692論；T1693＋及非 T 经号一律其他。"""
+
+    def test_boundaries(self):
+        cases = {"T0001": "經", "T1420": "經", "T1421": "律", "T1504": "律",
+                 "T1505": "論", "T1692": "論", "T1693": "其他",
+                 "T0366": "經", "T2760": "其他", "T2920": "其他"}
+        for wid, want in cases.items():
+            self.assertEqual(pitaka_of_work(wid), want, wid)
+
+    def test_non_t_and_malformed(self):
+        for wid in ("X0420", "JA111", "B0024", "N01", "ZW01", "ZZ9999",
+                    "", None, "ABC", "T"):
+            self.assertEqual(pitaka_of_work(wid), "其他", repr(wid))
+        # 后缀字母忽略、前导零与小写兼容
+        self.assertEqual(pitaka_of_work("T0099a"), "經")
+        self.assertEqual(pitaka_of_work("t0366"), "經")
 
 
 if __name__ == "__main__":

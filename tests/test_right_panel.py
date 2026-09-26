@@ -489,6 +489,174 @@ class RightPanelTest(unittest.TestCase):
             _ensure_app().processEvents()
         self.assertEqual(win._author_sort_mode(), "朝代排序")
 
+    def test_author_canonical_name(self):
+        from cbeta_publish.gui.main_window import author_canonical_name as canon
+        self.assertEqual(canon("釋窺基"), "窺基")
+        self.assertEqual(canon("沙門釋玄奘"), "玄奘")
+        self.assertEqual(canon("比丘尼釋勝鬘"), "勝鬘")
+        self.assertEqual(canon("比丘道安"), "道安")
+        self.assertEqual(canon("窺基"), "窺基")
+        self.assertEqual(canon("王日休"), "王日休")
+        self.assertEqual(canon(""), "")
+
+    def test_merge_author_nodes(self):
+        from cbeta_publish.gui.main_window import merge_author_nodes as merge
+        k1 = {"title": "窺基", "key": "k1",
+              "children": [{"key": "T0001"}, {"key": "T0002"}]}
+        k2 = {"title": "釋窺基", "key": "k2",
+              "children": [{"key": "T0003"}]}
+        other = {"title": "王日休", "key": "w",
+                 "children": [{"key": "T0004"}]}
+        pairs = merge([k1, k2, other])
+        by_title = {m["title"]: (h, m) for h, m in pairs}
+        self.assertEqual(set(by_title), {"窺基", "王日休"})
+        home, merged = by_title["窺基"]
+        self.assertIs(home, k1)   # 部数多者在原位
+        self.assertEqual([c["key"] for c in merged["children"]],
+                         ["T0001", "T0002", "T0003"])
+        self.assertEqual(merged["_merged_from"], ["釋窺基"])
+        # 单例原样（同一对象），源数据不动，反复调用不重复计数
+        self.assertIs(by_title["王日休"][1], other)
+        self.assertEqual([c["key"] for c in k1["children"]], ["T0001", "T0002"])
+        self.assertEqual([c["key"] for c in k2["children"]], ["T0003"])
+        again = merge([k1, k2, other])
+        self.assertEqual([c["key"] for c in again[0][1]["children"]],
+                         ["T0001", "T0002", "T0003"])
+
+    def _fake_strokes(self):
+        def au(title, keys):
+            return {"title": title, "key": title,
+                    "children": [{"key": k, "title": f"{k} 經"} for k in keys]}
+        return [
+            {"title": "16畫(stroke)", "children": [
+                {"title": "窺", "children": [
+                    au("窺基", ["T0001", "T0002"])]},
+            ]},
+            {"title": "20畫(stroke)", "children": [
+                {"title": "釋", "children": [
+                    au("釋窺基", ["T0003"])]},
+            ]},
+        ]
+
+    def _author_texts(self, win):
+        out = []
+
+        def walk(it, depth=0):
+            out.append("  " * depth + it.text(0))
+            for i in range(it.childCount()):
+                walk(it.child(i), depth + 1)
+        for i in range(win.tree.topLevelItemCount()):
+            walk(win.tree.topLevelItem(i))
+        return out
+
+    def test_author_merge_pinyin_view(self):
+        # 回归：K 下「窺基（26部）」「釋窺基（1部）」合并为一条（27 部）
+        win = self.win
+        old_strokes, old_cache = win.creator.strokes, win._authors_pinyin_sorted
+        win.creator.strokes = self._fake_strokes()
+        win._authors_pinyin_sorted = None
+        try:
+            self._nav("作者")
+            win.author_radios["拼音排序"].setChecked(True)
+            win._refresh_author_tree()
+            texts = self._author_texts(win)
+            joined = "\n".join(texts)
+            self.assertIn("窺基 (3部)", joined, joined)
+            self.assertNotIn("釋窺基", joined, joined)
+        finally:
+            win.creator.strokes = old_strokes
+            win._authors_pinyin_sorted = old_cache
+            win.author_radios["拼音排序"].setChecked(True)
+            self._nav("作者")
+
+    def test_author_merge_stroke_view(self):
+        # 笔画视图：归并成员只在部数多者原位显示，不重复
+        win = self.win
+        old_strokes, old_cache = win.creator.strokes, win._authors_pinyin_sorted
+        win.creator.strokes = self._fake_strokes()
+        win._authors_pinyin_sorted = None
+        try:
+            self._nav("作者")
+            win.author_radios["笔画排序"].setChecked(True)
+            win._refresh_author_tree()
+            texts = self._author_texts(win)
+            joined = "\n".join(texts)
+            self.assertIn("窺基 (3部)", joined, joined)
+            self.assertNotIn("釋窺基", joined, joined)
+        finally:
+            win.creator.strokes = old_strokes
+            win._authors_pinyin_sorted = old_cache
+            win.author_radios["拼音排序"].setChecked(True)
+            self._nav("作者")
+
+    def test_author_search_finds_merged_works(self):
+        # 回归：作者视图搜“窥基”经作者 id 路径返回全部作品（含归并的 D8888），
+        # 不再被首命中节点的 X0352 独占
+        win = self.win
+        self._nav("作者")
+        win.author_radios["拼音排序"].setChecked(True)
+        win.search.setText("窥基")
+        for _ in range(10):
+            _ensure_app().processEvents()
+        try:
+            res = list(win._search_results)
+            self.assertGreaterEqual(len(res), 27, res[:5])
+            for k in ("T1695", "D8888"):
+                self.assertIn(k, res, res[:10])
+        finally:
+            win.search.clear()
+            for _ in range(4):
+                _ensure_app().processEvents()
+
+    def test_search_results_sorted_by_work_id(self):
+        # 搜索结果各视图统一按经号自然序（部类/刊本/作者一致，不随树序漂移）
+        from cbeta_publish.gui.main_window import work_sort_key
+        win = self.win
+        try:
+            for mode in ("部类", "刊本", "作者"):
+                self._nav(mode)
+                win.search.setText("窥基")
+                for _ in range(10):
+                    _ensure_app().processEvents()
+                res = list(win._search_results)
+                self.assertTrue(res, mode)
+                self.assertEqual(res, sorted(res, key=work_sort_key), mode)
+        finally:
+            win.search.clear()
+            for _ in range(4):
+                _ensure_app().processEvents()
+
+    def test_author_lists_works(self):
+        # 作者条目下挂著作叶（标题取源数据叶标题；展开/双击/拖拽共用）
+        win = self.win
+        old_strokes, old_cache = win.creator.strokes, win._authors_pinyin_sorted
+        win.creator.strokes = self._fake_strokes()
+        win._authors_pinyin_sorted = None
+        try:
+            self._nav("作者")
+            win.author_radios["拼音排序"].setChecked(True)
+            win._refresh_author_tree()
+            found = []
+
+            def walk(it):
+                if it.text(0).startswith("窺基 "):
+                    found.append(it)
+                for i in range(it.childCount()):
+                    walk(it.child(i))
+            for i in range(win.tree.topLevelItemCount()):
+                walk(win.tree.topLevelItem(i))
+            self.assertEqual(len(found), 1, [it.text(0) for it in found])
+            kids = [found[0].child(i).text(0)
+                    for i in range(found[0].childCount())]
+            self.assertEqual(len(kids), 3, kids)
+            self.assertTrue(any("T0001" in k for k in kids), kids)
+            self.assertTrue(any("T0003" in k for k in kids), kids)
+        finally:
+            win.creator.strokes = old_strokes
+            win._authors_pinyin_sorted = old_cache
+            win.author_radios["拼音排序"].setChecked(True)
+            self._nav("作者")
+
     def test_coll_tree_lists_work_titles(self):
         import re
         win = self.win

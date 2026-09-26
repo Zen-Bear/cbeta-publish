@@ -1,50 +1,69 @@
 {
-  "book_dir": "E:/dev/cbeta/publish/cbeta_xml",
-  "official_ebooks_dir": "E:/dev/cbeta/publish/cbeta_ebooks",
-  "mulu_dir": "E:/dev/cbeta/publish/mulu",
-  "collections_dir": "E:/dev/cbeta/publish/collections",
+  "official_ebooks_dir": "E:\\dev\\cbeta\\publish\\cbeta_ebooks",
+  "verify_dir": "E:\\dev\\cbeta\\publish\\cbeta_verify",
+  "mulu_dir": "E:\\dev\\cbeta\\publish\\mulu",
+  "collections_dir": "E:\\dev\\cbeta\\publish\\collections",
   "theme": {
     "mode": "system",
     "accent": "#8B4513"
   },
   "language": "zh-Hant",
   "update_interval": "manual",
-  "local_xml_root": "E:/CBETA/CBReader2X/Bookcase/CBETA/XML",
-  "output_dir": "my_books",
+  "output_dir": "E:\\dev\\cbeta\\publish\\collections_books",
   "ui": {
     "tree_expand": {
       "mode": "none"
     },
-    "app_font": "Microsoft YaHei",
-    "app_font_size": 9,
-    "supplement_ttf": "E:/dev/cbeta/xml2pdf/cbeta/CBETA 補充字型/CBETASupplement.ttf",
-    "last_collection": "E:\\dev\\cbeta\\publish\\collections\\author\\守序大师全集.json"
+    "layout": "two",
+    "app_font": "SimSun",
+    "app_font_size": 10,
+    "supplement_ttf": "E:\\dev\\cbeta\\xml2pdf\\cbeta\\CBETA 補充字型\\CBETASupplement.ttf",
+    "last_collection": "E:\\dev\\cbeta\\publish\\collections\\custom\\起信论疏.json"
   },
-  "default_source": "official",
+  "default_source": "xml",
+  "default_formats": {
+    "merge": [
+      "pdf",
+      "epub"
+    ],
+    "official": [
+      "pdf",
+      "epub",
+      "html",
+      "docx",
+      "txt"
+    ],
+    "xml": [
+      "pdf",
+      "docx"
+    ]
+  },
   "pdf": {
-    "split_pages": 5000
+    "split_pages": 0
   },
   "epub": {
-    "split_items": 500
+    "split_items": 0
   },
   "merge": {
-    "by_volume": false
+    "mode": "ask",
+    "depth": 2,
+    "by_volume": false,
+    "ask_last": {
+      "mode": "none",
+      "depth": 1
+    },
+    "name_template": "{coll}（{count}部）"
   },
   "xml2pdf": {
-    "path": "E:/dev/cbeta/xml2pdf",
-    "page": "a4",
-    "font_lang": "zh-Hant",
-    "engine": "docx2pdf",
-    "vertical": false
+    "path": "E:\\dev\\cbeta\\xml2pdf",
+    "preset": "A5 校验带框",
+    "cbeta_ebook": "E:\\dev\\cbeta\\publish\\cbeta_xml",
+    "verify_build": false
   },
   "catalog": {
     "filters": {
       "tripitaka": {
-        "hidden": [
-          "11 律部類 T22-24,40a,45,85, X38-44,59-60,74 etc.",
-          "20 敦煌寫本部類 T85",
-          "22 南傳大藏經部類 N01-70"
-        ]
+        "hidden": []
       },
       "dynasty": {
         "hidden": []
@@ -55,23 +74,24 @@
     }
   },
   "cover": {
-    "organizer": "",
+    "organizer": "版本：CBETA 2026r2",
     "imprint": "CBETA 電子佛典自選叢書",
-    "mode": "print",
+    "mode": "reading",
     "enabled": true,
     "intro": {
-      "enabled": true,
+      "enabled": false,
       "title": "说明",
-      "list": true
+      "list": true,
+      "note": "依 CBETA XML 自制"
     },
     "images": {
       "buddha": {
-        "file": "assets/images/buddha.jpg",
-        "enabled": true
+        "file": "E:\\dev\\cbeta\\publish\\assets\\images\\B01.jpg",
+        "enabled": false
       },
       "weituo": {
-        "file": "assets/images/weituo.jpg",
-        "enabled": true
+        "file": "E:\\dev\\cbeta\\publish\\assets\\images\\B02.jpg",
+        "enabled": false
       }
     },
     "sizes": {
@@ -123,7 +143,7 @@
         "ratio": 1.0
       },
       "title": {
-        "font": "E:/软件/6、字体/1、大字符集/大字符集 - 纳米老字（汇文明朝+遍玨体）/NanoOldSongA-Regular.ttf",
+        "font": "E:\\软件\\6、字体\\3、汇文系列、京华老宋体\\標題明朝體\\朝華標題B.ttf",
         "color": [
           0,
           0,
@@ -148,15 +168,6 @@
           51
         ],
         "ratio": 1.0
-      },
-      "series": {
-        "font": "C:\\Windows\\Fonts\\simfang.ttf",
-        "color": [
-          51,
-          51,
-          51
-        ],
-        "ratio": 0.9
       },
       "toc_title": {
         "font": "C:\\Windows\\Fonts\\msyhbd.ttc",
@@ -191,16 +202,58 @@
           245,
           230
         ]
+      },
+      "intro_summary": {
+        "font": "C:\\Windows\\Fonts\\simfang.ttf"
+      },
+      "editnote_title": {
+        "font": "C:\\Windows\\Fonts\\msyhbd.ttc"
+      },
+      "editnote_body": {
+        "font": "C:\\Windows\\Fonts\\simsun.ttc"
+      },
+      "intro_background": {
+        "color": [
+          250,
+          245,
+          230
+        ]
+      },
+      "toc_background": {
+        "color": [
+          250,
+          245,
+          230
+        ]
       }
     },
     "positions": {
       "cbeta_left_mm": 18,
       "cbeta_top_mm": 12,
-      "title_y_ratio": 0.3,
+      "title_y_ratio": 0.25,
       "organizer_y_ratio": 0.84,
       "date_y_ratio": 0.89,
       "toc_y_ratio": 0.15,
-      "toc_item_y_ratio": 0.25
+      "toc_item_y_ratio": 0.25,
+      "group_y_ratio": 0.3
+    },
+    "edit_note": {
+      "file": "E:/dev/cbeta/publish/collections_books/《大乘起信论》解题.txt",
+      "enabled": true
+    },
+    "date_text": "制作日期：{date}",
+    "bulei": {
+      "enabled": false,
+      "depth": 0,
+      "layout": "lines",
+      "sep": "·",
+      "show_num": false,
+      "titles": "none"
     }
+  },
+  "xml_to_ebooks_dir": "E:\\dev\\cbeta\\publish\\cbeta_xml_ebooks",
+  "official_library": {
+    "root": "E:\\CBETA\\2026r2",
+    "overrides": {}
   }
 }

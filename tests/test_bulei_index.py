@@ -70,6 +70,22 @@ class BuleiIndexTest(unittest.TestCase):
         self.assertFalse(any("卷" in r for r in rows))
         self.assertFalse(any("【" in r for r in rows))
 
+    def test_summarize_pitaka_by_work_id(self):
+        # 三藏按经号查（与部类归属无关）：06 寶積部類下 6 部 → 經 2、論 1、其他 3
+        def leaf(t):
+            return BuleiNode(level=3, title=t, raw=t)
+        roots = [BuleiNode(level=1, title="06 寶積部類", raw="06 寶積部類",
+                           children=[leaf("T0366 x"), leaf("T0367 x"),
+                                     leaf("T1755 x"), leaf("T1524 x"),
+                                     leaf("T1819 x"), leaf("T2760 x")])]
+        s = summarize(["T0366", "T0367", "T1755", "T1524", "T1819", "T2760"],
+                      roots)
+        self.assertEqual(s["summary"][0], "本丛书共收录 6 部")
+        self.assertEqual(s["summary"][1], "三藏分布：經 2、論 1、其他 3")
+        # 部類分布行已删除（与下方详细清单重复）
+        self.assertFalse(any(r.startswith("部類分布") for r in s["summary"]),
+                         s["summary"])
+
 
 if __name__ == "__main__":
     unittest.main()

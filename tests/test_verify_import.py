@@ -153,8 +153,8 @@ class VerifySendImportTest(unittest.TestCase):
         self.assertEqual(calls[0][1], ["pdf"])              # 随右栏勾选
         self.assertEqual(calls[0][2], str(Path(win.config["verify_dir"]) / "v"))
         base = Path(win.config["xml_to_ebooks_dir"])
-        self.assertEqual((base / "pdf" / "T0001.pdf").read_bytes(), b"PDF")  # 自动导入
-        self.assertTrue((base / "pdf" / "T0002.pdf").exists())
+        self.assertEqual((base / "pdf" / "T0001 大般若經.pdf").read_bytes(), b"PDF")  # 自动导入
+        self.assertTrue((base / "pdf" / "T0002 大般若經.pdf").exists())
 
     def test_send_reports_failure(self):
         # 报告含 [FAIL] → 不入库
@@ -165,15 +165,20 @@ class VerifySendImportTest(unittest.TestCase):
         base = Path(win.config["xml_to_ebooks_dir"])
         for w in ("T0001", "T0002"):
             (base / "pdf" / f"{w}.pdf").unlink(missing_ok=True)
+            (base / "pdf" / f"{w} 大般若經.pdf").unlink(missing_ok=True)
         try:
             win._send_coll_to_verify()
         finally:
             restore_v()
             restore()
         self.assertFalse((base / "pdf" / "T0001.pdf").exists())
+        self.assertFalse((base / "pdf" / "T0001 大般若經.pdf").exists())
+        # 未放行且托管目录：暂存 pdf 已删除；review 仍记 fail
+        vdir = Path(win.config["verify_dir"]) / "v"
+        self.assertFalse((vdir / "T0001 大般若經.pdf").exists())
 
     def test_make_button_dispatches_to_verify_when_configured(self):
-        # 设置「自制书籍=校验」→ 自制/重制 都走校验流程（regen_all 透传）
+        # 设置「制作书籍=校验」→ 自制/重制 都走校验流程（regen_all 透传）
         win = self.win
         win.config.setdefault("xml2pdf", {})["verify_build"] = True
         called = []
@@ -203,6 +208,29 @@ class VerifySendImportTest(unittest.TestCase):
             restore()
         self.assertEqual([c[0] for c in calls], ["T0002"])
 
+    def test_open_window_passes_current_coll(self):
+        # 「运行 xml2pdf 制作书籍」：把当前丛书 ids/out/preset 带给独立窗
+        import subprocess
+        win = self.win
+        for i in range(win.coll_combo.count()):
+            if str(win.coll_combo.itemData(i)).endswith("验测.json"):
+                win.coll_combo.setCurrentIndex(i)
+                break
+        _ensure_app().processEvents()
+        calls = []
+        real = subprocess.Popen
+        subprocess.Popen = lambda argv, **k: calls.append((list(argv), k)) or None
+        try:
+            win._open_xml2pdf_window()
+        finally:
+            subprocess.Popen = real
+        self.assertEqual(len(calls), 1)
+        argv, kw = calls[0]
+        self.assertEqual(argv[1:3], ["-m", "pycbeta.gui"])
+        ids = Path(argv[argv.index("--ids-file") + 1])
+        self.assertEqual(ids.read_text(encoding="utf-8").split(), ["T0001", "T0002"])
+        self.assertEqual(Path(argv[argv.index("--out") + 1]).name, "v")
+
     def test_send_blocks_on_tmp_preset(self):
         win = self.win
         boxes, restore = self._patch_common()
@@ -216,6 +244,404 @@ class VerifySendImportTest(unittest.TestCase):
             restore()
         self.assertEqual(calls, [])
         self.assertTrue(any("临时预设" in str(a) for a in boxes))
+
+    def test_import_docx_pass_covers_pdf(self):
+        # docx通过即pdf通过：报告 [--] pdf已覆盖 + [OK]docx，即使另有格式[FAIL]
+        #（整体False），pdf 仍随 docx 入库
+        from cbeta_publish.books import xml2pdf_bridge as b
+        win = self.win
+        vdir = b.verify_coll_dir(win.config, "v")
+        vdir.mkdir(parents=True, exist_ok=True)
+        (vdir / "T0001 大般若經.pdf").write_bytes(b"PDF")
+        (vdir / "T0001 大般若經.docx").write_bytes(b"DOCX")
+        vd = vdir / "T0001 大般若經（验证）"
+        vd.mkdir(parents=True, exist_ok=True)
+        (vd / "report.txt").write_text(
+            "=== T01n0001.xml\n"
+            "  [--]  pdf 已覆盖（已由 docx 校验）\n"
+            "  [OK] (缺0/多0 ≤阈值10)\n  docx 【源】a\n  docx 【新】b\n"
+            "  [FAIL] (缺3/多1 >阈值10)\n  epub 【源】c\n  epub 【新】d\n",
+            encoding="utf-8")
+        base = Path(win.config["xml_to_ebooks_dir"])
+        res = self._do_import(win, ["T0001"], vdir, base)
+        self.assertEqual((base / "pdf" / "T0001 大般若經.pdf").read_bytes(), b"PDF")
+        self.assertEqual((base / "docx" / "T0001 大般若經.docx").read_bytes(), b"DOCX")
+        self.assertEqual(len(res["ok"]), 1)
+        self.assertIn("pdf", res["ok"][0])
+        self.assertIn("docx", res["ok"][0])
+        files = dict(res["ok_files"]["T0001"])
+        self.assertTrue(Path(files["pdf"]).is_file())
+        self.assertTrue(Path(files["docx"]).is_file())
+
+    def test_import_no_baseline_undet_reason(self):
+        # 无基线：[--] epub no baseline → 未判定并标注原因，不入库
+        from cbeta_publish.books import xml2pdf_bridge as b
+        win = self.win
+        vdir = b.verify_coll_dir(win.config, "v")
+        vdir.mkdir(parents=True, exist_ok=True)
+        (vdir / "T0001 大般若經.epub").write_bytes(b"EPUB")
+        vd = vdir / "T0001 大般若經（验证）"
+        vd.mkdir(parents=True, exist_ok=True)
+        (vd / "report.txt").write_text(
+            "=== T01n0001.xml\n  [--]  epub no baseline\n  [--]  docx no baseline\n",
+            encoding="utf-8")
+        base = Path(win.config["xml_to_ebooks_dir"])
+        res = self._do_import(win, ["T0001"], vdir, base)
+        self.assertEqual(res["ok"], [])
+        self.assertEqual(res["undet"], ["T0001 未判定（epub无基线）"])
+        self.assertFalse((base / "epub" / "T0001 大般若經.epub").exists())
+
+    def test_import_summary_fail_label_with_numbers(self):
+        # 新总结行：部分通过进 ok（"未入 epub 缺48/多97"）；全不过进 fail；
+        # review 清单含报告路径与原因；通过项 move 保留带书名
+        from cbeta_publish.books import xml2pdf_bridge as b
+        win = self.win
+        vdir = b.verify_coll_dir(win.config, "v")
+        vdir.mkdir(parents=True, exist_ok=True)
+        (vdir / "T0001 大般若經.docx").write_bytes(b"DOCX")
+        (vdir / "T0001 大般若經.epub").write_bytes(b"EPUB")
+        vd = vdir / "T0001 大般若經（验证）"
+        vd.mkdir(parents=True, exist_ok=True)
+        rp = vd / "report.txt"
+        rp.write_text(
+            "[T01n0001] 2 format: 1[docx=OK(0/0)], 2[epub=FAIL(48/97)]\n"
+            "=== T01n0001.xml\n",
+            encoding="utf-8")
+        (vdir / "T0002 X.docx").write_bytes(b"D2")
+        (vdir / "T0002 X.epub").write_bytes(b"E2")
+        vd2 = vdir / "T0002 X（验证）"
+        vd2.mkdir(parents=True, exist_ok=True)
+        rp2 = vd2 / "report.txt"
+        rp2.write_text(
+            "[T02] 2 format: 1[docx=FAIL(1/2)], 2[epub=FAIL(48/97)]\n"
+            "=== T02.xml\n",
+            encoding="utf-8")
+        base = Path(win.config["xml_to_ebooks_dir"])
+        res = self._do_import(win, ["T0001", "T0002"], vdir, base)
+        self.assertEqual((base / "docx" / "T0001 大般若經.docx").read_bytes(), b"DOCX")
+        self.assertFalse((vdir / "T0001 大般若經.docx").exists())  # move 而非 copy
+        self.assertFalse((base / "epub" / "T0001 大般若經.epub").exists())
+        self.assertEqual(len(res["ok"]), 1)
+        self.assertIn("epub 缺48/多97", res["ok"][0])
+        self.assertEqual(res["fail"], ["T0002 校验未通过（epub 缺48/多97/docx 缺1/多2）"])
+        by_work = {}
+        for w, fmt, src, report, reason, mi, ex in res["review"]:
+            by_work.setdefault(w, []).append((fmt, reason, mi, ex))
+            self.assertTrue(Path(src).is_file())
+        self.assertEqual(by_work["T0001"],
+                         [("epub", "校验未通过（缺48/多97）", 48, 97)])
+        self.assertEqual(by_work["T0002"],
+                         [("epub", "校验未通过（缺48/多97）", 48, 97),
+                          ("docx", "校验未通过（缺1/多2）", 1, 2)])
+        self.assertEqual(res["review"][0][3], str(rp))
+
+    def test_import_no_baseline_review_entry(self):
+        # 未判定项同样进 review（无基线也可人工放行）
+        from cbeta_publish.books import xml2pdf_bridge as b
+        win = self.win
+        vdir = b.verify_coll_dir(win.config, "v")
+        vdir.mkdir(parents=True, exist_ok=True)
+        (vdir / "T0001 大般若經.epub").write_bytes(b"EPUB")
+        vd = vdir / "T0001 大般若經（验证）"
+        vd.mkdir(parents=True, exist_ok=True)
+        (vd / "report.txt").write_text(
+            "=== T01n0001.xml\n  [--]  epub no baseline\n", encoding="utf-8")
+        base = Path(win.config["xml_to_ebooks_dir"])
+        res = self._do_import(win, ["T0001"], vdir, base)
+        self.assertEqual(len(res["review"]), 1)
+        self.assertEqual(res["review"][0][:2], ("T0001", "epub"))
+        self.assertEqual(res["review"][0][4], "无基线")
+
+    def test_review_dialog_approves_checked(self):
+        # 检验对话框：勾选→确定放行入库；取消→不动
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QDialog, QListWidget
+        win = self.win
+        base = Path(win.config["xml_to_ebooks_dir"])
+        base.mkdir(parents=True, exist_ok=True)
+        src = base / "tmp_src.epub"
+        src.write_bytes(b"EPUB")
+        rp = base / "r.txt"
+        rp.write_text("=== x\n  [--]  epub no baseline\n", encoding="utf-8")
+        review = [("T0001", "epub", str(src), str(rp), "无基线", None, None)]
+        real = QDialog.exec
+
+        def fake_exec(self):
+            for lw in self.findChildren(QListWidget):
+                for i in range(lw.count()):
+                    lw.item(i).setCheckState(Qt.Checked)
+            return QDialog.Accepted
+
+        QDialog.exec = fake_exec
+        try:
+            passed = win._review_failed_dialog(review, base)
+        finally:
+            QDialog.exec = real
+        self.assertEqual(passed, [("T0001", "epub", str(base / "epub" / "tmp_src.epub"))])
+        self.assertEqual((base / "epub" / "tmp_src.epub").read_bytes(), b"EPUB")
+        self.assertFalse(src.exists())  # move 而非 copy
+
+        QDialog.exec = lambda self: QDialog.Rejected
+        try:
+            self.assertEqual(win._review_failed_dialog(review, base), [])
+        finally:
+            QDialog.exec = real
+
+    def test_review_dialog_deletes_unchecked_when_allowed(self):
+        # allow_delete=True：未勾选的从校验目录删除；False：保留
+        from PySide6.QtWidgets import QDialog
+        win = self.win
+        base = Path(win.config["xml_to_ebooks_dir"])
+        base.mkdir(parents=True, exist_ok=True)
+        for name in ("keep_src.epub", "drop_src.epub"):
+            (base / name).write_bytes(b"EPUB")
+        rp = base / "r.txt"
+        rp.write_text("=== x\n  [--]  epub no baseline\n", encoding="utf-8")
+        review = [("T1", "epub", str(base / "keep_src.epub"), str(rp), "无基线", None, None),
+                  ("T2", "epub", str(base / "drop_src.epub"), str(rp), "无基线", None, None)]
+        real = QDialog.exec
+
+        def fake_exec(self):
+            from PySide6.QtWidgets import QListWidget
+            from PySide6.QtCore import Qt
+            for lw in self.findChildren(QListWidget):
+                lw.item(0).setCheckState(Qt.Checked)  # 只勾第一项
+            return QDialog.Accepted
+
+        QDialog.exec = fake_exec
+        try:
+            passed = win._review_failed_dialog(review, base, allow_delete=True)
+        finally:
+            QDialog.exec = real
+        self.assertEqual(len(passed), 1)
+        self.assertFalse((base / "drop_src.epub").exists())  # 未勾选已删除
+        # 外部目录不删
+        (base / "drop2.epub").write_bytes(b"EPUB")
+        review2 = [("T3", "epub", str(base / "drop2.epub"), str(rp), "无基线", None, None)]
+
+        def fake_exec_none(self):
+            return QDialog.Accepted  # 全不勾
+
+        QDialog.exec = fake_exec_none
+        try:
+            self.assertEqual(win._review_failed_dialog(review2, base, allow_delete=False), [])
+        finally:
+            QDialog.exec = real
+        self.assertTrue((base / "drop2.epub").exists())
+
+    def test_maybe_review_prompts_and_marks_manual(self):
+        # 导入后询问：Yes→放行并标注人工；同 session 重跑不再问
+        from PySide6.QtWidgets import QMessageBox
+        win = self.win
+        base = Path(win.config["xml_to_ebooks_dir"])
+        vdir = Path(win.config["verify_dir"])
+        imp = {"ok": [], "fail": ["T0001 校验未通过（epub）"], "undet": [],
+               "skip": [], "ok_files": {},
+               "review": [("T0001", "epub", "S", "R", "校验未通过", None, None)]}
+        boxes, restore = self._patch_common()
+        real_dlg = win._review_failed_dialog
+        win._wrap_box = lambda *a, **k: boxes.append(a) or QMessageBox.Yes
+        win._review_failed_dialog = lambda review, b, allow_delete=False: [("T0001", "epub",
+                                                        str(base / "epub" / "T0001.epub"))]
+        try:
+            win._maybe_review_failed(imp, vdir, base)
+        finally:
+            win._review_failed_dialog = real_dlg
+            restore()
+        self.assertTrue(boxes)  # 问过
+        self.assertIn("T0001（epub）", imp["ok"])
+        self.assertIn("T0001", imp.get("manual", set()))
+        self.assertIn(("T0001", "epub"), win._manual_approved)
+        self.assertIn("人工放行", win.detail.text())
+        # 同 session 重跑：不再询问
+        boxes2 = []
+        win._wrap_box = lambda *a, **k: boxes2.append(a) or QMessageBox.Yes
+        try:
+            win._maybe_review_failed(imp, vdir, base)
+        finally:
+            restore()
+        self.assertEqual(boxes2, [])
+
+    def test_worker_summary_coverage_display(self):
+        # 总结行驱动 worker 进度：docx过+pdf被覆盖+epub没过 → 部分通过（docx/pdf 过）
+        from cbeta_publish.books.verify_worker import VerifyWorker
+        import cbeta_publish.books.xml2pdf_bridge as b
+        real = b.verify_work
+
+        def fake(work, fmts, out_dir, config, preset=None, stop=None):
+            out = Path(out_dir)
+            out.mkdir(parents=True, exist_ok=True)
+            rp = out / "r.txt"
+            rp.write_text("[T1] 3 format: 1[docx=OK(0/0)], 2[pdf=1], "
+                          "3[epub=FAIL(48/97)]\n", encoding="utf-8")
+            return rp
+
+        b.verify_work = fake
+        msgs = []
+        try:
+            w = VerifyWorker(["T0001"], ["pdf", "docx", "epub"],
+                             self.tmp / "o", self.win.config)
+            w.progress.connect(lambda done, label, level: msgs.append(label))
+            w.run()
+        finally:
+            b.verify_work = real
+        self.assertTrue(any("部分通过" in m and "docx/pdf" in m and "epub" in m
+                            for m in msgs), msgs)
+
+    def test_show_results_links_imported_files(self):
+        # 结果页：已入库条目每个格式文件可点开（file:// 链接到入库目标）
+        win = self.win
+        base = Path(win.config["xml_to_ebooks_dir"])
+        imp = {"ok": ["T0001（docx/pdf）"], "fail": [], "undet": [], "skip": [],
+               "ok_files": {"T0001": [("docx", str(base / "docx" / "T0001.docx")),
+                                      ("pdf", str(base / "pdf" / "T0001.pdf"))]}}
+        win._show_verify_results(imp, Path(win.config["verify_dir"]), base)
+        txt = win.detail.text()
+        self.assertIn("已入库 1 部", txt)
+        self.assertIn("T0001.docx", txt)
+        self.assertIn("T0001.pdf", txt)
+        self.assertIn("href=", txt)
+
+    def test_worker_base_exception_still_finishes(self):
+        # verify_work 抛 SystemExit 等 BaseException 也必须发出 finished_all，
+        # 否则主线程嵌套事件循环永不退出（界面挂死）
+        from cbeta_publish.books.verify_worker import VerifyWorker
+        import cbeta_publish.books.xml2pdf_bridge as b
+        real = b.verify_work
+
+        def boom(*a, **k):
+            raise SystemExit(2)
+
+        b.verify_work = boom
+        done = {}
+        try:
+            w = VerifyWorker(["T0001"], ["pdf"], self.tmp / "o", self.win.config)
+            w.finished_all.connect(
+                lambda ok, tot, fl: done.update(ok=ok, tot=tot, fl=list(fl)))
+            w.run()
+        finally:
+            b.verify_work = real
+        self.assertEqual(done.get("tot"), 1)
+        self.assertEqual(done.get("fl"), ["T0001"])
+
+    def test_send_clears_worker_ref(self):
+        # 跑完不断开/不释放线程对象会导致野指针：_verify_worker 必须复位
+        win = self.win
+        boxes, restore = self._patch_common()
+        calls, restore_v = self._patch_verify()
+        try:
+            win._send_coll_to_verify(regen_all=True)
+        finally:
+            restore_v()
+            restore()
+        self.assertIsNone(win._verify_worker)
+
+    def test_edit_preset_follows_current_preset(self):
+        # 「调整…」面板内预设下拉默认选中 Publish 当前预设（而非 run.json 槽）
+        import sys as _sys
+        _cfg0 = json.loads((ROOT / "config" / "app.json").read_text(encoding="utf-8"))
+        _real_x2p = ((_cfg0.get("xml2pdf") or {}).get("path") or "").strip()
+        if _real_x2p and _real_x2p not in _sys.path:
+            _sys.path.insert(0, _real_x2p)
+        import pycbeta.gui.panel as _panel
+        from PySide6.QtWidgets import QComboBox
+        from cbeta_publish.books import xml2pdf_bridge as _b
+        win = self.win
+        # 在夹具的假预设目录里造一个预设并选中（Publish 当前预设）
+        _pd = Path(win.config["xml2pdf"]["path"]) / "presets"
+        _pd.mkdir(parents=True, exist_ok=True)
+        (_pd / "跟随测.json").write_text('{"output": {}}', encoding="utf-8")
+        _old_data = win.cb_preset.currentData()
+        _old_preset = (win.config.get("xml2pdf") or {}).get("preset", "")
+        win._refresh_preset_combo()
+        _idx = win.cb_preset.findData("跟随测")
+        self.assertGreaterEqual(_idx, 0)
+        win.cb_preset.setCurrentIndex(_idx)
+        _ensure_app().processEvents()
+        self.assertEqual(win.config["xml2pdf"]["preset"], "跟随测")
+
+        class _FakePanel:
+            def __init__(self, w):
+                self.cfg_preset_box = QComboBox()
+                self.cfg_preset_box.addItem("（出厂默认）", "")
+                _cn = w.cb_preset.currentData() or ""
+                if _cn:
+                    _cp = _b.resolve_preset(w.config, _cn)
+                    if _cp is not None:
+                        self.cfg_preset_box.addItem(_cn, str(_cp))
+                self.updated = False
+
+            def get_options(self):
+                class _O:
+                    formats = []
+                return _O()
+
+            def set_options(self, o):
+                pass
+
+            def _update_preset_buttons(self):
+                self.updated = True
+
+        class _FakeDlg:
+            last = None
+
+            def __init__(self, base, parent=None):
+                _FakeDlg.last = self
+                self.panel = _FakePanel(parent)
+
+            def exec(self):
+                from PySide6.QtWidgets import QDialog
+                return QDialog.Rejected  # 取消：只验证下拉选中，不改配置
+
+            def get_preset(self, base=None):
+                return None
+
+        real = _panel.XmlOptionsDialog
+        _panel.XmlOptionsDialog = _FakeDlg
+        try:
+            win._edit_preset()
+        finally:
+            _panel.XmlOptionsDialog = real
+            # 恢复共享夹具的预设选择
+            _ri = win.cb_preset.findData(_old_data)
+            win.cb_preset.setCurrentIndex(_ri if _ri >= 0 else 0)
+            win.config["xml2pdf"]["preset"] = _old_preset
+        box = _FakeDlg.last.panel.cfg_preset_box
+        self.assertEqual(box.currentText(), "跟随测")
+        self.assertTrue(_FakeDlg.last.panel.updated)
+
+    def test_open_window_aligns_preset_workroot(self):
+        # 预设 source.cbeta_ebook 与 publish 工作根不一致 → 询问；Yes 则覆盖对齐
+        import subprocess
+        from PySide6.QtWidgets import QMessageBox
+        from cbeta_publish.books import xml2pdf_bridge as _b
+        win = self.win
+        pd = Path(win.config["xml2pdf"]["path"]) / "presets"
+        pd.mkdir(parents=True, exist_ok=True)
+        (pd / "对齐测.json").write_text(
+            json.dumps({"source": {"cbeta_ebook": "E:/old/root"}}), encoding="utf-8")
+        _old_data = win.cb_preset.currentData()
+        _old_preset = (win.config.get("xml2pdf") or {}).get("preset", "")
+        win._refresh_preset_combo()
+        _idx = win.cb_preset.findData("对齐测")
+        self.assertGreaterEqual(_idx, 0)
+        win.cb_preset.setCurrentIndex(_idx)
+        _ensure_app().processEvents()
+        real_popen = subprocess.Popen
+        subprocess.Popen = lambda argv, **k: None
+        real_q = QMessageBox.question
+        QMessageBox.question = staticmethod(lambda *a, **k: QMessageBox.Yes)
+        try:
+            win._open_xml2pdf_window()
+        finally:
+            subprocess.Popen = real_popen
+            QMessageBox.question = real_q
+            _ri = win.cb_preset.findData(_old_data)
+            win.cb_preset.setCurrentIndex(_ri if _ri >= 0 else 0)
+            win.config["xml2pdf"]["preset"] = _old_preset
+        d = json.loads((pd / "对齐测.json").read_text(encoding="utf-8"))
+        self.assertEqual(Path(d["source"]["cbeta_ebook"]).resolve(),
+                         _b.xml_work_dir(win.config).resolve())
 
     def _mk_verify_tree(self):
         # 真实上游布局：正式产物在顶层 `{id 书名}.{fmt}`；
@@ -245,9 +671,9 @@ class VerifySendImportTest(unittest.TestCase):
         finally:
             restore()
         base = Path(self.win.config["xml_to_ebooks_dir"])
-        self.assertEqual((base / "pdf" / "T0001.pdf").read_bytes(), b"PDF")    # 通过入库改名
-        self.assertEqual((base / "docx" / "T0001.docx").read_bytes(), b"DOCX")  # 多格式都入
-        self.assertFalse((base / "epub" / "T0002.epub").exists())               # 未通过不入库
+        self.assertEqual((base / "pdf" / "T0001 大般若經.pdf").read_bytes(), b"PDF")    # 通过 move 入库（L2 带书名）
+        self.assertEqual((base / "docx" / "T0001 大般若經.docx").read_bytes(), b"DOCX")  # 多格式都入
+        self.assertFalse((base / "epub" / "T0002 X.epub").exists())               # 未通过不入库
         self.assertTrue(any("入库 1 部" in x for f in self._finishes for x in f),
                         self._finishes)
 
@@ -268,8 +694,8 @@ class VerifySendImportTest(unittest.TestCase):
             encoding="utf-8")
         base = Path(win.config["xml_to_ebooks_dir"])
         res = self._do_import(win, ["T0001"], vdir, base)
-        self.assertEqual((base / "docx" / "T0001.docx").read_bytes(), b"DOCX")
-        self.assertFalse((base / "epub" / "T0001.epub").exists())
+        self.assertEqual((base / "docx" / "T0001 大般若經.docx").read_bytes(), b"DOCX")
+        self.assertFalse((base / "epub" / "T0001 大般若經.epub").exists())
         self.assertEqual(len(res["ok"]), 1)
         self.assertEqual(res["fail"], [])
         self.assertIn("未入 epub", res["ok"][0])
@@ -327,7 +753,7 @@ class VerifySendImportTest(unittest.TestCase):
                 QFileDialog.getExistingDirectory = real
                 restore()
             base = Path(self.win.config["xml_to_ebooks_dir"])
-            self.assertEqual((base / "pdf" / "T0001.pdf").read_bytes(), b"PDF")
+            self.assertEqual((base / "pdf" / "T0001 大般若經.pdf").read_bytes(), b"PDF")
         finally:
             shutil.rmtree(other, ignore_errors=True)
 
@@ -343,16 +769,17 @@ class VerifyRulesDialogTest(unittest.TestCase):
 
     def test_rules_text_covers_spec(self):
         txt = self.win._verify_rules_text()
-        for key in ("（验证）", "[FAIL]", "[OK]", "{fmt}/{work}", "目录选择",
-                    "_verify_report.txt", "report.txt", "顶层"):
+        for key in ("（验证）", "[FAIL]", "{fmt}/{id 书名}", "手动选目录",
+                    "转换后校验", "顶层"):
             self.assertIn(key, txt)
 
     def test_menu_has_rules_action(self):
         menus = [a for a in self.win.menuBar().actions()
-                 if a.text().replace("&", "") == "自制书籍"]
+                 if a.text().replace("&", "") == "制作书籍"]
         self.assertEqual(len(menus), 1)
         acts = [a.text() for a in menus[0].menu().actions()]
-        self.assertIn("独立窗输出与导入规则…", acts)
+        self.assertIn("运行 xml2pdf 制作书籍…", acts)
+        self.assertIn("导入说明…", acts)
 
 
 class ExitCleanupTest(unittest.TestCase):

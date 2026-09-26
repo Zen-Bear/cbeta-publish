@@ -25,16 +25,23 @@ class CreatorService:
         return res[:50]
 
     def works_of(self, creator_id: str) -> list[dict]:
-        # search in strokes tree
+        # 同一作者 id 可出现在多个 strokes 节点（别名/异称分立，如 A001019 窺基
+        # 同时挂在 窺基/釋窺基/慈恩法師/大乘 名下）：全部收集（旧逻辑首个命中即停，
+        # 作者视图搜“窥基”只返回 X0352 一部）。同 id 即同人，去重后返回。
         out=[]
+        seen=set()
         def dfs(node):
+            if not isinstance(node, dict):
+                return
             if node.get("key")==creator_id:
-                out.extend(node.get("children",[]))
-                return True
-            for c in node.get("children",[]):
-                if dfs(c):
-                    return True
-            return False
-        for g in self.strokes:
+                for c in node.get("children",[]) or []:
+                    k=c.get("key") if isinstance(c, dict) else None
+                    if k and k in seen:
+                        continue
+                    seen.add(k)
+                    out.append(c)
+            for c in node.get("children",[]) or []:
+                dfs(c)
+        for g in self.strokes or []:
             dfs(g)
         return out

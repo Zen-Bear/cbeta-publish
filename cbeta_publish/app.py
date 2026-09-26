@@ -11,6 +11,10 @@ def main():
     cfg_path=Path(__file__).resolve().parents[1]/"config/app.json"
     cfg=json.loads(cfg_path.read_text(encoding="utf-8"))
     ui=cfg.get("ui",{}) or {}
+    from cbeta_publish.qt_diag import install as _install_diag
+    _diag_log=_install_diag()
+    if _diag_log:
+        print(f"CBETA_QT_DIAG 日志: {_diag_log}")
     app=QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
     app.setApplicationDisplayName(APP_NAME)

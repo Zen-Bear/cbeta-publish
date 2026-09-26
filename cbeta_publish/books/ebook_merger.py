@@ -23,6 +23,60 @@ def _fresh_alias(name):
     _REG_SEQ[0] += 1
     return f"{name}__r{_REG_SEQ[0]}"
 
+# 拉丁扩展回退（编辑说明 PDF 混排）：黑体/宋体经 reportlab 子集化后，
+# 个别拉丁扩展字符（如 ś U+015B）映射损坏，画成空白还占幅（视觉像空格变宽）；
+# 梵文转写扩展区（U+1E00–U+1EFF，中如 ṛṇṭ）则在中文字库普遍缺字。
+# 下列西文字库实测可正确回读（drawString→提取一致），按序取首个存在者。
+_LATN_FALLBACK_FILES = [
+    "C:/Windows/Fonts/tahoma.ttf",
+    "C:/Windows/Fonts/arial.ttf",
+    "C:/Windows/Fonts/segoeui.ttf",
+    "C:/Windows/Fonts/msyh.ttc",
+    "C:/Windows/Fonts/NotoSans-Regular.ttf",
+]
+# 无条件走回退的区段（主字体即便 cmap 声称覆盖也可能画坏，如黑体的 ś）
+_LATN_ALWAYS_RANGES = ((0x0100, 0x024F), (0x1E00, 0x1EFF))
+_LATN_FONT = [None]
+_GLYPH_CACHE = {}
+
+
+def _latn_font():
+    """返回拉丁回退字体的注册名（首个存在的文件）；无则 None。"""
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+    if _LATN_FONT[0] and _LATN_FONT[0] in pdfmetrics.getRegisteredFontNames():
+        return _LATN_FONT[0]
+    for i, f in enumerate(_LATN_FALLBACK_FILES):
+        p = _font_path(f)
+        if not p.is_file():
+            continue
+        name = f"EditNoteLatn{i}"
+        if name not in pdfmetrics.getRegisteredFontNames():
+            try:
+                if p.suffix.lower() == ".ttc":
+                    pdfmetrics.registerFont(TTFont(name, str(p), subfontIndex=0))
+                else:
+                    pdfmetrics.registerFont(TTFont(name, str(p)))
+            except Exception:
+                continue
+        _LATN_FONT[0] = name
+        return name
+    return None
+
+
+def _has_glyph(fontname, ch):
+    """字体 cmap 是否含该字符形（查不到按有处理，沿用旧行为）。"""
+    try:
+        from reportlab.pdfbase import pdfmetrics
+        cmap = _GLYPH_CACHE.get(fontname)
+        if cmap is None:
+            cmap = pdfmetrics.getFont(fontname).face.charToGlyph or {}
+            _GLYPH_CACHE[fontname] = cmap
+        return bool(cmap.get(ord(ch), 0))
+    except Exception:
+        return True
+
+
 # PDF 书签跳转目标：页顶边距（pt）。PyMuPDF 对三元条目默认用 36pt，
 # 点击后页面会被下拉约半厘米；0 虽是精确页顶，但某些阅读器会对
 # “恰好页顶”的目标做特殊处理（如改变缩放），故取 1pt（0.35mm，
@@ -30,11 +84,74 @@ def _fresh_alias(name):
 BOOKMARK_TOP_MARGIN = 1
 
 
+def _detect_paper(w, h):
+    """页面尺寸 → 纸张名（封面/说明/编辑说明共用）。"""
+    if 350 < w < 385 and 510 < h < 535:
+        return "32k"
+    if 410 < w < 435 and 585 < h < 610:
+        return "a5"
+    if 515 < w < 535 and 725 < h < 750:
+        return "16k"
+    if 580 < w < 610 and 830 < h < 860:
+        return "a4"
+    if w < 400:
+        return "32k"
+    if w < 480:
+        return "a5"
+    if w < 560:
+        return "16k"
+    return "a4"
+
+
 def _font_path(p):
     pp = Path(p)
     if not pp.is_absolute():
         pp = Path(__file__).resolve().parents[2] / pp
     return pp
+
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+IMAGES_DIR = _REPO_ROOT / "assets" / "images"
+
+#: 封面图后缀（"不用管后缀名"；同号多文件并存时排序取第一个）
+COVER_IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png", ".tif", ".tiff",
+                        ".bmp", ".gif", ".webp")
+#: 角色→编号：1=封面图（前）/ 2=封底图（后）
+COVER_ROLE_NUM = {"buddha": "1", "weituo": "2"}
+
+
+def find_numbered_image(directory, num):
+    """目录里找 `{num}.*` 图片（后缀不限，排序取第一个）；无则 None。"""
+    try:
+        d = Path(directory)
+        if not d.is_dir():
+            return None
+        cands = sorted(
+            (p for p in d.iterdir()
+             if p.is_file() and p.stem == str(num)
+             and p.suffix.lower() in COVER_IMAGE_SUFFIXES),
+            key=lambda p: (p.suffix.lower(), p.name))
+        return cands[0] if cands else None
+    except Exception:
+        return None
+
+
+def resolve_cover_image(cfg_images: dict, key: str):
+    """封面图解析：配置显式路径有效则用；否则按编号约定找
+    `assets/images/{1|2}.*`（1=封面图，2=封底图，后缀不限）。
+    关闭开关（enabled=False）返回 None。"""
+    info = (cfg_images or {}).get(key) or {}
+    if not bool(info.get("enabled", True)):
+        return None
+    f = (info.get("file") or "").strip()
+    if f:
+        p = _font_path(f)
+        if p.is_file():
+            return p
+    num = COVER_ROLE_NUM.get(key)
+    if num is None:
+        return None
+    return find_numbered_image(IMAGES_DIR, num)
 
 
 def _face_has_cjk(fontname, sample=_CJK_SAMPLE):
@@ -96,6 +213,19 @@ def _register_font(name, path):
         return "Helvetica"
 
 
+def _resolve_cover_date(cfg, today=None):
+    """封面日期行文本：`cover.date_text` 缺省 `{date}`（=今天，保持旧行为）；
+    其中的 `{date}` 替换为今天；留空则返回 ""（调用方跳过绘制）。"""
+    import datetime as _dt
+    raw = (cfg or {}).get("date_text", "{date}")
+    if raw is None:
+        raw = "{date}"
+    raw = str(raw)
+    if "{date}" in raw:
+        raw = raw.replace("{date}", today or _dt.date.today().isoformat())
+    return raw.strip()
+
+
 def _cover_pdf(first_src: Path, title: str, out_path: Path, organizer: str="", config: dict=None):
     cfg=config or {}
     # 兼容新旧配置：优先 styles，其次 fonts/colors/sizes.ratios
@@ -121,22 +251,6 @@ def _cover_pdf(first_src: Path, title: str, out_path: Path, organizer: str="", c
             return styles[name]["delta"]
         return sizes.get(f"{name}_delta", default)
     # 使用 pymupdf 获取尺寸与纸张类型
-    def _detect_paper(w, h):
-        if 350 < w < 385 and 510 < h < 535:
-            return "32k"
-        if 410 < w < 435 and 585 < h < 610:
-            return "a5"
-        if 515 < w < 535 and 725 < h < 750:
-            return "16k"
-        if 580 < w < 610 and 830 < h < 860:
-            return "a4"
-        if w < 400:
-            return "32k"
-        if w < 480:
-            return "a5"
-        if w < 560:
-            return "16k"
-        return "a4"
     try:
         import pymupdf
         src=pymupdf.open(first_src)
@@ -161,9 +275,9 @@ def _cover_pdf(first_src: Path, title: str, out_path: Path, organizer: str="", c
     font_cbeta = reg("CoverSeries", _font("cbeta", "C:\\Windows\\Fonts\\simhei.ttf"))
     font_title = reg("CoverTitle", _font("title", "C:\\Windows\\Fonts\\Source Han Serif SC Heavy (TrueType).ttf"))
     font_toc_item = reg("CoverTocItem", _font("toc_item", "C:\\Windows\\Fonts\\simhei.ttf"))
-    font_org = reg("CoverOrg", _font("organizer", "C:\\Windows\\Fonts\\Source Han Serif SC Heavy (TrueType).ttf"))
+    # 整理者与日期同字体：只注册日期字体，整理者行改用 font_date
     font_date = reg("CoverDate", _font("date", "C:\\Windows\\Fonts\\simhei.ttf"))
-    for n in [font_cbeta, font_title, font_org, font_date]:
+    for n in [font_cbeta, font_title, font_date]:
         if n not in pdfmetrics.getRegisteredFontNames():
             # fallback
             pass
@@ -248,8 +362,11 @@ def _cover_pdf(first_src: Path, title: str, out_path: Path, organizer: str="", c
         if idx < len(parts)-1:
             c.setFont("Helvetica", cbeta_sz)
             cur_x+=c.stringWidth(" ", "Helvetica", cbeta_sz)
-    # 书名 300% 居中 Y 30%（基准=正文；Y 位置读 positions.title_y_ratio）
-    y_title=height*(1 - pos.get("title_y_ratio", 0.30))
+    # 书名居中 Y 25%（1/4 高度；基准=正文；Y 位置读 positions.title_y_ratio）。
+    # 组行/整理者/日期沿用旧基准：组行起始按 group_y_ratio（缺省 0.30 即旧位），
+    # 书名抬高的差值从组行起始扣除（只抬书名，其余像素级不动；两者设一样即回旧版）。
+    y_title=height*(1 - pos.get("title_y_ratio", 0.25))
+    y_spine=height*(1 - pos.get("group_y_ratio", 0.30))
     t_sz=sizes.get("title_a5" if is_a5 else "title_a4", base_sz * _r("title", 3.0))
     if "title_a5" not in sizes and "ratios" not in sizes and "body_a5" not in sizes:
         t_sz=base_sz*3.0
@@ -317,33 +434,47 @@ def _cover_pdf(first_src: Path, title: str, out_path: Path, organizer: str="", c
     _segs=[s for s in str(title or "").split("｜")]
     _main=_segs[0] if _segs else ""
     _group=_segs[1] if len(_segs)>1 else ""
-    y_after=draw_centred_with_spaces(y_title, _main, font_title, t_sz) if _main else y_title
+    y_after=draw_centred_with_spaces(y_title, _main, font_title, t_sz) if _main else y_spine
+    if _main and _group:
+        # 组行回落到旧基准：只抬书名（多行折行亦安全，只会更宽松）
+        y_after-=(y_title-y_spine)
     if _group:
-        # 部类/刊本分组路径：按 " / " 每段一行（不再整行折行）；字体字号沿用目录条目
+        # 部类/刊本分组路径：按 " / " 每段一行（不再整行折行）；字体字号沿用目录条目；
+        # 超宽单行（如一行模式）截断加 …（多行短段不受影响）
         _tm=_toc_text_style(cfg, width, height, paper)
         _isz=_tm["item_sz"]
         c.setFillColor(Color(*[v/255 for v in _color("toc_item",[30,30,30])]))
         for _lv in [s for s in re.split(r"\s*/\s*", _group) if s]:
             try:
                 c.setFont(font_toc_item, _isz)
+                _ff = font_toc_item
             except Exception:
                 c.setFont("Helvetica", _isz)
+                _ff = "Helvetica"
+            _lv = _lv.strip()
+            if _lv and c.stringWidth(_lv, _ff, _isz) > avail:
+                while _lv and c.stringWidth(_lv + "…", _ff, _isz) > avail:
+                    _lv = _lv[:-1]
+                _lv = (_lv + "…") if _lv else ""
+            if not _lv:
+                continue
             c.drawCentredString(cx, y_after, _lv)
             y_after-=_isz*1.6
-    # 整理者 135% Y 84%（Y 位置读 positions.organizer_y_ratio）
+    # 整理者 Y 84%（Y 位置读 positions.organizer_y_ratio）；
+    # 字体字号均与日期一致（左上角文字大小）
     if organizer:
         y_org=height*(1 - pos.get("organizer_y_ratio", 0.84))
-        o_sz=sizes.get("organizer_a5" if is_a5 else "organizer_a4", base_sz * _r("organizer", 1.35))
-        if "organizer_a5" not in sizes and "ratios" not in sizes and "body_a5" not in sizes:
-            o_sz=base_sz*1.35
+        o_sz=topleft_sz
         c.setFillColor(Color(*[v/255 for v in _color("organizer",[51,51,51])]))
-        draw_centred_with_spaces(y_org, organizer, font_org, o_sz)
-    # 日期 Y 90%（读 positions.date_y_ratio），字号与左上角文字一致
-    y_date=height*(1 - pos.get("date_y_ratio", 0.90))
-    d_sz=topleft_sz
-    date=datetime.date.today().isoformat()
-    c.setFillColor(Color(*[v/255 for v in _color("date",[100,100,100])]))
-    draw_centred_with_spaces(y_date, date, font_date, d_sz)
+        draw_centred_with_spaces(y_org, organizer, font_date, o_sz)
+    # 日期 Y 90%（读 positions.date_y_ratio），字号与左上角文字一致；
+    # 文本取 cover.date_text（`{date}`=今天；留空不绘制）
+    _date_text=_resolve_cover_date(cfg)
+    if _date_text:
+        y_date=height*(1 - pos.get("date_y_ratio", 0.90))
+        d_sz=topleft_sz
+        c.setFillColor(Color(*[v/255 for v in _color("date",[100,100,100])]))
+        draw_centred_with_spaces(y_date, _date_text, font_date, d_sz)
     c.showPage()
     c.save()
     return out_path
@@ -405,6 +536,7 @@ def _toc_text_style(cfg, width, height, paper):
         "right": _get_margin("right"),
         "top": _get_margin("top"),
         "bottom": _get_margin("bottom"),
+        "base": base,
         "title_y": height * (1 - pos.get("toc_y_ratio", 0.11)),
         "title_sz": title_sz,
         "item_y0": height * (1 - pos.get("toc_item_y_ratio", 0.20)),
@@ -414,6 +546,20 @@ def _toc_text_style(cfg, width, height, paper):
         "item_gap": item_sz * 0.4,
         "body_continue_y": height - 40,
     }
+
+def _page_bg(cfg, key):
+    """说明/目录页背景色：styles.{key}.color；缺省跟随封面 background；再缺省米色。"""
+    styles = ((cfg or {}).get("styles", {}) or {})
+    keys = (key, "background") if key != "background" else ("background",)
+    for k in keys:
+        info = styles.get(k) or {}
+        c = info.get("color") if isinstance(info, dict) else None
+        if isinstance(c, (list, tuple)) and len(c) == 3:
+            try:
+                return [int(v) for v in c]
+            except Exception:
+                pass
+    return [250, 245, 230]
 
 def _toc_pdf(titles: list[str], first_src: Path, out_path: Path, config: dict=None, page_nums: list[int]=None, toc_start_index: int=2):
     cfg=config or {}
@@ -474,6 +620,11 @@ def _toc_pdf(titles: list[str], first_src: Path, out_path: Path, config: dict=No
     font_toc_item=reg("TocItem", _font("toc_item", "C:\\Windows\\Fonts\\Source Han Serif SC Heavy (TrueType).ttf"))
     font_page=reg("TocPage", _font("toc_page", "C:\\Windows\\Fonts\\simhei.ttf"))
     c=canvas.Canvas(str(out_path), pagesize=(width, height))
+    _toc_bg=_page_bg(cfg, "toc_background")
+    def _paint_bg():
+        c.setFillColor(Color(_toc_bg[0]/255, _toc_bg[1]/255, _toc_bg[2]/255))
+        c.rect(0, 0, width, height, fill=1, stroke=0)
+    _paint_bg()
     # 目录标题与正文使用共用字号、行距与位置。
     tm=_toc_text_style(cfg, width, height, paper_toc)
     toc_left=tm["left"]
@@ -504,14 +655,15 @@ def _toc_pdf(titles: list[str], first_src: Path, out_path: Path, config: dict=No
     for i,t in enumerate(titles,1):
         if y < 40:
             c.showPage()
+            _paint_bg()
             y=tm["body_continue_y"]
             toc_pg+=1
             try:
                 c.setFont(font_toc_item, item_sz)
             except:
                 c.setFont("Helvetica", item_sz)
-        # 一级目录 左对齐（无序号前缀，边距优先纸张定义）
-        txt=f"{t}"
+        # 一级目录 左对齐（经书加序号，全局连续、自适应补零；与 EPUB 目录同规则）
+        txt = _epub_seq_title(i, len(titles), f"{t}")
         if c.stringWidth(txt, font_toc_item if font_toc_item in pdfmetrics.getRegisteredFontNames() else "Helvetica", item_sz) > width - toc_left - toc_right - 40:
             txt=txt[:38]+"..."
         try:
@@ -605,9 +757,15 @@ def _intro_pdf(intro: dict, first_src: Path, out_path: Path, config: dict=None) 
     body_continue_y=tm["body_continue_y"]
     c=canvas.Canvas(str(out_path), pagesize=(width, height))
     pages=0
+    _intro_bg=_page_bg(cfg, "intro_background")
+    def _paint_bg():
+        c.setFillColor(Color(_intro_bg[0]/255, _intro_bg[1]/255, _intro_bg[2]/255))
+        c.rect(0, 0, width, height, fill=1, stroke=0)
+    _paint_bg()
     def _new_page():
         nonlocal pages, y
         c.showPage()
+        _paint_bg()
         pages+=1
         y=body_continue_y
     def _draw(text, x, y0, font, size, color):
@@ -666,6 +824,255 @@ def _intro_pdf(intro: dict, first_src: Path, out_path: Path, config: dict=None) 
     return pages
 
 
+#: 编辑说明默认标题（TXT 无 <title> 行时）
+EDITNOTE_DEFAULT_TITLE = "编辑说明"
+
+
+def _epub_seq_title(i, total, title):
+    """目录经书序号：全局 1-based，自适应补零（宽度看总部数）；
+    EPUB 只对经书条目调用（封面/丛书目录/编辑说明/说明页不加），
+    PDF 目录页共用此规则。"""
+    try:
+        _t = max(1, int(total or 1))
+    except Exception:
+        _t = 1
+    _w = len(str(_t))
+    return f"{max(1, int(i)):0{_w}d}. {title}"
+
+
+def parse_editnote_file(path):
+    """编辑说明 TXT → {"title": str, "lines": [(kind, align, text), ...]}；
+    文件缺失/空/无有效行返回 None。
+
+    行前缀（对齐可与样式叠加，如 `<center><h1>xxx`；标签须与内容同行，
+    单独成行的 `<center>` 只作用于空行、无效果）：
+    `<title>` 标题（仅首个有效，不排版）；`<h1>`–`<h5>` 分级标题；
+    `<b>` 整行加粗；`<center>/<right>` 对齐（默认左），行尾闭合
+    `</center>/</right>` 可写可不写（如 `<center><h5>xxx</h5></center>`）。
+    `<pb>`（独占一行，大小写不限）为强制分页：PDF 另起一页；
+    EPUB 无固定页，输出空 break-div（`break-before:page`＋`page-break-before:always`
+    兼容回退），认的阅读器分页、不认的零高度无残留（不切文件）。
+    空格空行保留：行首空白原样保留（半角/全角空格均保留，制表按 4 空格展开；
+    尾空格去掉），空行（含全空白行）均为段间距。
+    标签行空格规则：标签前的空白一律保留；标签后的半角空格视为分隔符去掉
+    （`<h1> 凡例`写法不受影响），全角空格/制表为有意缩进保留。
+    """
+    try:
+        text = Path(path).read_text(encoding="utf-8-sig", errors="replace")
+    except OSError:
+        return None
+    title = EDITNOTE_DEFAULT_TITLE
+    title_set = False
+    lines = []
+    for raw in text.splitlines():
+        if not raw.strip():
+            lines.append(("gap", "left", ""))
+            continue
+        s = raw.rstrip()
+        align = "left"
+        rest = s.strip()
+        while True:
+            low = rest.lower()
+            if low.startswith("<center>"):
+                align = "center"
+                rest = rest[len("<center>"):].strip()
+                continue
+            if low.startswith("<right>"):
+                align = "right"
+                rest = rest[len("<right>"):].strip()
+                continue
+            break
+        # 强制分页（独占一行；行内夹杂文字的不认，走正文）
+        if rest.lower() in ("<pb>", "<pb/>"):
+            lines.append(("pb", "left", ""))
+            continue
+        # 行尾对齐闭合（</center>/</right>）直接由正则消费，不会漏进正文
+        # （旧逻辑下 `<h5>xxx</h5></center>` 的 `</h5>` 会残留）
+        m = re.match(r"^<(title|h1|h2|h3|h4|h5|b)>(.*?)\s*(</\1>)?\s*(</(?:center|right)>)?\s*$",
+                     rest, re.IGNORECASE)
+        if m:
+            kind, text = m.group(1).lower(), m.group(2)
+            # 内容仅去尾空格，行首空格保留
+            text = re.sub(r"\s*</(center|right)>\s*$", "", text, flags=re.IGNORECASE).rstrip()
+            if kind == "title":
+                if not title_set and text.strip():
+                    title = text.strip()
+                    title_set = True
+                continue
+            # 标签后半角空格是分隔符（去掉），全角/制表是有意缩进（保留）；
+            # 标签前的空白一律保留（制表展开）
+            text = text.lstrip(" ")
+            _pre = s[:len(s) - len(s.lstrip())].replace("\t", "    ")
+            text = _pre + text.replace("\t", "    ")
+            if not text.strip():
+                continue
+            lines.append((kind, align, text))
+        else:
+            # 无样式标签：行首空白原样保留（rest 已 strip，补回前导空白串；
+            # 全角空格是中文常用缩进，lstrip(" ") 会丢掉，必须用全空白判定）。
+            # 纯标签残留行（如单独的 </center>）直接跳过，不占垂直空间。
+            _core = re.sub(r"\s*</(center|right)>\s*$", "", rest, flags=re.IGNORECASE).strip()
+            if not _core:
+                continue
+            _lead = s[:len(s) - len(s.lstrip())].replace("\t", "    ")
+            lines.append(("body", align, _lead + _core))
+    if not any(k not in ("gap", "pb") for k, _, _ in lines):
+        return None
+    return {"title": title, "lines": lines}
+
+
+def _editnote_pdf(parsed, first_src: Path, out_path: Path, config: dict=None) -> int:
+    """编辑说明页（TXT 转排版）；多页自动分页。返回页数。
+    字号字体沿用封面设置：标题/h1=toc_title，h2–h5 依次缩小，正文=页面基准字号；
+    加粗用同行微右移模拟（无粗体字形注册）。"""
+    cfg=config or {}
+    styles=cfg.get("styles",{})
+    fonts=cfg.get("fonts",{})
+    colors=cfg.get("colors",{})
+    sizes=cfg.get("sizes",{})
+    def _font(name, default):
+        if name in styles and "font" in styles[name]:
+            return styles[name]["font"]
+        return fonts.get(name, default)
+    def _color(name, default):
+        if name in styles and "color" in styles[name]:
+            return styles[name]["color"]
+        return colors.get(name, default)
+    try:
+        import pymupdf
+        src=pymupdf.open(first_src)
+        rect=src[0].rect if len(src)>0 else pymupdf.Rect(0,0,595,842)
+        src.close()
+        width, height = rect.width, rect.height
+    except:
+        width, height = (595,842)
+    tm=_toc_text_style(cfg, width, height, _detect_paper(width, height))
+    left=tm["left"]; right=tm["right"]; bottom=tm["bottom"]
+    title_sz=tm["title_sz"]; item_sz=tm["item_sz"]
+    body_sz=tm.get("base", item_sz)   # 编辑说明正文用页面基准字号（非目录条目字号）
+    from reportlab.pdfgen import canvas
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.lib.colors import Color
+    def reg(name, path):
+        return _register_font(name, path)
+    def _efont(name, fb_name, fb_default):
+        # 编辑说明字体选项缺省时回退到目录/说明同类字体
+        v = _font(name, None)
+        return v if v else _font(fb_name, fb_default)
+    f_title=reg("EditNoteTitle", _efont("editnote_title", "toc_title", "C:\\Windows\\Fonts\\simhei.ttf"))
+    f_body=reg("EditNoteBody", _efont("editnote_body", "toc_item", "C:\\Windows\\Fonts\\simhei.ttf"))
+    f_latn=_latn_font() or ""   # 拉丁扩展回退（ā/ś/梵文转写）；无则沿用主字体
+    def _fn(name):
+        return name if name in pdfmetrics.getRegisteredFontNames() else "Helvetica"
+    c=canvas.Canvas(str(out_path), pagesize=(width, height))
+    pages=1
+    y=tm["title_y"]
+    _pending_gap=0.0   # 累积的空行高度：作者内容，换页也不丢（带到新页顶部）
+    _drawn=False       # 本页是否已落笔（标题不计；<pb> 防文件头/连续/尾部空白页用）
+    def _new_page():
+        nonlocal pages, y, _drawn
+        c.showPage()
+        pages+=1
+        y=tm["body_continue_y"]
+        _drawn=False
+    def _run_font(ch, primary):
+        # 该字符的绘制字体：拉丁扩展区无条件回退（主字体可能画坏），
+        # 主字体缺字形也回退；回退字体须覆盖该字符，否则沿用主字体
+        o = ord(ch)
+        if f_latn and f_latn != primary and (
+                any(lo <= o <= hi for lo, hi in _LATN_ALWAYS_RANGES)
+                or not _has_glyph(primary, ch)):
+            if _has_glyph(f_latn, ch):
+                return f_latn
+        return primary
+    def _runs(text, primary):
+        # 按字体切分 run：[(font, seg)]（相邻同字体合并）
+        out = []
+        for ch in text:
+            f = _run_font(ch, primary)
+            if out and out[-1][0] == f:
+                out[-1][1] += ch
+            else:
+                out.append([f, ch])
+        return [(f, s) for f, s in out]
+    def _mixed_width(text, primary, size):
+        return sum(c.stringWidth(seg, _fn(f), size) for f, seg in _runs(text, primary))
+    def _wrap(text, font, size, maxw):
+        if _mixed_width(text, font, size) <= maxw:
+            return [text]
+        out=[]; cur=""; curw=0.0
+        for ch in text:
+            cw=c.stringWidth(ch, _fn(_run_font(ch, font)), size)
+            if curw+cw<=maxw:
+                cur+=ch; curw+=cw
+            else:
+                if cur:
+                    out.append(cur)
+                cur=ch; curw=cw
+        if cur:
+            out.append(cur)
+        return out or [text]
+    def _put(text, font, size, color, align, advance, bold=False):
+        nonlocal y, _pending_gap, _drawn
+        maxw=width-left-right
+        if _pending_gap:
+            if y-_pending_gap<bottom+advance:
+                _new_page()
+            y-=_pending_gap
+            _pending_gap=0.0
+        for ln in _wrap(text, font, size, maxw):
+            if y<bottom+advance:
+                _new_page()
+            total=_mixed_width(ln, font, size)
+            if align=="center":
+                x=width/2-total/2
+            elif align=="right":
+                x=width-right-total
+            else:
+                x=left
+            c.setFillColor(Color(*[v/255 for v in color]))
+            for f, seg in _runs(ln, font):
+                c.setFont(_fn(f), size)
+                c.drawString(x, y, seg)
+                if bold:
+                    c.drawString(x+max(0.3,size*0.03), y, seg)
+                x+=c.stringWidth(seg, _fn(f), size)
+            y-=advance
+            _drawn=True
+    _put(parsed.get("title") or EDITNOTE_DEFAULT_TITLE,
+         f_title, title_sz, _color("toc_title",[0,0,0]), "center", title_sz*1.8)
+    _drawn=False   # 标题不计入落笔（行首 <pb> 不另起空白页）
+    _lines = parsed.get("lines", []) or []
+    for _li, (kind, align, text) in enumerate(_lines):
+        if kind == "pb":
+            # 强制分页（仅编辑说明页）：丢弃待处理空行；页首/连续/尾部 mark 不另起空白页
+            _pending_gap = 0.0
+            _more = any(k not in ("gap", "pb") for k, _, _ in _lines[_li + 1:])
+            if _drawn and _more:
+                _new_page()
+            continue
+        if kind=="gap":
+            _pending_gap+=body_sz*0.8
+            continue
+        if kind=="h1":
+            _put(text, f_title, title_sz, _color("toc_title",[0,0,0]), align, title_sz*1.5)
+        elif kind=="h2":
+            _put(text, f_title, title_sz*0.85, _color("toc_title",[0,0,0]), align, title_sz*1.3)
+        elif kind=="h3":
+            _put(text, f_title, title_sz*0.8, _color("toc_title",[0,0,0]), align, title_sz*1.2)
+        elif kind=="h4":
+            _put(text, f_title, title_sz*0.7, _color("toc_title",[0,0,0]), align, title_sz*1.1)
+        elif kind=="h5":
+            _put(text, f_title, title_sz*0.6, _color("toc_title",[0,0,0]), align, title_sz*1.05)
+        elif kind=="b":
+            _put(text, f_body, body_sz, _color("toc_item",[30,30,30]), align, body_sz*1.35, bold=True)
+        else:
+            _put(text, f_body, body_sz, _color("toc_item",[30,30,30]), align, body_sz*1.35)
+    c.showPage()
+    c.save()
+    return pages
+
+
 def _blank_pdf(first_src: Path, out_path: Path):
     try:
         import pymupdf
@@ -683,7 +1090,8 @@ def _blank_pdf(first_src: Path, out_path: Path):
     return out_path
 
 def _image_pdf(first_src: Path, image_path: Path, out_path: Path):
-    # 单页图像（佛像/韦陀）：按页居中缩放（最大 80% 页面）
+    # 单页图像（封面图/封底图）：与正文页同尺寸，图按 80% 居中。
+    # 直接嵌入不转码：JPEG 原字节 DCT 直通；tif/png 无损嵌入（像素一致）。
     try:
         import pymupdf
     except ImportError:
@@ -698,21 +1106,25 @@ def _image_pdf(first_src: Path, image_path: Path, out_path: Path):
         width, height = rect.width, rect.height
     except:
         width, height = (595,842)
-    from reportlab.pdfgen import canvas
-    from reportlab.lib.utils import ImageReader
-    c=canvas.Canvas(str(out_path), pagesize=(width, height))
     try:
-        img=ImageReader(str(image_path))
-        iw, ih = img.getSize()
+        with pymupdf.open(str(image_path)) as _im:
+            _ir=_im[0].rect if len(_im)>0 else pymupdf.Rect(0,0,0,0)
+            iw, ih = _ir.width, _ir.height
+    except Exception:
+        iw = ih = 0
+    doc=pymupdf.open()
+    try:
+        page=doc.new_page(width=width, height=height)
         if iw>0 and ih>0:
-            maxw, maxh = width*0.8, height*0.8
-            scale=min(maxw/iw, maxh/ih)
+            scale=min(width*0.8/iw, height*0.8/ih)
             w, h = iw*scale, ih*scale
-            c.drawImage(img, (width-w)/2, (height-h)/2, width=w, height=h)
+            page.insert_image(pymupdf.Rect((width-w)/2, (height-h)/2,
+                                           (width+w)/2, (height+h)/2),
+                              filename=str(image_path))
     except Exception as e:
         print("image pdf fail", e)
-    c.showPage()
-    c.save()
+    doc.save(out_path)
+    doc.close()
     return out_path
 
 def _add_toc_links(doc, link_rects, page_nums):
@@ -735,7 +1147,7 @@ def _add_toc_links(doc, link_rects, page_nums):
         except Exception as e:
             print("toc link fail", e)
 
-def merge_pdfs(sources: list[Path], out: Path, split_pages: int = 5000, titles: list[str]=None, collection_name: str=None, organizer: str="", cover_config: dict=None, intro: dict=None, progress=None) -> list[Path]:
+def merge_pdfs(sources: list[Path], out: Path, split_pages: int = 5000, titles: list[str]=None, collection_name: str=None, organizer: str="", cover_config: dict=None, intro: dict=None, progress=None, editnote: dict=None) -> list[Path]:
     if not sources:
         return []
     if not (cover_config or {}).get("enabled", True):
@@ -746,7 +1158,7 @@ def merge_pdfs(sources: list[Path], out: Path, split_pages: int = 5000, titles: 
     shutil.rmtree(tmp_dir, ignore_errors=True)   # 清理上次异常残留
     tmp_dir.mkdir(exist_ok=True)
     try:
-        return _merge_pdfs_impl(sources, out, tmp_dir, split_pages, titles, collection_name, organizer, cover_config, intro, progress)
+        return _merge_pdfs_impl(sources, out, tmp_dir, split_pages, titles, collection_name, organizer, cover_config, intro, progress, editnote)
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)   # 无论成功/异常都清除
 
@@ -799,7 +1211,7 @@ def _merge_pdfs_bare(sources, out, split_pages, titles, progress=None):
     return parts
 
 
-def _merge_pdfs_impl(sources, out, tmp_dir, split_pages, titles, collection_name, organizer, cover_config, intro=None, progress=None):
+def _merge_pdfs_impl(sources, out, tmp_dir, split_pages, titles, collection_name, organizer, cover_config, intro=None, progress=None, editnote=None):
     try:
         import pymupdf
     except ImportError:
@@ -808,27 +1220,35 @@ def _merge_pdfs_impl(sources, out, tmp_dir, split_pages, titles, collection_name
     mode=cfg.get("mode","print")
     pad=(mode=="print")   # 打印=补空白；阅读=去空白
     first=sources[0]
-    def _resolve(p):
-        pp=Path(p)
-        if not pp.is_absolute():
-            pp=Path(__file__).resolve().parents[2]/pp
-        return pp
+    _resolved_imgs={}
+    def _resolved_img(key):
+        if key not in _resolved_imgs:
+            _resolved_imgs[key]=resolve_cover_image(cfg.get("images",{}), key)
+        return _resolved_imgs[key]
     def _blank(name):
         b=tmp_dir/name
         _blank_pdf(first, b)
         return b
     def _img_ok(key):
-        info=(cfg.get("images",{}) or {}).get(key) or {}
-        f=info.get("file")
-        return bool(info.get("enabled", True)) and bool(f) and _resolve(f).exists()
+        p=_resolved_img(key)
+        return p is not None and p.is_file()
     def _img_pdf(key, name):
         w=tmp_dir/name
-        _image_pdf(first, _resolve(cfg["images"][key]["file"]), w)
+        _image_pdf(first, _resolved_img(key), w)
         return w
+    def _pdf_pages(path):
+        # 前置文件真实页数（多页的编辑说明/说明/目录不能按“1 文件=1 页”算）
+        try:
+            with pymupdf.open(path) as _d:
+                return len(_d)
+        except Exception:
+            return 0
+    def _front_pages():
+        return sum(_pdf_pages(p) for p in front)
     name=collection_name or out.stem
     cover=tmp_dir/"cover.pdf"
     _cover_pdf(first, name, cover, organizer=organizer, config=cfg)
-    # ---- 前置页（目录之前）：封面[→空白][→佛像[→空白]] ----
+    # ---- 前置页（目录之前）：封面[→空白][→封面图[→空白]] ----
     front=[cover]
     if pad:
         front.append(_blank("blank_cover.pdf"))
@@ -836,9 +1256,23 @@ def _merge_pdfs_impl(sources, out, tmp_dir, split_pages, titles, collection_name
         front.append(_img_pdf("buddha", "img_buddha.pdf"))
         if pad:
             front.append(_blank("blank_buddha.pdf"))
+    # ---- 编辑说明（TXT 转排版）：说明页之前；无说明页时占其位 ----
+    en_start=None
+    en_title=""
+    if editnote:
+        en_start=len(front)
+        en_title=editnote.get("title") or EDITNOTE_DEFAULT_TITLE
+        en_pdf=tmp_dir/"editnote.pdf"
+        en_pages=_editnote_pdf(editnote, first, en_pdf, config=cfg)
+        front.append(en_pdf)
+        if pad and en_pages%2==1:
+            front.append(_blank("blank_editnote.pdf"))
     # ---- 说明页（部类统计 + 清单）：封面之后、目录之前 ----
+    # 打印模式保证从奇数页起（前面页数为奇数时垫一张；多页前置按真实页数算）
     intro_start=None
     if intro:
+        if pad and _front_pages()%2==1:
+            front.append(_blank("blank_before_intro.pdf"))
         intro_start=len(front)
         intro_pdf=tmp_dir/"intro.pdf"
         intro_pages=_intro_pdf(intro, first, intro_pdf, config=cfg)
@@ -846,13 +1280,15 @@ def _merge_pdfs_impl(sources, out, tmp_dir, split_pages, titles, collection_name
         if pad and intro_pages%2==1:
             front.append(_blank("blank_intro.pdf"))
     toc_start=len(front)
+    toc_start_page=_front_pages()+1   # 目录首页在成品中的真实页码（1-based）
     toc_titles=titles or [s.stem for s in sources]
     toc=tmp_dir/"toc.pdf"
     # 第一遍生成目录以获取页数（不影响后续页码计算）
-    _toc_pdf(toc_titles, first, toc, config=cfg, page_nums=None, toc_start_index=toc_start)
+    # toc_start_index 为 0-based 偏移（link_rects 内 toc_pg 从 1 起）
+    _toc_pdf(toc_titles, first, toc, config=cfg, page_nums=None, toc_start_index=toc_start_page-1)
     toc_pages=len(pymupdf.open(toc))
     # ---- 计算正文每部真实起始页（1-based） ----
-    pre_body_pages=toc_start+toc_pages
+    pre_body_pages=_front_pages()+toc_pages
     if pad and toc_pages%2==1:
         pre_body_pages+=1   # 目录单数页补空白
     page_nums=[]
@@ -867,25 +1303,30 @@ def _merge_pdfs_impl(sources, out, tmp_dir, split_pages, titles, collection_name
         off+=n
     page_nums=page_nums[:len(toc_titles)]
     # 第二遍生成目录（真实页码；布局不变，页数一致）
-    link_rects=_toc_pdf(toc_titles, first, toc, config=cfg, page_nums=page_nums, toc_start_index=toc_start)
+    link_rects=_toc_pdf(toc_titles, first, toc, config=cfg, page_nums=page_nums, toc_start_index=toc_start_page-1)
     # ---- 组装页面序列 ----
     pre=list(front)
     pre.append(toc)
     if pad and toc_pages%2==1:
         pre.append(_blank("blank_toc_odd.pdf"))
+    # 前置各段真实起始页（1-based）：多页的编辑说明/说明/目录逐文件累加
+    _pre_pages=[_pdf_pages(p) for p in pre]
+    def _pre_page(idx):
+        return sum(_pre_pages[:idx])+1
     back=[]
     if _img_ok("weituo"):
+        # 封底图后不再垫空白（后面已无内容）：尾部恒为 [封底图?, 封底空白]
         back.append(_img_pdf("weituo", "img_weituo.pdf"))
-        if pad:
-            back.append(_blank("blank_weituo.pdf"))
     if pad:
-        back.append(_blank("blank_back.pdf"))   # 封底（空白）
+        back.append(_blank("blank_back.pdf"))   # 封底（空白，无图也保留）
     body_indices=set(range(len(pre), len(pre)+len(body_sources)))
     all_sources=pre+body_sources+back
     toc_entries=[[1, "封面", 1, BOOKMARK_TOP_MARGIN]]
+    if en_start is not None:
+        toc_entries.append([1, en_title or EDITNOTE_DEFAULT_TITLE, _pre_page(en_start), BOOKMARK_TOP_MARGIN])
     if intro_start is not None:
-        toc_entries.append([1, intro.get("title","说明"), intro_start+1, BOOKMARK_TOP_MARGIN])
-    toc_entries.append([1, "目录", toc_start+1, BOOKMARK_TOP_MARGIN])
+        toc_entries.append([1, intro.get("title","说明"), _pre_page(intro_start), BOOKMARK_TOP_MARGIN])
+    toc_entries.append([1, "目录", _pre_page(toc_start), BOOKMARK_TOP_MARGIN])
     merged = pymupdf.open()
     parts=[]
     cur_pages=0
@@ -926,6 +1367,77 @@ def _merge_pdfs_impl(sources, out, tmp_dir, split_pages, titles, collection_name
         merged.save(part)
         parts.append(part)
     return parts
+
+def _epub_editnote_page(parsed: dict, config: dict=None):
+    """EPUB 编辑说明页：mini-syntax 转原生标签＋内联样式。
+    字号沿用封面设置（h1=toc_title 比率，h2–h5 依次缩小，正文 1.0em）。"""
+    import html as _html
+    from ebooklib import epub
+    title = (parsed or {}).get("title") or EDITNOTE_DEFAULT_TITLE
+    styles = ((config or {}).get("styles", {}) or {})
+    sizes = ((config or {}).get("sizes", {}) or {})
+
+    def _ratio(name, default):
+        if name in styles and "ratio" in styles[name]:
+            try:
+                return float(styles[name]["ratio"])
+            except Exception:
+                return default
+        return sizes.get("ratios", {}).get(name, default)
+    try:
+        r_t = float(_ratio("toc_title", 1.9))
+    except Exception:
+        r_t = 1.9
+    parts = ['<html xmlns="http://www.w3.org/1999/xhtml"><head/><body>']
+    parts.append(f'<h1 style="text-align:center;text-indent:0;font-size:{r_t:.2f}em;">'
+                 f'{_html.escape(title)}</h1>')
+    for kind, align, text in (parsed or {}).get("lines", []) or []:
+        if kind == "pb":
+            # EPUB 无固定页：空 break-div 尽力分页（认的阅读器另起一页，
+            # 不认的零高度无残留）；不切文件，spine/toc/nav 不动
+            parts.append('<div style="break-before:page;page-break-before:always;"></div>')
+            continue
+        # HTML 塌缩空白：行首半角空格/制表转 &#160; 保留缩进；全角空格原生保留
+        _stripped = text.lstrip(" \t")
+        t = "&#160;" * (len(text) - len(_stripped)) + _html.escape(_stripped)
+        if kind == "gap":
+            # 空行：无边距＋单倍行高，合计约一倍字高（nbsp 防阅读器吞空段）；
+            # 旧 margin:0.4em 叠出一倍行高＋0.8em 边距，目测约两倍字高
+            parts.append('<p style="margin:0;line-height:1.0;">&#160;</p>')
+            continue
+        tag = {"h1": "h1", "h2": "h2", "h3": "h3", "h4": "h4", "h5": "h5"}.get(kind, "p")
+        if kind == "h1":
+            fs = r_t
+        elif kind == "h2":
+            fs = r_t * 0.85
+        elif kind == "h3":
+            fs = r_t * 0.8
+        elif kind == "h4":
+            fs = r_t * 0.7
+        elif kind == "h5":
+            fs = r_t * 0.6
+        else:
+            fs = 1.0
+        style = [f"font-size:{fs:.2f}em", "text-indent:0"]
+        if tag == "p":
+            # 正文行：收紧段间距与行高（与说明页一致），否则阅读器默认
+            # p{margin:1em 0} 会让逐行成段的说明文字显得双倍行距
+            style.append("margin:0.3em 0;line-height:1.2")
+        else:
+            # 标题行：阅读器默认边距按标题字号算（如 h1 下边距约 1.27em），
+            # 紧跟的空行/正文会被撑高；显式收紧（上宽下窄，下沿与正文同节奏）
+            style.append("margin:0.8em 0 0.3em")
+        if align == "center":
+            style.append("text-align:center")
+        elif align == "right":
+            style.append("text-align:right")
+        inner = f"<b>{t}</b>" if kind == "b" else t
+        parts.append(f'<{tag} style="{";".join(style)}">{inner}</{tag}>')
+    parts.append('</body></html>')
+    c = epub.EpubHtml(title=title, file_name="editnote.xhtml", lang="zh")
+    c.content = "".join(parts)
+    return c
+
 
 def _epub_intro_page(intro: dict):
     # EPUB 说明页（部类统计 + 完整清单）：纯流式 + 内联样式，弱 CSS 阅读器友好
@@ -980,15 +1492,16 @@ def _epub_cover_page(collection_name: str, organizer: str, titles: list=None, co
         return default
     r_cb=_ratio("cbeta", 1.0)
     r_title=_ratio("title", 3.0)
-    r_org=_ratio("organizer", 1.35)
     r_date=_ratio("date", 1.0)
+    r_org=r_date   # 整理者字号与日期一致
     col_cb=_color("cbeta", "#333333")
     col_title=_color("title", "#000000")
     col_org=_color("organizer", "#333333")
     col_date=_color("date", "#666666")
     c=epub.EpubHtml(title="封面", file_name="cover.xhtml", lang="zh")
     import html as _html
-    date=datetime.date.today().isoformat()
+    _date_text=_resolve_cover_date(cfg)
+    date=_date_text
     org=organizer or ""
     topleft=_html.escape(cfg.get("imprint", "CBETA 電子佛典自選叢書") or "")
     _cn=str(collection_name or "")
@@ -1005,7 +1518,7 @@ def _epub_cover_page(collection_name: str, organizer: str, titles: list=None, co
         f'<h1 style="font-size:{r_title}em;line-height:1.5;margin-top:1.5em;color:{col_title};">{_html.escape(_cmain)}</h1>'
         + _group_html +
         f'<p style="font-size:{r_org}em;margin-top:19em;color:{col_org};">{org}</p>'
-        f'<p style="font-size:{r_date}em;color:{col_date};">{date}</p>'
+        + (f'<p style="font-size:{r_date}em;color:{col_date};">{_html.escape(date)}</p>' if date else '') +
         '</div></body></html>'
     )
     return c
@@ -1117,7 +1630,9 @@ def _merge_epubs_bare(sources, out, split_items, titles, collection_name, progre
                 merged.add_item(it)
                 if it.get_type()==DOC_TYPE:
                     docs_spine.append(it)
-            toc.append((epub.Link(first_doc.file_name, wtitle, first_doc.id), nested))
+            toc.append((epub.Link(first_doc.file_name,
+                                  _epub_seq_title(state["done"], total_books, wtitle),
+                                  first_doc.id), nested))
         merged.add_item(epub.EpubNcx())
         merged.add_item(epub.EpubNav())
         merged.toc=tuple(toc)
@@ -1147,7 +1662,7 @@ def _merge_epubs_bare(sources, out, split_items, titles, collection_name, progre
 
 def merge_epubs(sources: list[Path], out: Path, split_items: int = 500,
                 collection_name: str=None, organizer: str="", titles: list=None,
-                cover_config: dict=None, intro: dict=None, progress=None) -> list[Path]:
+                cover_config: dict=None, intro: dict=None, progress=None, editnote: dict=None) -> list[Path]:
     try:
         import ebooklib
         from ebooklib import epub
@@ -1247,8 +1762,14 @@ def merge_epubs(sources: list[Path], out: Path, split_items: int = 500,
 
     state={"done": 0}
     total_books=len(books)
+    _en_first=[True]   # 编辑说明只进第一个合并文件
 
     def build_part(chunk, part_out):
+        if _en_first[0]:
+            _en = editnote
+        else:
+            _en = None
+        _en_first[0]=False
         merged=epub.EpubBook()
         merged.set_identifier(str(part_out))
         merged.set_title(name)
@@ -1257,6 +1778,10 @@ def merge_epubs(sources: list[Path], out: Path, split_items: int = 500,
         merged.add_metadata("DC", "publisher", "CBETA")
         cover=_epub_cover_page(name, organizer, cover_config=cover_config)
         merged.add_item(cover)
+        en_page=None
+        if _en:
+            en_page=_epub_editnote_page(_en, cover_config)
+            merged.add_item(en_page)
         intro_page=None
         if intro:
             intro_page=_epub_intro_page(intro)
@@ -1278,18 +1803,26 @@ def merge_epubs(sources: list[Path], out: Path, split_items: int = 500,
                     if cover_rel and Path(it.get_name()).stem=="titlepage":
                         rel=os.path.relpath("cover.css", os.path.dirname(it.file_name) or ".").replace("\\","/")
                         it.add_link(href=rel, rel="stylesheet", type="text/css")
-            toc.append(epub.Link(first_doc.file_name, wtitle, first_doc.id))
+            toc.append(epub.Link(first_doc.file_name,
+                                  _epub_seq_title(state["done"], total_books, wtitle),
+                                  first_doc.id))
         merged.add_item(epub.EpubNcx())
         nav=epub.EpubNav(title="丛书目录")
         nav.add_link(href="cover.css", rel="stylesheet", type="text/css")
         merged.add_item(nav)
         if intro_page is not None:
             toc.insert(0, epub.Link("intro.xhtml", intro.get("title","说明"), "intro"))
+        if en_page is not None:
+            toc.insert(0, epub.Link("editnote.xhtml",
+                                    (_en or {}).get("title") or EDITNOTE_DEFAULT_TITLE,
+                                    "editnote"))
         toc.insert(0, epub.Link("nav.xhtml", "丛书目录", "nav"))
         toc.insert(0, epub.Link("cover.xhtml", "封面", "cover"))
         merged.toc=tuple(toc)
-        # 封面→说明→丛书目录→各书(封面页+正文)；nav 紧随封面，避免目录落在最后
+        # 封面→[编辑说明→]说明→丛书目录→各书(封面页+正文)；nav 紧随封面，避免目录落在最后
         spine=[cover]
+        if en_page is not None:
+            spine.append(en_page)
         if intro_page is not None:
             spine.append(intro_page)
         merged.spine=spine+["nav"]+docs_spine

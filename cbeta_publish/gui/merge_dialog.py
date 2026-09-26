@@ -2,20 +2,21 @@
 """合并分册设置弹框：「合并时选择」模式下每次合并弹出。
 
 模式三选一：不分册 / 按刊本册 / 按目录（部类）；深度 1–5（默认 2，
-不分册时禁用）。预览列出该模式+深度下的分组 → 部数 + 拟输出文件名。
+不分册时禁用）；文件名模板输入在深度右侧，改动随确定同步设置。
+预览：首组原文全文示例（随深度动态变化，不分册清空）＋文件名清单。
 """
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QRadioButton,
                                QButtonGroup, QLabel, QSpinBox, QListWidget,
-                               QDialogButtonBox, QWidget)
+                               QDialogButtonBox, QWidget, QLineEdit)
 
 MODE_NONE, MODE_VOLUME, MODE_CATALOG = "none", "volume", "catalog"
 
 
 class MergeDialog(QDialog):
     def __init__(self, parent=None, default_mode=MODE_NONE, default_depth=2,
-                 preview=None):
+                 default_template="", preview=None):
         """
-        preview(mode, depth) -> [(label, count, stem), ...]，用于实时预览。
+        preview(mode, depth) -> [(label, count, filename), ...]，用于实时预览。
         """
         super().__init__(parent)
         self.setWindowTitle("合并设置（分册）")
@@ -40,7 +41,7 @@ class MergeDialog(QDialog):
         h.addStretch()
         v.addWidget(row)
 
-        # 深度
+        # 深度 + 文件名模板
         drow = QWidget()
         dh = QHBoxLayout(drow)
         dh.setContentsMargins(0, 0, 0, 0)
@@ -50,10 +51,17 @@ class MergeDialog(QDialog):
         self.sp_depth.setValue(max(1, min(5, int(default_depth or 2))))
         self.sp_depth.setToolTip("路径取前 N 段：1=按刊本名/顶层部类；2=刊本名_册、部类_子组（默认）")
         dh.addWidget(self.sp_depth)
-        dh.addStretch()
+        dh.addWidget(QLabel("文件名模板："))
+        self.ed_template = QLineEdit(str(default_template or ""))
+        self.ed_template.setToolTip("分册文件名模板；确定后同步设置页（变量见设置页示例）")
+        dh.addWidget(self.ed_template, 1)
         v.addWidget(drow)
 
-        v.addWidget(QLabel("预览（分组 → 部数 → 文件名）："))
+        self.lbl_example = QLabel()
+        self.lbl_example.setWordWrap(True)
+        self.lbl_example.setStyleSheet("color: gray;")
+        v.addWidget(self.lbl_example)
+        v.addWidget(QLabel("文件名："))
         self.lst = QListWidget()
         v.addWidget(self.lst, 1)
 
@@ -67,6 +75,7 @@ class MergeDialog(QDialog):
         self.rb_volume.toggled.connect(self._refresh)
         self.rb_catalog.toggled.connect(self._refresh)
         self.sp_depth.valueChanged.connect(self._refresh)
+        self.ed_template.textChanged.connect(self._refresh)
         self._refresh()
 
     def _select(self, mode):
@@ -83,9 +92,14 @@ class MergeDialog(QDialog):
             mode = MODE_NONE
         return mode, int(self.sp_depth.value())
 
+    def template(self):
+        """文件名模板输入（strip；空由调用方回退缺省）"""
+        return self.ed_template.text().strip()
+
     def _refresh(self, *_):
         mode, depth = self.chosen()
         self.sp_depth.setEnabled(mode != MODE_NONE)
+        self.lbl_example.clear()
         self.lst.clear()
         if self._preview is None:
             return
@@ -94,5 +108,16 @@ class MergeDialog(QDialog):
         except Exception as e:
             self.lst.addItem(f"预览失败：{e}")
             return
+        if mode == MODE_NONE:
+            # 不分册：无例子行，清单只显示文件名（随模板实时展开）
+            for _label, _n, stem in groups:
+                self.lst.addItem(stem)
+            return
+        shown = False
         for label, n, stem in groups:
-            self.lst.addItem(f"{label}（{n} 部） → {stem}")
+            if not shown and label:
+                self.lbl_example.setText(f"例：{label}（{n} 部）")
+                shown = True
+            if label is None:
+                continue
+            self.lst.addItem(stem)
