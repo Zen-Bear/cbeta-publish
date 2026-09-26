@@ -10,8 +10,9 @@ class DownloadWorker(QThread):
     progress = Signal(str)
     finished_all = Signal(int, int, list)  # ok, total, failed list
 
-    def __init__(self, works=None, fmts=None, dest_dir=".", pairs=None):
-        """pairs: 明确的 [(work, fmt), ...]；不传则由 works × fmts 组合。"""
+    def __init__(self, works=None, fmts=None, dest_dir=".", pairs=None, config=None):
+        """pairs: 明确的 [(work, fmt), ...]；不传则由 works × fmts 组合。
+        config: 透传给 official_ebook_source（本地库），缺省=无本地库（纯下载）。"""
         super().__init__()
         if pairs is None:
             pairs = [(w, fmt) for fmt in (fmts or []) for w in (works or [])]
@@ -19,6 +20,7 @@ class DownloadWorker(QThread):
         self.works = works if works is not None else [w for w, _ in self.pairs]
         self.fmts = fmts if fmts is not None else sorted({f for _, f in self.pairs})
         self.dest_dir = Path(dest_dir)
+        self._config = config
         self._stop = False
 
     def stop(self):
@@ -27,31 +29,43 @@ class DownloadWorker(QThread):
     def run(self):
         from cbeta_publish.books.official_ebook_source import (
             download_ebook, remote_info, is_unchanged, local_path, local_size_kb,
+            copy_from_library,
         )
         ok = 0
         total = len(self.pairs)
         failed = []
-        for w, fmt in self.pairs:
-            if self._stop:
-                break
-            dest = local_path(w, fmt, self.dest_dir)
-            existed = dest.exists()
-            if existed:
-                # 文件存在：先 HEAD 比对，无更新则跳过
-                info = remote_info(w, fmt)
-                if info is not None and is_unchanged(info, dest):
+        try:
+            for w, fmt in self.pairs:
+                if self._stop:
+                    break
+                dest = local_path(w, fmt, self.dest_dir)
+                existed = dest.exists()
+                if existed:
+                    # 文件存在：先 HEAD 比对，无更新则跳过
+                    info = remote_info(w, fmt)
+                    if info is not None and is_unchanged(info, dest):
+                        ok += 1
+                        self.progress.emit(f"跳过 {w}.{fmt}（已是最新）")
+                        continue
+                self.progress.emit(f"下载 {w}.{fmt} ...")
+                got = copy_from_library(w, fmt, self.dest_dir, self._config)
+                kind = "本地库" if got is not None else None
+                if got is None:
+                    got = download_ebook(w, fmt, self.dest_dir, self._config)
+                if got and got.exists():
                     ok += 1
-                    self.progress.emit(f"跳过 {w}.{fmt}（已是最新）")
-                    continue
-            self.progress.emit(f"下载 {w}.{fmt} ...")
-            got = download_ebook(w, fmt, self.dest_dir)
-            if got and got.exists():
-                ok += 1
-                kb = local_size_kb(got)
-                word = "更新" if existed else "完成"
-                # 与上一行合并：下载 X ...完成 NKB
-                self.progress.emit(f"{REPLACE_LAST}下载 {w}.{fmt} ...{word} {kb}KB")
-            else:
-                failed.append(f"{w}.{fmt}")
-                self.progress.emit(f"{REPLACE_LAST}下载 {w}.{fmt} ...失败")
+                    kb = local_size_kb(got)
+                    word = "更新" if existed else "完成"
+                    # 与上一行合并：下载 X ...完成 NKB（本地库来源单独标注）
+                    self.progress.emit(f"{REPLACE_LAST}{kind or '下载'} {w}.{fmt} ...{word} {kb}KB")
+                else:
+                    failed.append(f"{w}.{fmt}")
+                    self.progress.emit(f"{REPLACE_LAST}下载 {w}.{fmt} ...失败")
+        except BaseException as e:
+            # 同 VerifyWorker：异常（含 SystemExit）也必须发出 finished_all，
+            # 否则主线程嵌套事件循环永不退出（界面挂死）
+            print("download worker fail", e)
+            for w, fmt in self.pairs:
+                if f"{w}.{fmt}" not in failed:
+                    failed.append(f"{w}.{fmt}")
         self.finished_all.emit(ok, total, failed)

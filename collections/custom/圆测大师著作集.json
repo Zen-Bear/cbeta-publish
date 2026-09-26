@@ -1,0 +1,25 @@
+{
+  "id": "custom_kongbaicongshu_20260925",
+  "slug": "custom_yuancedashizhuzuoji_20260925",
+  "name": "圆测大师著作集",
+  "category": "custom",
+  "tags": [
+    "custom"
+  ],
+  "work_ids": [
+    "T1708",
+    "T1711",
+    "CC0003",
+    "CC0004",
+    "X0369"
+  ],
+  "works": [],
+  "source": "official",
+  "work_sources": {},
+  "work_groups": {},
+  "xml_options": {},
+  "created_at": "2026-09-25T19:38:42.885360Z",
+  "updated_at": "2026-09-25T19:39:06.316244Z",
+  "last_publish_at": "2026-09-25T19:39:48.005697Z",
+  "last_publish_dir": "E:\\dev\\cbeta\\publish\\collections_books\\圆测大师著作集"
+}

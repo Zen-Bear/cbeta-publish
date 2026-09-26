@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
     QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QCheckBox, QPushButton,
     QLabel, QFileDialog, QColorDialog, QMessageBox, QGroupBox,
     QTableWidget, QTableWidgetItem, QHeaderView, QApplication,
-    QListWidget, QListWidgetItem, QRadioButton, QButtonGroup,
+    QListWidget, QListWidgetItem, QRadioButton, QButtonGroup, QToolButton,
 )
 from PySide6.QtCore import Qt, QEvent
 from PySide6.QtGui import QColor
@@ -16,10 +16,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_PATH = PROJECT_ROOT / "config" / "app.json"
 BACKUP_DIR = PROJECT_ROOT / "mulu" / "backup"
 IMAGES_DIR = PROJECT_ROOT / "assets" / "images"
-DEFAULT_IMAGES_DIR = IMAGES_DIR / "default"
 
 DEFAULT_CONFIG = {
     "official_ebooks_dir": str(PROJECT_ROOT / "cbeta_ebooks"),
+    "official_library": {"root": "", "overrides": {}},
     "xml_to_ebooks_dir": str(PROJECT_ROOT / "cbeta_xml_ebooks"),
     "verify_dir": str(PROJECT_ROOT / "cbeta_verify"),
     "mulu_dir": str(PROJECT_ROOT / "mulu"),
@@ -37,9 +37,9 @@ DEFAULT_CONFIG = {
         "official": ["pdf", "epub", "html", "docx", "txt"],
         "xml": ["pdf", "docx"],
     },
-    "pdf": {"split_pages": 5000},
-    "epub": {"split_items": 500},
-    "merge": {"mode": "none", "depth": 2, "by_volume": False},
+    "pdf": {"split_pages": 0},
+    "epub": {"split_items": 0},
+    "merge": {"mode": "none", "depth": 2, "by_volume": False, "name_template": "{coll}.{nn}.{seg}"},
     "xml2pdf": {"path": "E:/dev/cbeta/xml2pdf",
                 "cbeta_ebook": str(PROJECT_ROOT / "cbeta_xml"),
                 "preset": "", "verify_build": False},
@@ -47,12 +47,16 @@ DEFAULT_CONFIG = {
     "cover": {
         "organizer": "CBETA 整理",
         "imprint": "CBETA 電子佛典自選叢書",
+        "date_text": "{date}",
         "mode": "print",
         "enabled": True,
         "intro": {"enabled": True, "title": "说明", "note": "依 CBETA XML 自制", "list": True},
+        "bulei": {"enabled": True, "depth": 0, "layout": "lines", "sep": "·",
+                  "show_num": False, "titles": "none"},
+        "edit_note": {"file": "", "enabled": False},
         "images": {
-            "buddha": {"file": "assets/images/buddha.jpg", "enabled": True},
-            "weituo": {"file": "assets/images/weituo.jpg", "enabled": True},
+            "buddha": {"file": "", "enabled": True},
+            "weituo": {"file": "", "enabled": True},
         },
         "sizes": {
             "body_a5": 10, "body_a4": 12, "body_16k": 11, "body_32k": 9,
@@ -76,7 +80,8 @@ DEFAULT_CONFIG = {
         },
         "positions": {
             "cbeta_left_mm": 18, "cbeta_top_mm": 12,
-            "title_y_ratio": 0.30, "organizer_y_ratio": 0.84, "date_y_ratio": 0.89,
+            "title_y_ratio": 0.25, "group_y_ratio": 0.30,
+            "organizer_y_ratio": 0.84, "date_y_ratio": 0.89,
             "toc_y_ratio": 0.15, "toc_item_y_ratio": 0.25,
         },
     },
@@ -183,6 +188,39 @@ class SettingsDialog(QDialog):
         if d:
             edit.setText(d)
 
+    def _lib_overrides_from_ui(self):
+        return {f: ed.text().strip() for f, ed in self.lib_override_edits.items()
+                if ed.text().strip()}
+
+    def _toggle_lib_body(self):
+        show = not self.lib_body.isVisible()
+        self.lib_body.setVisible(show)
+        self.btn_lib_collapse.setArrowType(Qt.DownArrow if show else Qt.RightArrow)
+
+    def _refresh_lib_map(self, show_popup=False):
+        # 解析映射并回填覆盖占位；show_popup 时弹窗说明结果
+        notes = []
+        try:
+            from cbeta_publish.books import official_ebook_source as _oes
+            root = (self.ed_official_lib.text() or "").strip()
+            ov = self._lib_overrides_from_ui()
+            if not root:
+                notes = ["未配置本地库（仅网上下载）"]
+            else:
+                _mapping, notes = _oes.resolve_library_map(root, ov)
+            for f, ed in self.lib_override_edits.items():
+                auto = None
+                if root:
+                    _m, _ = _oes.resolve_library_map(root, {})
+                    _d = _m.get(f, {}).get("dir")
+                    auto = _d.name if _d is not None else None
+                ed.setPlaceholderText(f"自动{('：' + auto) if auto else '（留空）'}")
+        except Exception as e:
+            notes = [f"扫描失败：{e}"]
+        if show_popup:
+            QMessageBox.information(self, "格式映射扫描结果", "\n".join(notes) if notes else "无可用格式")
+        return notes
+
     def _tab_dirs(self):
         w = QWidget()
         form = QFormLayout(w)
@@ -225,18 +263,48 @@ class SettingsDialog(QDialog):
         def_form.addRow("官方 ZIP/导出默认", ro)
         def_form.addRow("自制 ZIP/导出默认", rx)
         form.addRow(def_box)
-        # 分册：0=不分册
-        split_box = QGroupBox("分册（0=不分册）")
-        split_form = QFormLayout(split_box)
-        self.sp_split_pdf = self._no_wheel_until_focused(QSpinBox())
-        self.sp_split_pdf.setRange(0, 99999)
-        self.sp_split_pdf.setValue(int((self._cfg.get("pdf", {}) or {}).get("split_pages", 5000) or 0))
-        split_form.addRow("PDF 分册页数", self.sp_split_pdf)
-        self.sp_split_epub = self._no_wheel_until_focused(QSpinBox())
-        self.sp_split_epub.setRange(0, 99999)
-        self.sp_split_epub.setValue(int((self._cfg.get("epub", {}) or {}).get("split_items", 500) or 0))
-        split_form.addRow("EPUB 分册文档数", self.sp_split_epub)
-        form.addRow(split_box)
+        # 官方电子书本地库（冻结快照；本地优先、缺失回退下载）
+        lib_head = QWidget()
+        _lhh = QHBoxLayout(lib_head)
+        _lhh.setContentsMargins(0, 0, 0, 0)
+        _lib_title = QLabel("<b>官方电子书本地库（本地优先）</b>")
+        _lhh.addWidget(_lib_title)
+        _lhh.addStretch()
+        self.btn_lib_collapse = QToolButton()
+        self.btn_lib_collapse.setArrowType(Qt.RightArrow)
+        self.btn_lib_collapse.setAutoRaise(True)
+        self.btn_lib_collapse.setToolTip("展开/收起")
+        _lhh.addWidget(self.btn_lib_collapse)
+        form.addRow(lib_head)
+        lib_body = QWidget()
+        self.lib_body = lib_body
+        lib_form = QFormLayout(lib_body)
+        lib_form.setContentsMargins(0, 0, 0, 0)
+        self.ed_official_lib = QLineEdit((self._cfg.get("official_library") or {}).get("root", ""))
+        self.ed_official_lib.setPlaceholderText("本地库根目录（空=关闭，仅网上下载），如 E:/CBETA/2026r2")
+        self.ed_official_lib.editingFinished.connect(self._refresh_lib_map)
+        lib_form.addRow("本地库目录", self._dir_row(self.ed_official_lib))
+        _map_row = QWidget()
+        _mrh = QHBoxLayout(_map_row)
+        _mrh.setContentsMargins(0, 0, 0, 0)
+        _mrh.addStretch()
+        self.btn_lib_refresh = QPushButton("重新扫描")
+        self.btn_lib_refresh.setToolTip("按关键字＋文件形态自动探测各格式子目录，结果弹窗说明")
+        self.btn_lib_refresh.clicked.connect(lambda: self._refresh_lib_map(show_popup=True))
+        _mrh.addWidget(self.btn_lib_refresh)
+        lib_form.addRow("格式映射", _map_row)
+        self.lib_override_edits = {}
+        _ov = (self._cfg.get("official_library") or {}).get("overrides") or {}
+        for _f in ("pdf", "epub", "html", "docx", "odt", "txt", "txt_notes"):
+            _ed = QLineEdit(str(_ov.get(_f, "") or ""))
+            _ed.setPlaceholderText("自动（留空）")
+            _ed.setToolTip(f"手动指定 { _f} 的子目录名；留空走自动探测")
+            self.lib_override_edits[_f] = _ed
+            lib_form.addRow(f"覆盖:{_f}", _ed)
+        form.addRow(lib_body)
+        self.btn_lib_collapse.clicked.connect(self._toggle_lib_body)
+        lib_body.setVisible(False)  # 默认收起
+        self._refresh_lib_map()
         # 分册模式：合并时按此分组；「合并时选择」则每次点合并弹框
         mode_box = QGroupBox("分册模式（合并）")
         mv = QVBoxLayout(mode_box)
@@ -248,10 +316,15 @@ class SettingsDialog(QDialog):
         self.rb_merge_volume.setToolTip("按 mulu/vol.json 的刊本/册分组（一册一个文件）")
         self.rb_merge_catalog.setToolTip("按部类树路径分组（如 01 阿含部類 / 長阿含經）")
         self.rb_merge_ask.setToolTip("每次点合并时弹框选择分册模式与深度")
+        _mrow = QWidget()
+        _mh = QHBoxLayout(_mrow)
+        _mh.setContentsMargins(0, 0, 0, 0)
         for _i, _rb in enumerate((self.rb_merge_none, self.rb_merge_volume,
                                   self.rb_merge_catalog, self.rb_merge_ask)):
-            mv.addWidget(_rb)
+            _mh.addWidget(_rb)
             self.merge_mode_group.addButton(_rb, _i)
+        _mh.addStretch()
+        mv.addWidget(_mrow)
         _drow = QWidget()
         _dh = QHBoxLayout(_drow)
         _dh.setContentsMargins(0, 0, 0, 0)
@@ -263,9 +336,51 @@ class SettingsDialog(QDialog):
         _dh.addWidget(self.sp_merge_depth)
         _dh.addStretch()
         mv.addWidget(_drow)
+        _nrow = QWidget()
+        _nh = QHBoxLayout(_nrow)
+        _nh.setContentsMargins(0, 0, 0, 0)
+        _nh.addWidget(QLabel("分册文件名模板"))
+        self.ed_merge_name = QLineEdit()
+        self.ed_merge_name.setText(str((self._cfg.get("merge", {}) or {}).get("name_template", "{coll}.{nn}.{seg}") or "{coll}.{nn}.{seg}"))
+        self.ed_merge_name.setToolTip("分册文件名模板（变量见下方示例）；缺省 {coll}.{nn}.{seg}")
+        self.ed_merge_name.setPlaceholderText("{coll}.{nn}.{seg}")
+        _nh.addWidget(self.ed_merge_name, 1)
+        mv.addWidget(_nrow)
+        _nhint = QLabel("例：{coll} {seg} → 太虛大師全書 01 編纂說明；{coll} {nn} {seg}.{count}册 → 太虛大師全書 02 法藏.12册")
+        _nhint.setStyleSheet("color: gray;")
+        _nhint.setWordWrap(True)
+        mv.addWidget(_nhint)
+        _seghint = QLabel("变量（以分段 06 寶積部類 / 淨土經／論／疏 / 阿彌陀經 为例）："
+                          "{seg0}→06；{seg1}→寶積部類；{seg2}→淨土經／論／疏；"
+                          "{seg3}→阿彌陀經；{seg}＝末段；{stem}→下划线全路径；"
+                          "{label}→斜杠全路径；{n}→序号（不补零）；{nn}→序号"
+                          "（自适应补零，宽度看总文件数）；{count}→本组部数；"
+                          "{coll}→丛书名。超段变量置空。")
+        _seghint.setStyleSheet("color: gray;")
+        _seghint.setWordWrap(True)
+        mv.addWidget(_seghint)
         form.addRow(mode_box)
         self._set_merge_mode()
-        return w
+        # 分册阈值：0=不分册（默认）；暂隐藏，值仍随保存/载入
+        self.split_box = QGroupBox("分册（0=不分册）")
+        split_form = QFormLayout(self.split_box)
+        self.sp_split_pdf = self._no_wheel_until_focused(QSpinBox())
+        self.sp_split_pdf.setRange(0, 99999)
+        self.sp_split_pdf.setValue(int((self._cfg.get("pdf", {}) or {}).get("split_pages", 0) or 0))
+        split_form.addRow("PDF 分册页数", self.sp_split_pdf)
+        self.sp_split_epub = self._no_wheel_until_focused(QSpinBox())
+        self.sp_split_epub.setRange(0, 99999)
+        self.sp_split_epub.setValue(int((self._cfg.get("epub", {}) or {}).get("split_items", 0) or 0))
+        split_form.addRow("EPUB 分册文档数", self.sp_split_epub)
+        form.addRow(self.split_box)
+        self.split_box.setVisible(False)
+        # 内容超高：套卷动窗（同封面/版式页），对话框保持 680×560
+        from PySide6.QtWidgets import QScrollArea
+        sc = QScrollArea()
+        sc.setWidgetResizable(True)
+        sc.setFrameShape(QScrollArea.NoFrame)
+        sc.setWidget(w)
+        return sc
 
     def _merge_mode_value(self):
         if self.rb_merge_volume.isChecked():
@@ -290,6 +405,7 @@ class SettingsDialog(QDialog):
         except Exception:
             d = 2
         self.sp_merge_depth.setValue(max(1, min(5, d)))
+        self.ed_merge_name.setText(str((c.get("merge", {}) or {}).get("name_template", "{coll}.{nn}.{seg}") or "{coll}.{nn}.{seg}"))
 
     @staticmethod
     def _official_pack_fmts():
@@ -330,7 +446,7 @@ class SettingsDialog(QDialog):
         self.ed_verify.setPlaceholderText("校验工作目录（默认 cbeta_verify）")
         self.cb_preset = self._no_wheel_until_focused(QComboBox())
         self._reload_preset_combo()
-        # 自制书籍：右栏「自制/重制」按钮是否带校验（校验通过才导入）
+        # 制作书籍：右栏「自制/重制」按钮是否带校验（校验通过才导入）
         self.build_verify_box = QWidget()
         _bvb = QHBoxLayout(self.build_verify_box)
         _bvb.setContentsMargins(0, 0, 0, 0)
@@ -345,7 +461,7 @@ class SettingsDialog(QDialog):
         _bvb.addStretch()
         (self.rb_build_verify if (self._cfg.get("xml2pdf", {}) or {}).get("verify_build")
          else self.rb_build_noverify).setChecked(True)
-        form.addRow("自制书籍", self.build_verify_box)
+        form.addRow("制作书籍", self.build_verify_box)
         form.addRow("自制程序路径", self._dir_row(self.ed_x2p))
         form.addRow("CBETA XML 目录", self._dir_row(self.ed_x2p_ebook))
         form.addRow("自制电子书", self._dir_row(self.ed_xmlbooks))
@@ -403,14 +519,16 @@ class SettingsDialog(QDialog):
         self.ed_organizer = QLineEdit(cover.get("organizer", "CBETA 整理"))
         self.ed_imprint = QLineEdit(cover.get("imprint", "CBETA 電子佛典自選叢書"))
         self.ed_imprint.setToolTip("封面左上角文字；可填系列名（如太虛大師全書）或落款；留空则不绘制")
+        self.ed_date = QLineEdit(cover.get("date_text", "{date}"))
+        self.ed_date.setToolTip("封面日期行（整理者之后）；{date}=今天，可直接写任意文字；留空则不绘制")
         # PDF 合并模式：打印模式（补空白页）/ 阅读模式（去空白）
         self.cb_mode = QWidget()
         _mh = QHBoxLayout(self.cb_mode)
         _mh.setContentsMargins(0, 0, 0, 0)
         self.rb_print = QRadioButton("打印模式")
         self.rb_reading = QRadioButton("阅读模式")
-        self.rb_print.setToolTip("补空白页：封面/佛像/目录/正文/韦陀/封底按页序对齐")
-        self.rb_reading.setToolTip("去空白：去掉空白页，适合屏幕阅读")
+        self.rb_print.setToolTip("打印模式：补空白页（封面/封面图/目录/正文/封底图/封底按页序对齐）")
+        self.rb_reading.setToolTip("阅读模式：去空白（去掉空白页，适合屏幕阅读）")
         self.mode_group = QButtonGroup(self)
         self.mode_group.addButton(self.rb_print)
         self.mode_group.addButton(self.rb_reading)
@@ -418,36 +536,105 @@ class SettingsDialog(QDialog):
         _mh.addWidget(self.rb_reading)
         _mh.addStretch()
         self._set_mode(cover.get("mode", "print"))
-        form.addRow("整理者署名", self.ed_organizer)
         form.addRow("左上角系列名", self.ed_imprint)
+        form.addRow("整理者署名", self.ed_organizer)
+        form.addRow("日期", self.ed_date)
         form.addRow("PDF 合并模式", self.cb_mode)
-        form.addRow(QLabel("打印=补空白页（封面/佛像/目录/正文/韦陀/封底）；阅读=去空白"))
-        self.chk_cover_enabled = QCheckBox("合并时使用封面/封底页")
+        self.chk_cover_enabled = QCheckBox("合并时加封面封底、说明（以下所有内容）")
+        self.chk_cover_enabled.setToolTip("关闭后直接拼接原文件，仅生成书签（原书书签降一级归入对应书下）")
         self.chk_cover_enabled.setChecked(bool(cover.get("enabled", True)))
         form.addRow(self.chk_cover_enabled)
-        hint_cover = QLabel("关闭后直接拼接原文件，仅生成书签（原书书签降一级归入对应书下）。")
-        hint_cover.setStyleSheet("color: gray;")
-        hint_cover.setWordWrap(True)
-        form.addRow(hint_cover)
-        # 说明页（部类统计 + 完整清单，自动从书单推导；仅封面模式生效）
+        # 编辑说明（TXT 转排版，插在说明页之前、仅第一分册；默认关闭）：
+        # 复选框＋浏览按钮＋输入框同一行（无单独标签行）
+        _en = cover.setdefault("edit_note", {"file": "", "enabled": False})
+        self.ed_editnote = QLineEdit(_en.get("file", ""))
+        self.ed_editnote.setReadOnly(True)
+        self.ed_editnote.setPlaceholderText("未关联（合并时不插编辑说明页）")
+        _enrow = QWidget()
+        _enh = QHBoxLayout(_enrow)
+        _enh.setContentsMargins(0, 0, 0, 0)
+        self.chk_editnote_enabled = QCheckBox("插入编辑说明页")
+        self.chk_editnote_enabled.setChecked(bool(_en.get("enabled", False)))
+        self.btn_editnote_file = QPushButton("（内容文件）")
+        self.btn_editnote_file.setToolTip("选择编辑说明 TXT 文件")
+        self.btn_editnote_file.clicked.connect(self._pick_editnote)
+        _enh.addWidget(self.chk_editnote_enabled)
+        _enh.addWidget(self.btn_editnote_file)
+        _enh.addWidget(self.ed_editnote, 1)
+        form.addRow(_enrow)
+        # 说明页（部类统计 + 完整清单，自动从书单推导；仅封面模式生效）：
+        # 标题标签＋输入框并到复选框同一行右侧
         intro = cover.setdefault("intro", {"enabled": True, "title": "说明", "note": "依 CBETA XML 自制", "list": True})
+        _inrow = QWidget()
+        _inh = QHBoxLayout(_inrow)
+        _inh.setContentsMargins(0, 0, 0, 0)
         self.chk_intro_enabled = QCheckBox("插入说明页（部类统计 + 完整清单）")
         self.chk_intro_enabled.setChecked(bool(intro.get("enabled", True)))
-        form.addRow(self.chk_intro_enabled)
         self.ed_intro_title = QLineEdit(intro.get("title", "说明"))
-        form.addRow("说明页标题", self.ed_intro_title)
+        _inh.addWidget(self.chk_intro_enabled)
+        _inh.addWidget(QLabel("说明页标题"))
+        _inh.addWidget(self.ed_intro_title, 1)
+        form.addRow(_inrow)
         self.ed_intro_note = QLineEdit(intro.get("note", "依 CBETA XML 自制"))
         self.ed_intro_note.setToolTip("说明页标题下一行（居中）；仅来源=自制时显示。留空则不显示。")
         form.addRow("自制书说明", self.ed_intro_note)
-        hint_intro = QLabel("部类统计与清单自动从丛书书单推导；仅在「合并时使用封面/封底页」开启时插入。")
+        hint_intro = QLabel("部类统计与清单自动从丛书书单推导；仅在「合并时加封面封底、说明（以下所有内容）」开启时插入。")
         hint_intro.setStyleSheet("color: gray;")
         hint_intro.setWordWrap(True)
         form.addRow(hint_intro)
+        # 封面部类行（分册副标题显示形态；不分册无副标题）
+        _bl = cover.setdefault("bulei", {"enabled": True, "depth": 0, "layout": "lines",
+                                          "sep": "·", "show_num": False, "titles": "none"})
+        _brow = QWidget()
+        _bh = QHBoxLayout(_brow)
+        _bh.setContentsMargins(0, 0, 0, 0)
+        _bh.addWidget(QLabel("封面部类行"))
+        self.chk_bulei_show = QCheckBox("显示部类/书名")
+        self.chk_bulei_show.setChecked(bool(_bl.get("enabled", True)))
+        self.chk_bulei_show.setToolTip("总开关：关则封面只剩丛书名，不画部类行与书名")
+        _bh.addWidget(self.chk_bulei_show)
+        self.cb_bulei_titles = QComboBox()
+        self.cb_bulei_titles.addItem("不显示书名", "none")
+        self.cb_bulei_titles.addItem("显示所有书名", "all")
+        _ti = max(0, self.cb_bulei_titles.findData(_bl.get("titles", "none")))
+        self.cb_bulei_titles.setCurrentIndex(_ti)
+        self.cb_bulei_titles.setToolTip("显示所有书名：一行一个，不跟部类行设置")
+        _bh.addWidget(self.cb_bulei_titles)
+        _bh.addStretch()
+        form.addRow(_brow)
+        _brow2 = QWidget()
+        _bh2 = QHBoxLayout(_brow2)
+        _bh2.setContentsMargins(0, 0, 0, 0)
+        _bh2.addWidget(QLabel("部类行细节"))
+        self.sp_bulei_depth = self._no_wheel_until_focused(QSpinBox())
+        self.sp_bulei_depth.setRange(0, 5)
+        try:
+            _bd = int((_bl.get("depth", 0) or 0))
+        except Exception:
+            _bd = 0
+        self.sp_bulei_depth.setValue(max(0, min(5, _bd)))
+        self.sp_bulei_depth.setToolTip("显示深度：0=跟随分册深度；1–5 取全路径前 N 段")
+        _bh2.addWidget(self.sp_bulei_depth)
+        self.cb_bulei_layout = QComboBox()
+        self.cb_bulei_layout.addItem("每层一行", "lines")
+        self.cb_bulei_layout.addItem("一行", "one")
+        _li = max(0, self.cb_bulei_layout.findData(_bl.get("layout", "lines")))
+        self.cb_bulei_layout.setCurrentIndex(_li)
+        _bh2.addWidget(self.cb_bulei_layout)
+        self.ed_bulei_sep = QLineEdit(str(_bl.get("sep", "·") or "·"))
+        self.ed_bulei_sep.setMaximumWidth(40)
+        self.ed_bulei_sep.setToolTip("一行模式分隔符（默认 ·）")
+        _bh2.addWidget(self.ed_bulei_sep)
+        self.chk_bulei_num = QCheckBox("显示序号前缀（如 06）")
+        self.chk_bulei_num.setChecked(bool(_bl.get("show_num", False)))
+        _bh2.addWidget(self.chk_bulei_num)
+        _bh2.addStretch()
+        form.addRow(_brow2)
         outer.addLayout(form)
-        # 版式子页签（按使用顺序）：佛像/背景色 → 字体 → 基准字号 → 边距
+        # 版式子页签（按使用顺序）：封面/封底图、背景色 → 字体 → 基准字号 → 边距
         sub = QTabWidget()
         self._cover_subtabs = sub
-        sub.addTab(self._cover_tab_images(cover), "封面佛像、背景色")
+        sub.addTab(self._cover_tab_images(cover), "封面/封底图、背景色")
         sub.addTab(self._cover_tab_fonts(cover), "字体")
         sub.addTab(self._cover_tab_sizes(cover), "基准字号")
         sub.addTab(self._cover_tab_margins(cover), "边距")
@@ -461,15 +648,15 @@ class SettingsDialog(QDialog):
         return sc
 
     def _cover_tab_images(self, cover):
-        # 子页签 1：封面佛像/韦陀 + 背景色
+        # 子页签 1：封面图/封底图 + 背景色
         w = QWidget()
         form = QFormLayout(w)
         images = cover.setdefault("images", {
-            "buddha": {"file": "assets/images/buddha.jpg", "enabled": True},
-            "weituo": {"file": "assets/images/weituo.jpg", "enabled": True},
+            "buddha": {"file": "", "enabled": True},
+            "weituo": {"file": "", "enabled": True},
         })
         self.img_rows = {}
-        for key, label in [("buddha", "佛像"), ("weituo", "韦陀菩萨像")]:
+        for key, label in [("buddha", "封面图"), ("weituo", "封底图")]:
             box = QWidget()
             h = QHBoxLayout(box)
             h.setContentsMargins(0, 0, 0, 0)
@@ -482,11 +669,13 @@ class SettingsDialog(QDialog):
             btn.clicked.connect(lambda _, k=key, e=ed: self._pick_image(k, e))
             h.addWidget(chk); h.addWidget(ed, 1); h.addWidget(btn)
             self.img_rows[key] = (chk, ed)
+            # 启用即选默认：空/失效路径自动填入 images/ 下的 1.*/2.*
+            self._ensure_default_image(key, chk, ed)
+            chk.toggled.connect(lambda _on, k=key, c=chk, e=ed: self._ensure_default_image(k, c, e))
             form.addRow(label, box)
-        self.btn_reset_images = QPushButton("恢复默认图片（从 assets/images/default/）")
-        self.btn_reset_images.clicked.connect(self._reset_images)
-        form.addRow(self.btn_reset_images)
-        hint = QLabel("关闭图像开关后，合成时不插入该图及其前后空白页。")
+        hint = QLabel("启用后自动选用 assets/images/ 下的 B01.jpg（封面图）/ B02.jpg（封底图）；"
+                      "文件不存在时回退 1.* / 2.*（后缀不限）；「浏览…」可换图（按编号存放）。"
+                      "关闭图像开关后，合成时不插入该图及其前后空白页。")
         hint.setStyleSheet("color: gray;")
         hint.setWordWrap(True)
         form.addRow(hint)
@@ -499,7 +688,35 @@ class SettingsDialog(QDialog):
         self._refresh_bg_btn()
         self.btn_bg.clicked.connect(self._pick_bg)
         form.addRow("封面背景色", self.btn_bg)
+        # 说明页/目录页背景色（缺席＝跟随封面背景色；单独选色后独立）
+        self._bg_colors = {}
+        self._bg_btns = {}
+        self._bg_custom = set()
+        for _key, _label in (("intro_background", "说明页背景色"),
+                             ("toc_background", "目录页背景色")):
+            _btn = QPushButton()
+            _btn.setFixedWidth(80)
+            self._bg_btns[_key] = _btn
+            _btn.clicked.connect(lambda _, k=_key, t=_label: self._pick_bg_for(k, t))
+            form.addRow(_label, _btn)
+        self._sync_bg_colors(cover)
         return w
+
+    def _sync_bg_colors(self, cover):
+        # 说明/目录背景色回读：有显式值则独立显示并记 custom；无则显示封面色（跟随）
+        styles = cover.setdefault("styles", {})
+        _cover_bg = ((styles.get("background") or {}).get("color")
+                     or [250, 245, 230])
+        for _key in ("intro_background", "toc_background"):
+            _info = styles.get(_key) or {}
+            _c = _info.get("color") if isinstance(_info, dict) else None
+            if isinstance(_c, (list, tuple)) and len(_c) == 3:
+                self._bg_custom.add(_key)
+            else:
+                self._bg_custom.discard(_key)
+                _c = list(_cover_bg)
+            self._bg_colors[_key] = QColor(*_c)
+            self._refresh_bg_btn_for(_key)
 
     def _cover_tab_fonts(self, cover):
         # 子页签 2：字体（封面/目录/说明页）：styles.<key>.font
@@ -512,22 +729,44 @@ class SettingsDialog(QDialog):
             ("date", "日期"), ("toc_title", "目录/说明标题"),
             ("toc_item", "目录/说明条目"), ("toc_page", "目录页码"),
             ("intro_summary", "说明页简介"),
+            ("editnote_title", "编辑说明标题"), ("editnote_body", "编辑说明正文"),
         ]
-        _font_defaults = {"intro_summary": "C:/Windows/Fonts/simfang.ttf"}
+        _font_defaults = {"intro_summary": "C:/Windows/Fonts/simfang.ttf",
+                          "editnote_title": "C:/Windows/Fonts/msyhbd.ttc",
+                          "editnote_body": "C:/Windows/Fonts/simsun.ttc"}
         for key, label in font_labels:
             row = QWidget()
             h = QHBoxLayout(row)
             h.setContentsMargins(0, 0, 0, 0)
             cur = styles.get(key, {}).get("font", "") or _font_defaults.get(key, "")
             ed = QLineEdit(self._native_path(cur))
-            ed.setReadOnly(True)
             ed.setToolTip("缺繁体字形时按顺序回退到系统全字库（黑体simhei → 微软雅黑msyh → 宋体simsun）")
+            ed.editingFinished.connect(lambda _k=key, _e=ed: self._check_font_row(_k, _e))
             btn = QPushButton("浏览…")
             btn.clicked.connect(lambda _, k=key, e=ed: self._pick_font(k, e))
             h.addWidget(ed, 1); h.addWidget(btn)
             self.font_rows[key] = ed
+            self._check_font_row(key, ed)
             form.addRow(label, row)
         return w
+
+    def _check_font_row(self, key, ed):
+        # 字体路径存在性检测：缺失标红框（保存不断言，合并时按既有规则回退）
+        _tip = "缺繁体字形时按顺序回退到系统全字库（黑体simhei → 微软雅黑msyh → 宋体simsun）"
+        try:
+            cur = (ed.text() or "").strip()
+            ed.setStyleSheet("")
+            ed.setToolTip(_tip)
+            if not cur:
+                return
+            p = Path(cur)
+            if not p.is_absolute():
+                p = PROJECT_ROOT / p
+            if not p.is_file():
+                ed.setStyleSheet("border: 1px solid red;")
+                ed.setToolTip(f"路径不存在：{cur}（合并时将回退系统全字库）")
+        except Exception:
+            pass
 
     def _cover_tab_sizes(self, cover):
         # 子页签 3：封面页基准字号（纸张联动基准）
@@ -587,6 +826,12 @@ class SettingsDialog(QDialog):
         self.ed_mulu.setText(self._native_path(c.get("mulu_dir", "")))
         self.ed_collections.setText(self._native_path(c.get("collections_dir", "")))
         self.ed_ebooks.setText(self._native_path(c.get("official_ebooks_dir", "")))
+        _lib = c.get("official_library") or {}
+        self.ed_official_lib.setText(self._native_path(_lib.get("root", "")))
+        _ov = _lib.get("overrides") or {}
+        for _f, _ed in self.lib_override_edits.items():
+            _ed.setText(str(_ov.get(_f, "") or ""))
+        self._refresh_lib_map()
         self.ed_xmlbooks.setText(self._native_path(
             c.get("xml_to_ebooks_dir") or str(PROJECT_ROOT / "cbeta_xml_ebooks")))
         self.ed_verify.setText(self._native_path(
@@ -615,12 +860,30 @@ class SettingsDialog(QDialog):
         self._migrate_series_imprint(cover)
         self.ed_organizer.setText(cover.get("organizer", "CBETA 整理"))
         self.ed_imprint.setText(cover.get("imprint", "CBETA 電子佛典自選叢書"))
+        self.ed_date.setText(cover.get("date_text", "{date}"))
         self._set_mode(cover.get("mode", "print"))
         self.chk_cover_enabled.setChecked(bool(cover.get("enabled", True)))
+        _en = cover.setdefault("edit_note", {"file": "", "enabled": False})
+        self.ed_editnote.setText(_en.get("file", ""))
+        self.chk_editnote_enabled.setChecked(bool(_en.get("enabled", False)))
         intro = cover.setdefault("intro", {})
         self.chk_intro_enabled.setChecked(bool(intro.get("enabled", True)))
         self.ed_intro_title.setText(intro.get("title", "说明"))
         self.ed_intro_note.setText(intro.get("note", "依 CBETA XML 自制"))
+        _bl = cover.setdefault("bulei", {"enabled": True, "depth": 0, "layout": "lines",
+                                          "sep": "·", "show_num": False, "titles": "none"})
+        self.chk_bulei_show.setChecked(bool(_bl.get("enabled", True)))
+        _ti = max(0, self.cb_bulei_titles.findData(_bl.get("titles", "none")))
+        self.cb_bulei_titles.setCurrentIndex(_ti)
+        try:
+            _bd = int((_bl.get("depth", 0) or 0))
+        except Exception:
+            _bd = 0
+        self.sp_bulei_depth.setValue(max(0, min(5, _bd)))
+        _li = max(0, self.cb_bulei_layout.findData(_bl.get("layout", "lines")))
+        self.cb_bulei_layout.setCurrentIndex(_li)
+        self.ed_bulei_sep.setText(str(_bl.get("sep", "·") or "·"))
+        self.chk_bulei_num.setChecked(bool(_bl.get("show_num", False)))
         sizes = cover.setdefault("sizes", {})
         for paper, sp in self.sp_body.items():
             sp.setValue(int(sizes.get(f"body_{paper}", {"a5":10,"a4":12,"16k":11,"32k":9}[paper])))
@@ -639,21 +902,26 @@ class SettingsDialog(QDialog):
         bg = styles.setdefault("background", {"color": [250, 245, 230]})
         self._bg_color = QColor(*bg.get("color", [250, 245, 230]))
         self._refresh_bg_btn()
+        self._sync_bg_colors(cover)
         images = cover.setdefault("images", {})
         for key, (chk, ed) in self.img_rows.items():
             info = images.setdefault(key, {"file": "", "enabled": True})
             chk.setChecked(bool(info.get("enabled", True)))
             ed.setText(info.get("file", ""))
+            self._ensure_default_image(key, chk, ed)
         pdf_cfg = c.setdefault("pdf", {})
-        self.sp_split_pdf.setValue(int(pdf_cfg.get("split_pages", 5000) or 0))
+        self.sp_split_pdf.setValue(int(pdf_cfg.get("split_pages", 0) or 0))
         epub_cfg = c.setdefault("epub", {})
-        self.sp_split_epub.setValue(int(epub_cfg.get("split_items", 500) or 0))
+        self.sp_split_epub.setValue(int(epub_cfg.get("split_items", 0) or 0))
         self._sync_merge_defaults(c)
         styles = cover.setdefault("styles", {})
-        _font_defaults = {"intro_summary": "C:/Windows/Fonts/simfang.ttf"}
+        _font_defaults = {"intro_summary": "C:/Windows/Fonts/simfang.ttf",
+                          "editnote_title": "C:/Windows/Fonts/msyhbd.ttc",
+                          "editnote_body": "C:/Windows/Fonts/simsun.ttc"}
         for key, ed in self.font_rows.items():
             cur = styles.get(key, {}).get("font", "") or _font_defaults.get(key, "")
             ed.setText(self._native_path(cur))
+            self._check_font_row(key, ed)
         theme = c.setdefault("theme", {"mode": "system", "accent": "#8B4513"})
         self._set_radio(self.theme_radios, theme.get("mode", "system"), "system")
         self.ed_accent.setText(theme.get("accent", "#8B4513"))
@@ -1048,19 +1316,38 @@ class SettingsDialog(QDialog):
             self.ed_supplement.setText(f)
 
     # ---------- 行为 ----------
-    def _refresh_bg_btn(self):
-        c = self._bg_color
-        self.btn_bg.setStyleSheet(
+    def _refresh_bg_btn_for(self, key):
+        if key == "background":
+            c = self._bg_color
+            btn = self.btn_bg
+        else:
+            c = self._bg_colors[key]
+            btn = self._bg_btns[key]
+        btn.setStyleSheet(
             f"background-color: rgb({c.red()},{c.green()},{c.blue()});"
             f"border:1px solid #999; color: rgb({255-c.red()},{255-c.green()},{255-c.blue()});"
         )
-        self.btn_bg.setText(f"#{c.red():02X}{c.green():02X}{c.blue():02X}")
+        btn.setText(f"#{c.red():02X}{c.green():02X}{c.blue():02X}")
+
+    def _refresh_bg_btn(self):
+        self._refresh_bg_btn_for("background")
+
+    def _pick_bg_for(self, key, title):
+        if key == "background":
+            cur = self._bg_color
+        else:
+            cur = self._bg_colors[key]
+        c = QColorDialog.getColor(cur, self, title)
+        if c.isValid():
+            if key == "background":
+                self._bg_color = c
+            else:
+                self._bg_colors[key] = c
+                self._bg_custom.add(key)   # 单独选色后独立，不再跟随封面
+            self._refresh_bg_btn_for(key)
 
     def _pick_bg(self):
-        c = QColorDialog.getColor(self._bg_color, self, "封面背景色")
-        if c.isValid():
-            self._bg_color = c
-            self._refresh_bg_btn()
+        self._pick_bg_for("background", "封面背景色")
 
     def _pick_font(self, key, ed):
         # 起始目录：当前字体所在目录（无则系统字体目录）
@@ -1076,6 +1363,7 @@ class SettingsDialog(QDialog):
                                            "字体 (*.ttf *.ttc *.otf)")
         if f:
             ed.setText(self._native_path(f))
+            self._check_font_row(key, ed)
 
     @staticmethod
     def _native_path(p):
@@ -1096,33 +1384,61 @@ class SettingsDialog(QDialog):
         pp = Path(p)
         return str(pp if pp.is_absolute() else PROJECT_ROOT / pp)
 
+    #: 图片槽→编号：封面图=1.*，封底图=2.*（后缀不限）
+    _IMG_NUM = {"buddha": "1", "weituo": "2"}
+    #: 图片槽→默认文件：优先取该固定文件（存在才用），否则仍按编号找
+    _IMG_DEFAULT_FILE = {"buddha": "B01.jpg", "weituo": "B02.jpg"}
+
+    def _ensure_default_image(self, key, chk, ed):
+        # 启用即选默认：勾选且路径空/失效时，先取 B01.jpg/B02.jpg，再找 1.*/2.*
+        try:
+            if not chk.isChecked():
+                return
+            cur = (ed.text() or "").strip()
+            if cur and Path(cur).is_file():
+                return
+            hit = None
+            fixed = IMAGES_DIR / self._IMG_DEFAULT_FILE.get(key, "")
+            if fixed.name and fixed.is_file():
+                hit = fixed
+            if hit is None:
+                from cbeta_publish.books.ebook_merger import find_numbered_image
+                hit = find_numbered_image(IMAGES_DIR, self._IMG_NUM.get(key, key))
+            if hit is not None:
+                ed.setText(str(hit))
+        except Exception:
+            pass
+
+    def _pick_editnote(self):
+        f, _ = QFileDialog.getOpenFileName(self, "选择说明 TXT 文件", "",
+                                           "文本 (*.txt)")
+        if f:
+            self.ed_editnote.setText(f)
+
     def _pick_image(self, key, ed):
         f, _ = QFileDialog.getOpenFileName(self, f"选择{key}图片", str(IMAGES_DIR),
-                                           "图片 (*.jpg *.jpeg *.png *.gif *.bmp)")
+                                           "图片 (*.jpg *.jpeg *.png *.tif *.tiff *.bmp *.gif)")
         if not f:
             return
         try:
+            from cbeta_publish.books.ebook_merger import COVER_IMAGE_SUFFIXES
+            num = self._IMG_NUM.get(key, key)
             src = Path(f)
-            target = IMAGES_DIR / f"{key}{src.suffix.lower()}"
+            suffix = src.suffix.lower()
+            if suffix not in COVER_IMAGE_SUFFIXES:
+                suffix = ".png"
+            # 按编号落盘，同号其它后缀先清（保证 1.* / 2.* 唯一）
+            for old in IMAGES_DIR.glob(f"{num}.*"):
+                try:
+                    if old.is_file() and old.suffix.lower() != suffix:
+                        old.unlink()
+                except OSError:
+                    pass
+            target = IMAGES_DIR / f"{num}{suffix}"
             shutil.copy2(str(src), str(target))
             ed.setText(str(target))
         except Exception as e:
             QMessageBox.warning(self, "失败", f"拷贝图片失败：{e}")
-
-    def _reset_images(self):
-        if not DEFAULT_IMAGES_DIR.exists():
-            QMessageBox.information(self, "提示", "默认图片目录不存在：assets/images/default/")
-            return
-        try:
-            for f in DEFAULT_IMAGES_DIR.iterdir():
-                if f.is_file():
-                    shutil.copy2(str(f), str(IMAGES_DIR / f.name))
-            for key, (chk, ed) in self.img_rows.items():
-                t = IMAGES_DIR / f"{key}{Path(ed.text()).suffix.lower() if ed.text() else '.jpg'}"
-                ed.setText(str(t))
-            QMessageBox.information(self, "完成", "已从 assets/images/default/ 恢复默认图片。")
-        except Exception as e:
-            QMessageBox.warning(self, "失败", f"恢复默认图片失败：{e}")
 
     def _restore_default(self):
         if QMessageBox.question(self, "恢复默认", "恢复内置默认配置？（当前配置将覆盖，可在保存前取消）") != QMessageBox.Yes:
@@ -1151,6 +1467,16 @@ class SettingsDialog(QDialog):
         c["mulu_dir"] = self._native_path(self.ed_mulu.text().strip())
         c["collections_dir"] = self._native_path(self.ed_collections.text().strip())
         c["official_ebooks_dir"] = self._native_path(self.ed_ebooks.text().strip())
+        c["official_library"] = {
+            "root": self._native_path(self.ed_official_lib.text().strip()),
+            "overrides": {f: ed.text().strip() for f, ed in self.lib_override_edits.items()
+                          if ed.text().strip()},
+        }
+        try:
+            from cbeta_publish.books import official_ebook_source as _oes
+            _oes.refresh_library_map()
+        except Exception:
+            pass
         c["xml_to_ebooks_dir"] = self._native_path(self.ed_xmlbooks.text().strip()) \
             or str(PROJECT_ROOT / "cbeta_xml_ebooks")
         c["verify_dir"] = self._native_path(self.ed_verify.text().strip()) \
@@ -1179,12 +1505,21 @@ class SettingsDialog(QDialog):
         cover = c.setdefault("cover", {})
         cover["organizer"] = self.ed_organizer.text().strip()
         cover["imprint"] = self.ed_imprint.text().strip()
+        cover["date_text"] = self.ed_date.text().strip()
+        cover["edit_note"] = {"file": self.ed_editnote.text().strip(),
+                              "enabled": self.chk_editnote_enabled.isChecked()}
         cover.pop("series", None)
         cover["mode"] = self._mode()
         cover["enabled"] = self.chk_cover_enabled.isChecked()
         cover.setdefault("intro", {})["enabled"] = self.chk_intro_enabled.isChecked()
         cover["intro"]["title"] = self.ed_intro_title.text().strip() or "说明"
         cover["intro"]["note"] = self.ed_intro_note.text().strip()
+        cover["bulei"] = {"enabled": self.chk_bulei_show.isChecked(),
+                          "depth": int(self.sp_bulei_depth.value()),
+                          "layout": self.cb_bulei_layout.currentData() or "lines",
+                          "sep": self.ed_bulei_sep.text().strip() or "·",
+                          "show_num": self.chk_bulei_num.isChecked(),
+                          "titles": self.cb_bulei_titles.currentData() or "none"}
         sizes = cover.setdefault("sizes", {})
         for paper, sp in self.sp_body.items():
             sizes[f"body_{paper}"] = sp.value()
@@ -1193,6 +1528,13 @@ class SettingsDialog(QDialog):
             margins[paper] = {side: sp.value() for side, sp in sides.items()}
         styles = cover.setdefault("styles", {})
         styles["background"] = {"color": [self._bg_color.red(), self._bg_color.green(), self._bg_color.blue()]}
+        for _key in ("intro_background", "toc_background"):
+            # 未单独选色（也不曾有显式值）则不写盘＝继续跟随封面
+            if _key in self._bg_custom or _key in styles:
+                _c = self._bg_colors[_key]
+                styles[_key] = {"color": [_c.red(), _c.green(), _c.blue()]}
+            else:
+                styles.pop(_key, None)
         for key, ed in self.font_rows.items():
             styles.setdefault(key, {})["font"] = ed.text().strip()
         images = cover.setdefault("images", {})
@@ -1203,6 +1545,7 @@ class SettingsDialog(QDialog):
         c.setdefault("merge", {})["by_volume"] = (self._merge_mode_value() == "volume")
         c["merge"]["mode"] = self._merge_mode_value()
         c["merge"]["depth"] = int(self.sp_merge_depth.value())
+        c["merge"]["name_template"] = self.ed_merge_name.text().strip() or "{coll}.{nn}.{seg}"
         # 外观
         c.setdefault("theme", {})["mode"] = self._radio_value(self.theme_group, self.theme_radios)
         c["theme"]["accent"] = self.ed_accent.text().strip()

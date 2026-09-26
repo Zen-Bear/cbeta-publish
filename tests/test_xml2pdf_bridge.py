@@ -169,6 +169,8 @@ class BridgePresetDirTest(unittest.TestCase):
         base = self.dir / "out"
         base.mkdir()
         self.assertEqual(b.xml_dest("T0001", "pdf", base), base / "pdf" / "T0001.pdf")
+        self.assertEqual(b.xml_dest("T0001", "pdf", base, name="T0001 中論"),
+                         base / "pdf" / "T0001 中論.pdf")
         self.assertIsNone(b.find_built("T0001", "pdf", base))
         (base / "pdf").mkdir()
         (base / "pdf" / "T0001 中論.pdf").write_bytes(b"x")   # 同目录异名通配
@@ -180,6 +182,11 @@ class BridgePresetDirTest(unittest.TestCase):
         (base / "pdf" / "T0001 中論.pdf").unlink()
         (base / "T0001.pdf").write_bytes(b"x")
         self.assertIsNone(b.find_built("T0001", "pdf", base))
+        # 边界守卫：T185 不误命中 T1858 书名
+        (base / "pdf" / "T1858 肇論疏.pdf").write_bytes(b"x")
+        self.assertIsNone(b.find_built("T185", "pdf", base))
+        self.assertEqual(b.find_built("T1858", "pdf", base),
+                         base / "pdf" / "T1858 肇論疏.pdf")
 
     def test_ensure_one_missing_vs_all(self):
         # 仅缺：已有产物直接复用（不调 convert）；全部：一律重跑 convert 并覆盖原路径
@@ -527,6 +534,189 @@ class BridgeReportFormatsTest(unittest.TestCase):
         p.write_text("=== T1\n  [--] pdf 已覆盖（已由 docx 校验）\n"
                      "  [OK] (缺0/多0)\n  docx 【源】a\n", encoding="utf-8")
         self.assertEqual(b.verify_report_formats(p), {"docx": True})
+
+
+class BridgeReportPendingTest(unittest.TestCase):
+    """[--] 行解析与覆盖规则：docx通过即pdf通过、无基线原因。"""
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def _rp(self, text):
+        p = self.dir / "r.txt"
+        p.write_text(text, encoding="utf-8")
+        return p
+
+    def test_covered(self):
+        import cbeta_publish.books.xml2pdf_bridge as b
+        p = self._rp("=== T45n1852.xml\n"
+                     "  [--]  pdf 已覆盖（已由 docx 校验）\n"
+                     "  [OK] (docx→docx 缺0/多0 ≤阈值10)\n")
+        self.assertEqual(b.verify_report_pending(p), {"pdf": "covered:docx"})
+
+    def test_no_baseline(self):
+        import cbeta_publish.books.xml2pdf_bridge as b
+        p = self._rp("=== T0001\n"
+                     "  [--]  epub no baseline\n"
+                     "  [--]  docx no baseline\n")
+        self.assertEqual(b.verify_report_pending(p),
+                         {"epub": "no baseline", "docx": "no baseline"})
+
+    def test_gen_not_found(self):
+        import cbeta_publish.books.xml2pdf_bridge as b
+        p = self._rp("=== T0001\n  [--]  pdf→docx gen not found: \n")
+        self.assertEqual(b.verify_report_pending(p), {"pdf": "gen not found"})
+
+    def test_missing_file(self):
+        import cbeta_publish.books.xml2pdf_bridge as b
+        self.assertEqual(b.verify_report_pending(self.dir / "nope.txt"), {})
+
+    def test_coverage_docx_pass_covers_pdf(self):
+        import cbeta_publish.books.xml2pdf_bridge as b
+        out = b.apply_verify_coverage({"docx": True}, {"pdf": "covered:docx"})
+        self.assertEqual(out, {"docx": True, "pdf": True})
+
+    def test_coverage_docx_fail_covers_nothing(self):
+        import cbeta_publish.books.xml2pdf_bridge as b
+        out = b.apply_verify_coverage({"docx": False}, {"pdf": "covered:docx"})
+        self.assertEqual(out, {"docx": False})
+
+    def test_coverage_explicit_entry_wins(self):
+        import cbeta_publish.books.xml2pdf_bridge as b
+        out = b.apply_verify_coverage({"docx": True, "pdf": False},
+                                      {"pdf": "covered:docx"})
+        self.assertEqual(out, {"docx": True, "pdf": False})
+
+    def test_coverage_no_pending_is_identity(self):
+        import cbeta_publish.books.xml2pdf_bridge as b
+        st = {"docx": True}
+        out = b.apply_verify_coverage(st, {})
+        self.assertEqual(out, {"docx": True})
+        self.assertIsNot(out, st)
+
+
+class BridgeWorkSummaryTest(unittest.TestCase):
+    """上游总结行 `[id] N format: 1[docx=OK(0/0)], 2[pdf=1], …` 解析：优先于 trial 行。"""
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def _rp(self, text):
+        p = self.dir / "report.txt"
+        p.write_text(text, encoding="utf-8")
+        return p
+
+    def test_summary_ok_fail_numbers(self):
+        import cbeta_publish.books.xml2pdf_bridge as b
+        p = self._rp("[T45n1859] 3 format: 1[docx=OK(0/0)], 2[pdf=1], 3[epub=FAIL(48/97)]\n"
+                     "=== T45n1859.xml\n")
+        self.assertEqual(b.verify_report_formats(p),
+                         {"docx": True, "pdf": True, "epub": False})
+        self.assertEqual(b.verify_report_numbers(p),
+                         {"docx": (0, 0), "pdf": (0, 0), "epub": (48, 97)})
+        self.assertFalse(b.verify_report_pass(p))
+        self.assertEqual(b.verify_report_pending(p), {"pdf": "covered:docx"})
+
+    def test_summary_ref_to_failed(self):
+        # 被覆盖项结论跟随第 M 条：源失败则同样失败
+        import cbeta_publish.books.xml2pdf_bridge as b
+        p = self._rp("[T1] 2 format: 1[docx=FAIL(3/1)], 2[pdf=1]\n")
+        self.assertEqual(b.verify_report_formats(p), {"docx": False, "pdf": False})
+        self.assertFalse(b.verify_report_pass(p))
+
+    def test_summary_bare_covered(self):
+        # 无 ref 的 COVERED：pending 记 covered，沿用 pdf←docx 启发式
+        import cbeta_publish.books.xml2pdf_bridge as b
+        p = self._rp("[T1] 2 format: 1[docx=OK(0/0)], 2[pdf=COVERED]\n")
+        self.assertEqual(b.verify_report_formats(p), {"docx": True})
+        self.assertEqual(b.verify_report_pending(p), {"pdf": "covered"})
+        out = b.apply_verify_coverage(b.verify_report_formats(p),
+                                      b.verify_report_pending(p))
+        self.assertEqual(out, {"docx": True, "pdf": True})
+        self.assertTrue(b.verify_report_pass(p))
+
+    def test_summary_pending_reasons(self):
+        import cbeta_publish.books.xml2pdf_bridge as b
+        p = self._rp("[T1] 4 format: 1[epub=NO_BASELINE], 2[docx=NOGEN], "
+                     "3[pdf=ERROR], 4[md=???]\n")
+        self.assertEqual(b.verify_report_formats(p), {})
+        pending = b.verify_report_pending(p)
+        self.assertEqual(pending["epub"], "no baseline")
+        self.assertEqual(pending["docx"], "gen not found")
+        self.assertEqual(pending["pdf"], "error")
+        self.assertIsNone(b.verify_report_pass(p))
+
+    def test_summary_arrow_fmt_and_unknown_numbers(self):
+        import cbeta_publish.books.xml2pdf_bridge as b
+        p = self._rp("[T1] 2 format: 1[pdf→docx=OK(0/0)], 2[epub=FAIL(?/?)]\n")
+        self.assertEqual(b.verify_report_formats(p), {"pdf": True, "epub": False})
+        self.assertEqual(b.verify_report_numbers(p), {"pdf": (0, 0)})
+
+    def test_no_summary_falls_back_to_trials(self):
+        # 老报告无总结行：trial 解析照常，numbers 为空
+        import cbeta_publish.books.xml2pdf_bridge as b
+        p = self._rp("=== T0001\n  [OK]  docx 缺0 多0\n  [FAIL] epub 缺3 多1\n")
+        self.assertEqual(b.verify_report_formats(p), {"docx": True, "epub": False})
+        self.assertFalse(b.verify_report_pass(p))
+        self.assertEqual(b.verify_report_numbers(p), {})
+        self.assertEqual(b.verify_report_pending(p), {})
+
+
+class BridgeBuiltNamingTest(unittest.TestCase):
+    """L2 命名：工作根目录名推导带书名；更长編號不误命中。"""
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+        self.root = self.dir / "x2p"
+        (self.root / "presets").mkdir(parents=True)
+        self.work = self.dir / "xml"
+        (self.work / "T0001 中論").mkdir(parents=True)
+        (self.work / "T0001 中論" / "T01n0001.xml").write_bytes(b"x")
+        (self.work / "T0001a 别传").mkdir(parents=True)
+        self.cfg = {"xml2pdf": {"path": str(self.root), "cbeta_ebook": str(self.work)}}
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def test_built_name_from_work_dir(self):
+        import cbeta_publish.books.xml2pdf_bridge as b
+        self.assertEqual(b.built_name(self.cfg, "T0001"), "T0001 中論")
+        self.assertEqual(b.built_name(self.cfg, "T0001a"), "T0001a 别传")
+        self.assertEqual(b.built_name(self.cfg, "T9999"), "T9999")  # 无目录退回 id
+
+    def test_work_dir_skips_longer_ids(self):
+        import cbeta_publish.books.xml2pdf_bridge as b
+        self.assertEqual(b.work_dir_of(self.cfg, "T0001").name, "T0001 中論")
+        self.assertIsNone(b.work_dir_of(self.cfg, "T000"))  # 前缀不算
+
+    def test_ensure_one_with_name(self):
+        # name 透传：直生目标用带书名（L2），复用仍命中
+        import cbeta_publish.books.xml2pdf_bridge as b
+        base = self.dir / "out"
+        (base / "pdf").mkdir(parents=True)
+
+        def fake_convert(w, xml, out, config, fmt="pdf", preset=None, stop=None):
+            Path(out).parent.mkdir(parents=True, exist_ok=True)
+            Path(out).write_bytes(b"x")
+            return Path(out)
+
+        real = b.convert
+        b.convert = fake_convert
+        try:
+            p, reused = b.ensure_one("T0001", "pdf", base, self.cfg, name="T0001 中論")
+            self.assertFalse(reused)
+            self.assertEqual(p, base / "pdf" / "T0001 中論.pdf")
+            p2, reused2 = b.ensure_one("T0001", "pdf", base, self.cfg, name="T0001 中論")
+            self.assertTrue(reused2)
+            self.assertEqual(p2, p)
+        finally:
+            b.convert = real
 
 
 if __name__ == "__main__":

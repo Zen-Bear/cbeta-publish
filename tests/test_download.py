@@ -146,7 +146,7 @@ class DownloadWorkerTest(unittest.TestCase):
                 return {"url": "u", "size": 999, "mtime": 2.0, "etag": None}
             return None
 
-        def fake_dl(work, fmt, dest_dir):
+        def fake_dl(work, fmt, dest_dir, config=None):
             if work in ("T0002", "T0003"):
                 p = oes.dest_path(work, fmt, dest_dir)
                 p.parent.mkdir(parents=True, exist_ok=True)
@@ -175,7 +175,7 @@ class DownloadWorkerTest(unittest.TestCase):
         w = DownloadWorker(["T0001", "T0002"], ["pdf"], self.dir)
         oes.remote_info = lambda work, fmt: None
 
-        def fake_dl(work, fmt, dest_dir):
+        def fake_dl(work, fmt, dest_dir, config=None):
             attempted.append(work)
             w._stop = True
             return None
@@ -188,13 +188,29 @@ class DownloadWorkerTest(unittest.TestCase):
         self.assertEqual(done["total"], 2)
         self.assertEqual(done["ok"] + len(done["failed"]), 1)
 
+    def test_base_exception_still_finishes(self):
+        # download_ebook 抛 SystemExit 等 BaseException 也必须发出 finished_all，
+        # 否则主线程嵌套事件循环永不退出（界面挂死）
+        from cbeta_publish.books.download_worker import DownloadWorker
+        oes.remote_info = lambda work, fmt: None
+
+        def boom(work, fmt, dest_dir, config=None):
+            raise SystemExit(2)
+
+        oes.download_ebook = boom
+        done = {}
+        w = DownloadWorker(["T0001"], ["pdf"], self.dir)
+        w.finished_all.connect(lambda ok, total, failed: done.update(ok=ok, total=total, failed=list(failed)))
+        w.run()
+        self.assertEqual(done, {"ok": 0, "total": 1, "failed": ["T0001.pdf"]})
+
     def test_pairs_mode_downloads_only_given_combos(self):
         # 明确 pairs（缺书集合）：只下这些组合，不展开为 works × fmts
         from cbeta_publish.books.download_worker import DownloadWorker
         oes.remote_info = lambda work, fmt: None
         tried = []
 
-        def fake_dl(work, fmt, dest_dir):
+        def fake_dl(work, fmt, dest_dir, config=None):
             tried.append((work, fmt))
             p = oes.dest_path(work, fmt, dest_dir)
             p.parent.mkdir(parents=True, exist_ok=True)
@@ -210,6 +226,134 @@ class DownloadWorkerTest(unittest.TestCase):
         self.assertEqual(tried, [("T0002", "pdf"), ("T0002", "epub")])
         self.assertEqual(done, {"ok": 2, "total": 2, "failed": []})
         self.assertEqual(len([m for m in msgs if m.startswith("\r")]), 2)
+
+
+class OfficialLibraryTest(unittest.TestCase):
+    """官方电子书本地库：自动探测、本查找、拷贝进缓存、下载本地优先、基线 seeding。"""
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+        lib = self.dir / "lib"
+        (lib / "cbeta_epub_2026r2" / "T").mkdir(parents=True)
+        (lib / "cbeta_epub_2026r2" / "T" / "T0001.epub").write_bytes(b"E" * 10)
+        (lib / "cbeta_docx_2026r2" / "T" / "T0001").mkdir(parents=True)
+        (lib / "cbeta_docx_2026r2" / "T" / "T0001" / "T0001_001.docx").write_bytes(b"D" * 20)
+        (lib / "cbeta-text-with-notes" / "T" / "T0001").mkdir(parents=True)
+        (lib / "cbeta-text-with-notes" / "T" / "T0001" / "T0001_001.txt").write_bytes(b"T" * 30)
+        (lib / "cbeta-text-with-notes" / "T" / "T0001" / "T0001.yaml").write_bytes(b"y")
+        (lib / "cbeta-text" / "T" / "T0001").mkdir(parents=True)
+        (lib / "cbeta-text" / "T" / "T0001" / "T0001_001.txt").write_bytes(b"P" * 40)
+        self.cfg = {"official_library": {"root": str(lib), "overrides": {}}}
+        self.lib = lib
+
+    def tearDown(self):
+        oes.refresh_library_map()
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def test_resolve_map(self):
+        mapping, notes = oes.resolve_library_map(str(self.lib), {})
+        self.assertEqual(mapping["epub"]["pattern"], "single")
+        self.assertEqual(mapping["docx"]["pattern"], "juan")
+        self.assertEqual(mapping["txt_notes"]["pattern"], "juan")
+        self.assertEqual(mapping["txt"]["pattern"], "juan")
+        self.assertEqual(mapping["txt"]["dir"].name, "cbeta-text")
+        self.assertEqual(mapping["txt_notes"]["dir"].name, "cbeta-text-with-notes")
+        self.assertNotIn("pdf", mapping)
+        self.assertTrue(any("epub" in n for n in notes))
+
+    def test_resolve_missing_root(self):
+        mapping, notes = oes.resolve_library_map(str(self.dir / "nope"), {})
+        self.assertEqual(mapping, {})
+        mapping2, _ = oes.resolve_library_map("", {})
+        self.assertEqual(mapping2, {})
+
+    def test_resolve_override(self):
+        (self.lib / "myepub").mkdir()
+        (self.lib / "myepub" / "T").mkdir()
+        (self.lib / "myepub" / "T" / "T0002.epub").write_bytes(b"E")
+        mapping, _ = oes.resolve_library_map(str(self.lib), {"epub": "myepub"})
+        self.assertEqual(mapping["epub"]["dir"].name, "myepub")
+        cfg_ov = {"official_library": {"root": str(self.lib),
+                                       "overrides": {"epub": "myepub"}}}
+        self.assertEqual(oes.find_in_library("T0002", "epub", cfg_ov)[0].name,
+                         "T0002.epub")
+
+    def test_find_and_copy(self):
+        self.assertEqual([p.name for p in oes.find_in_library("T0001", "epub", self.cfg)],
+                         ["T0001.epub"])
+        got = [p.name for p in oes.find_in_library("T0001", "docx", self.cfg)]
+        self.assertEqual(got, ["T0001_001.docx"])
+        # 纯 txt 与带注 txt 分流，不混
+        self.assertEqual([p.name for p in oes.find_in_library("T0001", "txt", self.cfg)],
+                         ["T0001_001.txt"])
+        tn = oes.find_in_library("T0001", "txt_notes", self.cfg)
+        self.assertEqual([p.name for p in tn], ["T0001_001.txt"])
+        self.assertIn("cbeta-text-with-notes", str(tn[0]))
+        self.assertIn("cbeta-text", str(oes.find_in_library("T0001", "txt", self.cfg)[0]))
+        self.assertEqual(oes.find_in_library("T9999", "epub", self.cfg), [])
+        self.assertEqual(oes.find_in_library("T0001", "pdf", self.cfg), [])
+        dest = self.dir / "cache"
+        e = oes.copy_from_library("T0001", "epub", dest, self.cfg)
+        self.assertEqual(e, dest / "epub" / "T0001.epub")
+        self.assertTrue(e.is_file())
+        d = oes.copy_from_library("T0001", "docx", dest, self.cfg)
+        self.assertEqual((d / "T0001_001.docx").read_bytes(), b"D" * 20)
+        t = oes.copy_from_library("T0001", "txt", dest, self.cfg)
+        self.assertEqual((t / "T0001_001.txt").read_bytes(), b"P" * 40)
+        # 幂等：已存在同大小跳过
+        self.assertEqual(oes.copy_from_library("T0001", "epub", dest, self.cfg), e)
+        self.assertIsNone(oes.copy_from_library("T9999", "epub", dest, self.cfg))
+
+    def test_download_prefers_library_without_network(self):
+        real = oes.cf.download
+
+        def boom(url, dest, **k):
+            raise AssertionError(f"network must not be used: {url}")
+
+        oes.cf.download = boom
+        try:
+            out = oes.download_ebook("T0001", "epub", self.dir / "cache2", self.cfg)
+        finally:
+            oes.cf.download = real
+        self.assertTrue(out and out.is_file())
+        self.assertEqual(out.read_bytes(), b"E" * 10)
+
+    def test_worker_reports_library_source(self):
+        from cbeta_publish.books.download_worker import DownloadWorker
+        oes_remote, oes_dl = oes.remote_info, oes.download_ebook
+        oes.remote_info = lambda work, fmt: None
+        msgs, done = [], {}
+        try:
+            w = DownloadWorker(["T0001"], ["epub"], self.dir / "cache3", config=self.cfg)
+            w.progress.connect(msgs.append)
+            w.finished_all.connect(
+                lambda ok, total, failed: done.update(ok=ok, total=total, failed=list(failed)))
+            w.run()
+        finally:
+            oes.remote_info, oes.download_ebook = oes_remote, oes_dl
+        self.assertEqual(done, {"ok": 1, "total": 1, "failed": []})
+        text = [m.lstrip("\r") for m in msgs]
+        self.assertTrue(any(m.startswith("本地库 T0001.epub ...完成 ") for m in text), text)
+        self.assertTrue((self.dir / "cache3" / "epub" / "T0001.epub").is_file())
+
+    def test_seed_baselines(self):
+        wdir = self.dir / "work" / "T0001 中論"
+        wdir.mkdir(parents=True)
+        got = oes.seed_baselines_from_library("T0001", ["docx", "txt_notes", "epub"],
+                                              wdir, self.cfg)
+        self.assertEqual(sorted(got), ["docx", "epub", "txt_notes"])
+        self.assertTrue((wdir / "docx" / "T0001_001.docx").is_file())
+        self.assertTrue((wdir / "txt" / "T0001_001.txt").is_file())
+        self.assertFalse((wdir / "txt" / "T0001.yaml").is_file())  # 非基线不取
+        # 已有不覆盖；缺目录跳过
+        (wdir / "docx" / "T0001_001.docx").write_bytes(b"KEEP")
+        got2 = oes.seed_baselines_from_library("T0001", ["docx"], wdir, self.cfg)
+        self.assertEqual((wdir / "docx" / "T0001_001.docx").read_bytes(), b"KEEP")
+        self.assertIn("docx", got2)
+        self.assertEqual(oes.seed_baselines_from_library("T0001", ["docx"],
+                                                         self.dir / "nodir", self.cfg), {})
+        # epub 单文件落 epub/ 子目录
+        self.assertTrue((wdir / "epub").is_dir())
 
 
 if __name__ == "__main__":

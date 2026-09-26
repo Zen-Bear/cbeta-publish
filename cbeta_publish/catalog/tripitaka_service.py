@@ -5,8 +5,39 @@
 """
 import re
 
-# 三藏固定顺序
+# 三藏固定顺序（部类视图用）
 PITAKA_ORDER = ["經", "律", "論", "藏外"]
+
+# 经号查三藏（说明页统计用）：大正经号区间，来源 CBETA 部类说明
+#（https://archive2.cbeta.org/node/6595）01 阿含部–10 密教部为经典、
+# 11 律部为律典、12 釋經論部–16 論集部为论典；17–26（經疏部起的本土撰述、
+# 史傳事彙外教目錄古逸疑似）及一切非 T 经号归“其他”。
+TAISHO_PITAKA_RANGES = [
+    (1, 1420, "經"),
+    (1421, 1504, "律"),
+    (1505, 1692, "論"),
+]
+
+# 说明页三藏分布显示顺序
+PITAKA_SUMMARY_ORDER = ["經", "律", "論", "其他"]
+
+
+def pitaka_of_work(work_id: str) -> str:
+    """经号 -> 三藏（經/律/論/其他）：T0001–1420經、T1421–1504律、
+    T1505–1692論；T1693＋（17 經疏部起）及 X/J/B/N/D/ZW 等非 T 经号、
+    未知/非法一律“其他”。大小写不敏感，尾字母后缀忽略。"""
+    import re as _re
+    m = _re.match(r"^\s*([A-Za-z]+)0*(\d+)", str(work_id or ""))
+    if not m or m.group(1).upper() != "T":
+        return "其他"
+    try:
+        n = int(m.group(2))
+    except Exception:
+        return "其他"
+    for lo, hi, pitaka in TAISHO_PITAKA_RANGES:
+        if lo <= n <= hi:
+            return pitaka
+    return "其他"
 
 # 部類名（去数字前缀）关键字 -> 三藏；最长/最具体优先（列表顺序即匹配顺序）
 PITAKA_KEYWORDS = [

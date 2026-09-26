@@ -93,7 +93,7 @@ def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=No
     "path": "E:/dev/cbeta/xml2pdf",                    // 自制程序仓库（预设目录=其 presets/）
     "cbeta_ebook": "E:/dev/cbeta/publish/cbeta_xml",   // CBETA XML 目录（--cbeta-ebook；不可空，空则用默认）
     "preset": "",                                    // 默认预设名（presets/ 下 stem）；空=对面默认
-    "verify_build": false                            // 自制书籍：true=自制/重制后校验并仅导入通过项
+    "verify_build": false                            // 制作书籍：true=自制/重制后校验并仅导入通过项
   }
 }
 ```
@@ -129,6 +129,8 @@ def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=No
 
 ```
 右栏来源 = official → official_ebook_source.download_ebook → cbeta_ebooks/{fmt}/...
+  （本地库优先：`official_library.root` 非空时先拷贝，缺失回退下载；
+  校验基线同库 `seed` 进工作根 `{id 书名}/docx|txt|epub/`，只补缺失）
 右栏来源 = xml      → xml2pdf_bridge.ensure_one(work_id, preset, regen_all) → xml_to_ebooks_dir/{fmt}/{work}.{fmt}
 → ebook_merger 单一格式合并 / ZIP 打包 / 拷贝导出
 ```
@@ -143,7 +145,7 @@ def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=No
   vendor 共享层不动。
 - 自制格式勾选（右栏）：pdf/epub/**docx**（docx 默认勾选）；**合并只取 pdf/epub**，
   docx 走 ZIP/导出/校验/打开。`ensure_one`/`find_built`/`xml_dest` 格式通用，无需特判。
-- 校验（进程内「自制/重制」＋自动/手动导入）：设置「自制书籍」=`校验`
+- 校验（进程内「自制/重制」＋自动/手动导入）：设置「制作书籍」=`校验`
   （`xml2pdf.verify_build`）时，右栏 `[自制]/[重制]` 转为校验式——`[自制]` 只处理
   自制书目录里**缺少**的书，`[重制]` 整批全部重做；触发 `VerifyWorker` 逐本调
   `bridge.verify_work` → 库调用
@@ -156,16 +158,36 @@ def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=No
   等生效，`cli.py` `37a864a`），否则会与官方基线误报。正式产物 `{id 书名}.{fmt}` 落校验目录顶层，
   报告落 `{id 书名}（验证）/`（`verify_dir/<丛书>/`，默认 `<工程>/cbeta_verify`，
   与自制书目录分离）。跑完自动导入（可手动重试）：报告兼容
-  `{stem}_verify_report.txt` / `report.txt` 两种命名（`bridge.verify_reports`，
-  同一 work 只取最新）。**判读按格式**（`bridge.verify_report_formats`）：把报告里
-  `[OK]/[FAIL]`/`[--]` 逐 trial 映射回产物格式（`pdf→docx` 记在 pdf 名下；独立窗标记行
-  直接带格式），得 {fmt: 通过}；缺逐格式信息时退回整体判定
-  （`bridge.verify_report_pass`：有 `[FAIL]`→不通过；≥1 `[OK]` 无 `[FAIL]`→通过；否则未判定）。
-  **逐格式入库**：通过的格式拷入 `{fmt}/{work}.{fmt}`（入库即被 `ensure_one(missing)` 复用），
-  未通过的格式跳过、不拖累通过者（如 docx 过、epub 没过 → 只入 docx）。
-  临时预设未保存时拒绝执行。手动导入（菜单「导入校验通过E书…」）优先读当前丛书的
+   `{stem}_verify_report.txt` / `report.txt` 两种命名（`bridge.verify_reports`，
+   同一 work 只取最新）。**判读按格式**：优先读每 work 段首的上游总结行
+   （`bridge.parse_work_summary_line`：`[id] N format: 1[docx=OK(0/0)], 2[pdf=1],
+   3[epub=FAIL(48/97)]`；`pdf=数字` 为被覆盖、结论跟随同行第 M 条；`COVERED` 无 ref、
+   `NO_BASELINE`/`NOGEN`/`ERROR` 为未判定原因；`→` 左侧为产物格式）；
+   无总结行（老报告）时回退 trial 解析（`bridge.verify_report_formats`）：
+   把报告里 `[OK]/[FAIL]` 逐 trial 映射回产物格式（`pdf→docx` 记在 pdf 名下；
+   独立窗标记行直接带格式），得 {fmt: 通过}；`[--]`（覆盖/无基线）另由
+   `bridge.verify_report_pending` 解析为 {fmt: 原因}（`covered:<src>` / `no baseline` /
+   `gen not found`）。缺数/多余数由 `bridge.verify_report_numbers` 取
+   （`FAIL(48/97)`→`缺48/多97`，`?`→未知）。
+   **docx通过即pdf通过**（`bridge.apply_verify_coverage`）：pdf 被报告记为
+   「已由 src 校验覆盖」且 src 逐格式通过 → pdf 视为通过（不重复验；src 未过则不套用）。
+   缺逐格式信息时退回整体判定
+   （`bridge.verify_report_pass`：有 `[FAIL]`→不通过；≥1 `[OK]` 无 `[FAIL]`→通过；否则未判定）。
+   **逐格式入库**：通过的格式 **move** 入 `{fmt}/{id 书名}.{fmt}`（L2 带书名，
+   保留上游产物名；入库即被 `ensure_one(missing)` 复用），
+   未通过的格式跳过、不拖累通过者（如 docx 过、epub 没过 → 入 docx＋被覆盖的 pdf）。
+   未判定标注原因（如 `T1858 未判定（epub无基线）`）；失败标签带数
+   （如 `T1859 校验未通过（epub 缺48/多97）`）。结果页每部书列出入库了哪个格式文件
+   （可点开；人工放行的标"人工放行"）。
+   **人工检验**：导入（自动/手动）后，未通过＋未判定项弹框询问，可看报告后勾选放行入库
+   （左勾选列表＋右报告预览＋"打开产物/报告/校验目录"链接；本 session 放行过的不再重复询问）。
+   未放行项在**托管校验目录**内删除（外部目录只导入不删）。
+   worker 异常（含上游 argparse 的 `SystemExit`）也必发 `finished_all`
+   （否则嵌套事件循环挂死）；线程跑完断开信号＋`deleteLater`（野指针防护）。
+   临时预设未保存时拒绝执行。手动导入（菜单「导入校验通过E书…」）优先读当前丛书的
   `verify_dir/<丛书>/`；无报告时**弹目录选择**，可指向独立窗输出目录（同样兼容两种报告名），
-  便于把独立窗已校验的产物入库。独立窗（「xml2pdf 独立窗…」）保留为手动工作台。
+  便于把独立窗已校验的产物入库（菜单「制作书籍 → 运行 xml2pdf 制作书籍…」
+  会把当前丛书直接带过去）。独立窗保留为手动工作台。
 
 ## 6. 实施清单
 
@@ -173,7 +195,7 @@ def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=No
 - [x] `publish`：右栏来源单选＋预设下拉＋[调整…]（生成策略单选已移除：合并/ZIP/导出恒仅缺，「重制」按钮=全部重生成）
 - [x] `publish`：`[合并]` 整批同源、分格式目录、说明页注明；**ZIP/导出 亦支持自制**
 - [x] `publish`：**自制/重制（设置=校验）**（进程内 `VerifyWorker`→`verify_work`，跑完自动导入；
-  「自制书籍」菜单＋校验目录＋临时预设拦截；见 §5）
+  「制作书籍」菜单＋校验目录＋临时预设拦截；见 §5）
 - [x] `xml2pdf`：`--verify` 支持 work id 输入（`2a10d12`：改用已 materialize 的 `xmls`；
   `16df9cf`：官方基线源目录 `src` 按 work 目录修正，编号输入可定位官方基线）
 - [x] `xml2pdf`：`-i` 输入分类健壮性（`25eccb8`：cwd 下有同名**非 XML** 目录时不再
@@ -229,8 +251,8 @@ JSON）时只当 `config-json` 单槽，其余 CSS 槽回出厂，不取仓库�
 
 本附录约定"xml2pdf 独立窗输出目录 → publish 自制书目录"的导入规则。
 publish 的「自制/重制（校验）」产物目录天然符合本规范；独立窗手动输出只要同样符合，
-即可经「导入校验通过E书…」入库。程序内「自制书籍 → 独立窗输出与导入规则…」
-弹窗与本节同文。
+即可经「导入校验通过E书…」入库。程序内「制作书籍 → 导入说明…」
+弹窗是本节的简化版（操作口径）。
 
 ### 9.1 独立窗侧输出要求
 
@@ -249,18 +271,30 @@ publish 的「自制/重制（校验）」产物目录天然符合本规范；�
 1. 报告发现：递归扫描 `*_verify_report.txt` 与 `report.txt`
   （`bridge.verify_reports`）。
 2. 书单匹配：`stem == work`，或 `stem` 以 `work + " "` 开头；匹配不上当前丛书书单的跳过。
-3. 判读**按格式**（`bridge.verify_report_formats`）：把报告 `[OK]/[FAIL]` 逐 trial
-   映射回产物格式（`pdf→docx` 记在 `pdf`；独立窗标记行直接带格式），得 `{fmt: 通过}`。
+3. 判读**按格式**：优先读每 work 段首的上游总结行
+   （`[id] N format: 1[docx=OK(0/0)], 2[pdf=1], 3[epub=FAIL(48/97)]`；
+   `pdf=数字` 为被覆盖、结论跟随同行第 M 条；`COVERED` 无 ref、`NO_BASELINE`/
+   `NOGEN`/`ERROR` 为未判定原因；无总结行的老报告回退 trial 解析）。
+   把报告 `[OK]/[FAIL]` 逐 trial 映射回产物格式（`pdf→docx` 记在 `pdf`；
+   独立窗标记行直接带格式），得 `{fmt: 通过}`。
    缺逐格式信息时退回整体判定（`bridge.verify_report_pass`：含 `[FAIL]`→不通过；
-   ≥1 `[OK]` 无 `[FAIL]`→通过；否则未判定）。
+   ≥1 `[OK]` 无 `[FAIL]`→通过；否则未判定）。缺数/多余数取自总结行
+   （`FAIL(48/97)`→`缺48/多97`），用于失败标签与人工检验。
 4. 产物识别（`MainWindow._verify_products`）：只看目录**顶层** `{stem}*.{ext}`，
    后缀映射 `pdf/epub/docx/odt/md/txt` → fmt；排除 `*_verify_report.txt`、`_ids.txt`；
    每格式取排序后第一个。
-5. 入库（**逐格式**）：某格式判通过 → `shutil.copy2` 到 `{自制书根}/{fmt}/{work}.{fmt}`
-   （自动建目录、覆盖同名），入库即被 `ensure_one(missing)` 复用；
+5. 入库（**逐格式**）：某格式判通过 → `shutil.move` 到 `{自制书根}/{fmt}/{id 书名}.{fmt}`
+   （L2 带书名，保留上游产物名；自动建目录、同名覆盖），入库即被 `ensure_one(missing)` 复用；
    未通过/未判定的格式跳过，**不拖累**通过的格式（如 docx 过、epub 没过 → 只入 docx）。
+   `find_built` 先精确 `{fmt}/{work}.{fmt}`、再 `{fmt}/{work} *.{fmt}`（边界空格，
+   防 `T185` 误命中 `T1858`）；工作目录名 `{id} {书名}` 即命名来源（`built_name`）。
 6. 无任何产物 → 记"缺产物"（失败）；全部格式都未通过 → 记"校验未通过"；
    都未判定 → "未判定"。
+7. **人工检验**：导入（自动/手动）后，未通过＋未判定项弹框询问，可看报告后勾选放行入库
+   （左勾选列表＋右报告预览＋"打开产物/报告/校验目录"链接；结果页标"人工放行"；
+   本 session 放行过的不再重复询问）。
+8. **删除未放行**：托管校验目录（`verify_dir` 内）中未放行的暂存产物在检验后删除；
+   外部目录（手动导入选的独立窗输出等）只导入不删。
 
 ### 9.3 入口与目录优先级
 

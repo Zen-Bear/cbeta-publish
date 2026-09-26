@@ -21,43 +21,19 @@ from cbeta_publish import APP_NAME, __version__
 WORK_RE = re.compile(r"[A-Z]+[0-9A-Za-z]+")
 CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "app.json"
 
-#: 独立窗输出目录导入规范（HTML，用于「自制书籍 → 独立窗输出与导入规则…」弹窗；
-#: 规范正文见 docs/链路B-设计契约.md §9，两处同文，改一处须同步另一处）
+#: 独立窗输出 → publish 导入的简明规则（「制作书籍 → 导入说明…」弹窗；
+#: 完整规范见 docs/链路B-设计契约.md §9）
 VERIFY_IMPORT_RULES_HTML = """\
-<h3>一、独立窗侧输出要求</h3>
 <ol>
-<li>输出目录下，每本成功生成的书有<b>正式产物</b>：<code>{id 书名}.{ext}</code>
-（如 <code>T0032 四谛经.pdf</code>），放在目录<b>顶层</b>。</li>
-<li>必须勾选「转换后校验」：每书在 <code>{id 书名}（验证）/</code> 子目录下有一份
-<b>报告</b>，命名二选一：
-<ul>
-<li><code>{stem}_verify_report.txt</code>（独立窗；<code>stem</code> = work id，如 <code>T0032</code>）；</li>
-<li><code>report.txt</code>（CLI；work 取父目录名去<code>（验证）</code>后缀后的首 token）。</li>
-</ul></li>
-<li>同一书两份报告并存时，以 <b>mtime 最新者</b>为准（同刻优先 <code>report.txt</code>）。
-只转换、未校验的产物<b>没有判据，一律不入库</b>。</li>
-</ol>
-<h3>二、publish 侧导入规则</h3>
-<ol>
-<li>递归扫描 <code>*_verify_report.txt</code> 与 <code>report.txt</code>。</li>
-<li>书单匹配：<code>stem == work</code>，或 <code>stem</code> 以 <code>work + " "</code> 开头；
-匹配不上当前丛书书单的跳过。</li>
-<li>判读<b>按格式</b>：报告里 <code>[OK]/[FAIL]</code> 逐 trial 映射回产物格式
-（<code>pdf→docx</code> 记在 <code>pdf</code>；独立窗标记行直接带格式），得
-<code>{fmt: 通过}</code>；缺逐格式信息时退回整体判定（含 <code>[FAIL]</code>→不通过；
-≥1 <code>[OK]</code> 无 <code>[FAIL]</code>→通过；否则未判定）。</li>
-<li>产物识别：只看目录<b>顶层</b> <code>{stem}*.{ext}</code>，后缀映射
-<code>pdf/epub/docx/odt/md/txt</code> → fmt；排除 <code>*_verify_report.txt</code>、<code>_ids.txt</code>；
-每格式取排序后第一个。</li>
-<li>入库（<b>逐格式</b>）：通过的格式拷入 <code>{自制书根}/{fmt}/{work}.{fmt}</code>
-（自动建目录、覆盖同名），入库即被复用；未通过的格式跳过、不拖累通过者
-（如 docx 过、epub 没过 → 只入 docx）。无产物记"缺产物"。</li>
-</ol>
-<h3>三、入口与目录优先级</h3>
-<ol>
-<li>「导入校验通过E书…」优先读当前丛书 <code>verify_dir/&lt;slug&gt;/</code>；
-无报告则<b>弹目录选择</b>，可指向独立窗输出目录（或其任意上层，递归扫描）。</li>
-<li>右栏「自制/重制」（设置「自制书籍」=校验）跑完走同一规则自动导入。</li>
+<li>独立窗里勾<b>「转换后校验」</b>，输出目录选<b>当前丛书的校验目录</b>
+（菜单打开独立窗时已自动填好）。</li>
+<li>跑完后，每本书在输出目录<b>顶层</b>有 <code>{id 书名}.{ext}</code>，
+每书在 <code>{id 书名}（验证）/</code> 里有<b>报告</b>
+（<code>{stem}_verify_report.txt</code> 或 <code>report.txt</code>）。</li>
+<li>点「导入校验通过E书…」：只认当前丛书书单；<b>有 <code>[FAIL]</code> 的格式不入库</b>，
+通过的格式移入自制书目录（<code>{fmt}/{id 书名}.{fmt}</code>）；只转换没校验的书不入库。</li>
+<li>同一书有多份报告时看<b>最新</b>的一份；校验目录不在丛书默认位置时，
+导入时<b>手动选目录</b>即可。</li>
 </ol>
 """
 
@@ -240,10 +216,71 @@ class _RadioBar(QWidget):
         return False
 
 
+#: 作者僧姓前缀（释/沙門/比丘…）：拼音排序已剥离（`_pinyin_key`），
+#: 作者条目分组显示同样归并到本名（如源数据的 `釋窺基` 并入 `窺基`）。
+_AUTHOR_PREFIXES = ("沙門釋", "比丘釋", "比丘尼釋", "沙門", "比丘尼", "比丘", "釋")
+
+
+def author_canonical_name(title):
+    """作者本名：去一次行首僧姓前缀；无前缀/空原样返回。"""
+    t = title or ""
+    for p in _AUTHOR_PREFIXES:
+        if t.startswith(p):
+            return t[len(p):]
+    return t
+
+
+def merge_author_nodes(authors):
+    """同名（去僧姓前缀后）作者节点归并，返回 [(home, merged)]。
+
+    只在确有重名时合并（单例原样返回，不改显示名）；merged 为新 dict
+    （children 拼接为新 list，不碰源数据，反复调用不重复计数）；
+    显示名为归并后本名；home 为部数最多的原节点（供笔画视图定位）。
+    注：同名不同人（如异代同名）会被并入一处，与别名索引同策略。
+    """
+    groups = {}
+    order = []
+    for a in authors or []:
+        key = author_canonical_name(a.get("title", "")) or a.get("title", "")
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(a)
+    out = []
+    for key in order:
+        members = groups[key]
+        if len(members) == 1:
+            out.append((members[0], members[0]))
+            continue
+        members = sorted(members, key=lambda a: -len(a.get("children", []) or []))
+        home = members[0]
+        merged = dict(home)
+        merged["title"] = key
+        kids = []
+        for m in members:
+            kids.extend(m.get("children", []) or [])
+        merged["children"] = kids
+        merged["_merged_from"] = [m.get("title", "") for m in members
+                                  if m.get("title", "") != key]
+        out.append((home, merged))
+    return out
+
+
+def work_sort_key(w):
+    """经号自然序（搜索结果统一排序用）：(字母前缀, 数字)，如 T0001<T0026；
+    解析不了的排最后（保稳定）。各视图一致，与树序无关。"""
+    import re as _re
+    m = _re.match(r"^\s*([A-Za-z]+)0*(\d+)", str(w or ""))
+    if not m:
+        return ("\U0010FFFF", 0, str(w or ""))
+    return (m.group(1).upper(), int(m.group(2)), "")
+
+
 class MainWindow(QMainWindow):
     def __init__(self, config):
         super().__init__()
         self.config=config
+        self._migrate_cover_title_pos(config)
         self._config_path=config.get("_config_path") or CONFIG_PATH
         self.setWindowTitle(f"{APP_NAME} v{__version__}")
         # 启动窗口大小：二栏收窄（中栏隐藏，不需要那么宽）；三栏用默认宽度
@@ -273,6 +310,9 @@ class MainWindow(QMainWindow):
         self._left_search_active=False   # 左栏当前是否显示「搜索结果」（导航树被暂存）
         self._nav_stash=None   # 搜索结果占用左栏时暂存的导航树顶层项（供搜索/恢复）
         self._tmp_preset=None  # 「调整…」本次临时预设文件（不落盘；作用于 自制/合并 等）
+        self._verify_worker=None  # 在途校验线程（跑完清理；关闭时可停）
+        self._dl_worker=None      # 在途下载线程（跑完清理；关闭时可停）
+        self._manual_approved=set()  # 本 session 人工放行的 {(work, fmt)}（重跑导入不再重复询问）
 
         splitter=_Splitter(Qt.Horizontal)
         left=QWidget()
@@ -810,7 +850,8 @@ class MainWindow(QMainWindow):
                     for a in su.get("children",[]):
                         _all.append(a)
             _all.sort(key=lambda x: self._pinyin_key(x.get("title","")))
-            self._authors_pinyin_sorted=_all
+            # 同名（去僧姓前缀）归并后再缓存
+            self._authors_pinyin_sorted=[m for _, m in merge_author_nodes(_all)]
         except Exception as e:
             print("pinyin cache fail", e)
         self._on_nav_changed(self.nav_combo.currentText())
@@ -1256,6 +1297,16 @@ class MainWindow(QMainWindow):
         # 笔画分组标题形如「1畫(stroke)」→ 显示为「1畫」
         return re.sub(r"\s*\(stroke\)\s*", "", title or "").strip()
 
+    def _add_author_work_items(self, a_item, author):
+        # 作者条目下挂著作叶（标题取源数据叶标题；展开浏览/双击单加/拖拽共用）
+        for c in (author.get("children") or []):
+            if not isinstance(c, dict):
+                continue
+            wid = (c.get("key") or "").strip()
+            if not wid:
+                continue
+            a_item.addChild(self._work_item(wid, c.get("title") or wid))
+
     def _refresh_author_tree(self, filter_stroke=None, filter_letter=None):
         self.tree.clear()
         try:
@@ -1309,6 +1360,7 @@ class MainWindow(QMainWindow):
                                 for a in su.get("children",[]):
                                     authors.append(a)
                         authors.sort(key=lambda x: self._pinyin_key(x.get("title","")))
+                        authors=[m for _, m in merge_author_nodes(authors)]
                     if filter_letter:
                         authors=[a for a in authors if self._pinyin_letter(a.get("title",""))==filter_letter]
                     groups={}
@@ -1322,6 +1374,7 @@ class MainWindow(QMainWindow):
                             a_item=QTreeWidgetItem([f"{a.get('title','')} ({cnt}部)"])
                             a_item.setData(0, Qt.UserRole, a)
                             g_item.addChild(a_item)
+                            self._add_author_work_items(a_item, a)
                     self._expand_tree()
                     return
                 except Exception:
@@ -1334,6 +1387,7 @@ class MainWindow(QMainWindow):
                         for su in s.get("children",[]):
                             for a in su.get("children",[]):
                                 authors.append(a)
+                    authors=[m for _, m in merge_author_nodes(authors)]
                     dmap, order = self._dynasty_index()
                     pairs=group_authors_by_dynasty(authors, dmap, order)
                     if filter_letter:
@@ -1346,12 +1400,20 @@ class MainWindow(QMainWindow):
                             a_item=QTreeWidgetItem([f"{a.get('title','')} ({cnt}部)"])
                             a_item.setData(0, Qt.UserRole, a)
                             d_item.addChild(a_item)
+                            self._add_author_work_items(a_item, a)
                     self._expand_tree()
                     return
                 except Exception as e:
                     print("author dynasty tree fail", e)
             if filter_stroke:
                 strokes=[filter_stroke]
+            # 笔画视图同样归并（同名去僧姓前缀）：归并成员只在部数最多的
+            # 原节点位置显示，被并入节点跳过；源数据不动
+            _flat=[a for s in strokes for su in s.get("children",[])
+                   for a in su.get("children",[])]
+            _pairs=merge_author_nodes(_flat)
+            _merged={id(h): m for h, m in _pairs}
+            _home_ids=set(_merged)
             for stroke in strokes:
                 s_item=QTreeWidgetItem([self._stroke_label(stroke.get("title",""))])
                 s_item.setData(0, Qt.UserRole, stroke)
@@ -1361,10 +1423,14 @@ class MainWindow(QMainWindow):
                     su_item.setData(0, Qt.UserRole, surname)
                     s_item.addChild(su_item)
                     for author in surname.get("children",[]):
-                        cnt=len(author.get("children",[]))
-                        a_item=QTreeWidgetItem([f"{author.get('title','')} ({cnt}部)"])
-                        a_item.setData(0, Qt.UserRole, author)
+                        if id(author) not in _home_ids:
+                            continue   # 已并入他处，不重复显示
+                        shown=_merged.get(id(author), author)
+                        cnt=len(shown.get("children",[]))
+                        a_item=QTreeWidgetItem([f"{shown.get('title','')} ({cnt}部)"])
+                        a_item.setData(0, Qt.UserRole, shown)
                         su_item.addChild(a_item)
+                        self._add_author_work_items(a_item, shown)
             self._expand_tree()
         except Exception as e:
             print("author tree fail", e)
@@ -1472,11 +1538,7 @@ class MainWindow(QMainWindow):
 
     def _pinyin_key(self, title):
         # 拼音排序键：剥离 释/沙門/比丘 等前缀后，返回音节元组（按音节正确比较，同字成组）
-        t=title or ""
-        for p in ("沙門釋","比丘釋","比丘尼釋","沙門","比丘尼","比丘","釋"):
-            if t.startswith(p):
-                t=t[len(p):]
-                break
+        t = author_canonical_name(title)
         try:
             from pypinyin import lazy_pinyin
             return tuple(lazy_pinyin(t))
@@ -1814,6 +1876,19 @@ class MainWindow(QMainWindow):
         except Exception as e:
             print("persist layout fail", e)
 
+    @staticmethod
+    def _migrate_cover_title_pos(config):
+        # 封面书名 1/4 高度迁移：旧缺省 title_y_ratio=0.30 且无 group_y_ratio 时，
+        # 书名改 0.25、组行基准固定 0.30（组行/整理者/日期不动）；显式改过的不碰
+        try:
+            pos = ((config.get("cover", {}) or {}).get("positions", {}) or {})
+            if abs(float(pos.get("title_y_ratio", 0.30)) - 0.30) < 1e-9 \
+                    and "group_y_ratio" not in pos:
+                pos["title_y_ratio"] = 0.25
+                pos["group_y_ratio"] = 0.30
+        except Exception:
+            pass
+
     def _save_config(self):
         # 运行期改动（来源/预设）写回磁盘配置
         try:
@@ -1949,6 +2024,23 @@ class MainWindow(QMainWindow):
         cur_path = _b.resolve_preset(self.config, cur_name)
         base = _b.load_preset_dict(cur_path, self.config) if cur_path else {}
         dlg = XmlOptionsDialog(base or None, self)
+        # 面板内预设下拉默认跟 run.json 槽：改跟 Publish 当前预设（仅改选中显示，
+        # 屏蔽信号避免重载冲掉已预填的 base；选项值本来就是同一预设的内容）
+        try:
+            _box = dlg.panel.cfg_preset_box
+            _idx = _box.findText(cur_name) if cur_name else 0
+            if _idx >= 0:
+                _box.blockSignals(True)
+                try:
+                    _box.setCurrentIndex(_idx)
+                finally:
+                    _box.blockSignals(False)
+                try:
+                    dlg.panel._update_preset_buttons()
+                except Exception:
+                    pass
+        except Exception:
+            pass
         # 「输出格式」对 publish 无意义（格式由右栏勾选、以 -f 传入）：预置为当前勾选，避免误导
         _fmts=self._checked_fmts()
         if _fmts:
@@ -2811,10 +2903,10 @@ class MainWindow(QMainWindow):
             if res:
                 filtered=self._search_author_works(res)
                 if filtered:
-                    self._search_results=filtered[:200]
+                    self._search_results=sorted(filtered, key=work_sort_key)[:200]
                     self._render_search_to_left()
                     return
-        self._search_results=self._search_current_tree(kw)[:200]
+        self._search_results=sorted(self._search_current_tree(kw), key=work_sort_key)[:200]
         self._render_search_to_left()
 
     # ---------- 丛书操作 ----------
@@ -3027,11 +3119,11 @@ class MainWindow(QMainWindow):
             d=create_collection("空白丛书","custom",["custom"],[]).to_dict()
             cat_dir=cdir/"custom"
             target=cat_dir/"空白丛书.json"
-            taken={str(x) for x in cat_dir.glob("*.json")} | {str(pp) for pp,_ in self._collections}
-            if str(target) in taken:
+            taken={os.path.normcase(str(x)) for x in cat_dir.glob("*.json")} | {os.path.normcase(str(pp)) for pp,_ in self._collections}
+            if os.path.normcase(str(target)) in taken:
                 base=target.stem
                 i=1
-                while str(target) in taken:
+                while os.path.normcase(str(target)) in taken:
                     target=cat_dir/f"{base}_{i}.json"
                     i+=1
             try:
@@ -3064,11 +3156,11 @@ class MainWindow(QMainWindow):
         cdir=Path(self.config["collections_dir"])
         cat_dir=cdir/d.get("category","custom")
         target=cat_dir/f"{d.get('name','未命名')}.json"
-        taken={str(p) for p,_ in self._collections} | {str(x) for x in cat_dir.glob("*.json")}
-        if str(target) in taken:
+        taken={os.path.normcase(str(p)) for p,_ in self._collections} | {os.path.normcase(str(x)) for x in cat_dir.glob("*.json")}
+        if os.path.normcase(str(target)) in taken:
             base=target.stem
             i=1
-            while str(target) in taken:
+            while os.path.normcase(str(target)) in taken:
                 target=cat_dir/f"{base}_{i}.json"
                 i+=1
         self._collections.append((target,d))
@@ -3208,11 +3300,11 @@ class MainWindow(QMainWindow):
         cdir=Path(self.config["collections_dir"])
         cat_dir=cdir/cat
         target=cat_dir/f"{name}.json"
-        taken={str(x) for x in cat_dir.glob("*.json")} | {str(pp) for pp,_ in self._collections}
-        if str(target) in taken:
+        taken={os.path.normcase(str(x)) for x in cat_dir.glob("*.json")} | {os.path.normcase(str(pp)) for pp,_ in self._collections}
+        if os.path.normcase(str(target)) in taken:
             base=target.stem
             i=1
-            while str(target) in taken:
+            while os.path.normcase(str(target)) in taken:
                 target=cat_dir/f"{base}_{i}.json"
                 i+=1
         try:
@@ -3273,6 +3365,9 @@ class MainWindow(QMainWindow):
         if res is None:
             return False
         name,cat=res
+        if self._name_taken(name):
+            self._wrap_box(QMessageBox.Warning, "重名", f"已有同名丛书「{name}」，请换一个名称。")
+            return False
         d["name"]=name
         d["slug"]=slugify(cat, name)
         d["category"]=cat
@@ -3280,11 +3375,12 @@ class MainWindow(QMainWindow):
         d["updated_at"]=__import__("datetime").datetime.utcnow().isoformat()+"Z"
         cat_dir=cdir/cat
         target=cat_dir/f"{name}.json"
-        taken={str(x) for x in cat_dir.glob("*.json")} | {str(pp) for pp,_ in self._collections}
-        if str(target) in taken:
+        # 路径归一化比对（Windows 下斜杠方向/大小写不同仍是同一文件，裸 str 会漏检致覆盖）
+        taken={os.path.normcase(str(x)) for x in cat_dir.glob("*.json")} | {os.path.normcase(str(pp)) for pp,_ in self._collections}
+        if os.path.normcase(str(target)) in taken:
             base=target.stem
             i=1
-            while str(target) in taken:
+            while os.path.normcase(str(target)) in taken:
                 target=cat_dir/f"{base}_{i}.json"
                 i+=1
         if str(target)!=str(p):
@@ -3921,7 +4017,7 @@ class MainWindow(QMainWindow):
         if not works:
             QMessageBox.warning(self, "失败", "丛书为空")
             return
-        # 设置「自制书籍=校验」时，自制/重制走生成+校验+导入；否则只生成
+        # 设置「制作书籍=校验」时，自制/重制走生成+校验+导入；否则只生成
         if (self.config.get("xml2pdf", {}) or {}).get("verify_build"):
             return self._send_coll_to_verify(regen_all=bool(regen_all))
         title="重新生成全部自制电子书" if regen_all else "生成自制电子书"
@@ -3970,18 +4066,30 @@ class MainWindow(QMainWindow):
         def on_done(ok, tot, failed):
             result["ok"]=ok
             result["failed"]=list(failed)
-        worker=DownloadWorker(dest_dir=dest_dir, pairs=list(pairs))
+        worker=DownloadWorker(dest_dir=dest_dir, pairs=list(pairs), config=self.config)
         worker.progress.connect(on_progress)
         worker.finished_all.connect(on_done)
         pstate["oncancel"]=worker.stop
         loop=QEventLoop()
         worker.finished_all.connect(lambda *a: loop.quit())
+        # 同校验线程：留引用＋跑完断开信号＋deleteLater，避免野指针崩溃
+        self._dl_worker=worker
         worker.start()
         loop.exec()
         try:
             worker.wait()
         except Exception:
             pass
+        for _sig in ("progress", "finished_all"):
+            try:
+                getattr(worker, _sig).disconnect()
+            except Exception:
+                pass
+        try:
+            worker.deleteLater()
+        except Exception:
+            pass
+        self._dl_worker=None
         failed=result["failed"]
         summary=[]
         if result["ok"]:
@@ -4163,15 +4271,16 @@ class MainWindow(QMainWindow):
                 self._revert_collections()
         # 退出精确清理本进程临时文件（正常流程 wrapper 已删，此处兜底在途与临时预设）
         try:
-            vw = getattr(self, "_verify_worker", None)
-            if vw is not None:
-                try:
-                    if vw.isRunning():
-                        vw.stop()
-                        vw.wait(5000)
-                except Exception:
-                    pass
-                self._verify_worker = None
+            for _attr in ("_verify_worker", "_dl_worker"):
+                vw = getattr(self, _attr, None)
+                if vw is not None:
+                    try:
+                        if vw.isRunning():
+                            vw.stop()
+                            vw.wait(5000)
+                    except Exception:
+                        pass
+                    setattr(self, _attr, None)
         except Exception:
             pass
         try:
@@ -4197,15 +4306,15 @@ class MainWindow(QMainWindow):
         act_settings.setToolTip("打开设置（Ctrl+,）")
         act_settings.setShortcut("Ctrl+,")
         act_settings.triggered.connect(self._open_settings)
-        m_tools=bar.addMenu("自制书籍")
-        act_xml2pdf=m_tools.addAction("xml2pdf 独立窗…")
-        act_xml2pdf.setToolTip("打开 E:/dev/cbeta/xml2pdf 独立转换窗")
+        m_tools=bar.addMenu("制作书籍")
+        act_xml2pdf=m_tools.addAction("运行 xml2pdf 制作书籍…")
+        act_xml2pdf.setToolTip("打开独立窗并带入当前丛书书单（可再编辑；输出建议落校验目录以便导入）")
         act_xml2pdf.triggered.connect(self._open_xml2pdf_window)
         act_verify_import=m_tools.addAction("导入校验通过E书…")
         act_verify_import.setToolTip("从校验目录（或另选目录）把验证通过的书拷入自制书目录")
         act_verify_import.triggered.connect(self._import_verified)
-        act_verify_rules=m_tools.addAction("独立窗输出与导入规则…")
-        act_verify_rules.setToolTip("独立窗输出目录的结构要求与导入判读规则（见契约 §9）")
+        act_verify_rules=m_tools.addAction("导入说明…")
+        act_verify_rules.setToolTip("独立窗输出怎么做才能被导入（见契约 §9）")
         act_verify_rules.triggered.connect(self._show_verify_rules)
         # 视图 → 布局（三栏含选书区 / 二栏隐藏选书区）
         from PySide6.QtGui import QActionGroup
@@ -4221,16 +4330,67 @@ class MainWindow(QMainWindow):
         (self.act_two if self._layout_mode()=="two" else self.act_three).setChecked(True)
 
     def _open_xml2pdf_window(self):
-        # 子进程启动 xml2pdf 独立窗（python -m pycbeta.gui）
+        # 打开独立窗，并把**当前丛书**书单/输出/预设带过去（用户可在窗内继续编辑）：
+        # 书单写校验目录 `{slug}_ids.txt`；输出预填同一校验目录（产物+报告便后续导入）；
+        # 不自动开跑、不强制校验。
         import subprocess, sys
-        x2p=Path(self.config.get("xml2pdf",{}).get("path","E:/dev/cbeta/xml2pdf"))
+        x2p=Path((self.config.get("xml2pdf",{}) or {}).get("path","") or "E:/dev/cbeta/xml2pdf")
         if not x2p.exists():
             QMessageBox.warning(self,"未找到",f"xml2pdf 路径不存在：{x2p}")
             return
+        argv=[sys.executable,"-m","pycbeta.gui"]
         try:
-            subprocess.Popen([sys.executable,"-m","pycbeta.gui"], cwd=str(x2p))
+            from cbeta_publish.books import xml2pdf_bridge as _b
+            data=self.coll_combo.currentData()
+            if not self._is_coll_placeholder(data):
+                d=self._coll_dict(data)
+                if d is None:
+                    try:
+                        d=self._read_coll(Path(data))
+                    except Exception:
+                        d=None
+                works=(d.get("work_ids",[]) or []) if d else []
+                if works:
+                    slug=str(d.get("id") or d.get("name") or "")
+                    vdir=_b.verify_coll_dir(self.config, slug)
+                    vdir.mkdir(parents=True, exist_ok=True)
+                    ids_file=vdir/f"{vdir.name}_ids.txt"
+                    ids_file.write_text("\n".join(works)+"\n", encoding="utf-8")
+                    argv+=["--ids-file",str(ids_file),"--out",str(vdir)]
+                    preset_name=(self.config.get("xml2pdf",{}) or {}).get("preset","")
+                    if preset_name:
+                        argv+=["--preset",preset_name]
+                    fmts=self._checked_fmts()
+                    if fmts:
+                        argv+=["--formats",",".join(fmts)]
+                    # 工作根一致性：独立窗走预设的 source.cbeta_ebook；
+                    # 与 publish 工作根不一致则基线/XML 各存一份。提示并可一键对齐。
+                    try:
+                        _pp=_b.resolve_preset(self.config, preset_name)
+                        if _pp is not None:
+                            _pd=_b.load_preset_dict(_pp, self.config) or {}
+                            _pe=str(((_pd.get("source") or {}).get("cbeta_ebook") or "")).strip()
+                            _mine=str(_b.xml_work_dir(self.config))
+                            if _pe and Path(_pe).resolve() != Path(_mine).resolve():
+                                _ret=QMessageBox.question(
+                                    self, "工作根不一致",
+                                    f"独立窗预设的工作根：\n{_pe}\n\npublish 的工作根：\n{_mine}\n\n"
+                                    "两边不一致会导致基线/XML 各存一份。\n"
+                                    "是否把预设对齐到 publish（覆盖保存该预设）？",
+                                    QMessageBox.Yes | QMessageBox.No)
+                                if _ret==QMessageBox.Yes:
+                                    _pd.setdefault("source", {})["cbeta_ebook"]=_mine
+                                    _b.save_preset(self.config, Path(_pp).stem, _pd)
+                    except Exception as e:
+                        print("preset workroot check fail", e)
+        except Exception as e:
+            print("prepare ids fail", e)
+        try:
+            subprocess.Popen(argv, cwd=str(x2p))
         except Exception as e:
             QMessageBox.warning(self,"启动失败",str(e))
+        else:
+            self.detail.setText("已打开独立窗（已带入当前丛书书单）")
 
     def _verify_coll(self):
         """当前丛书 (data, d, works)；占位/空/读失败返回 None（已弹窗）。"""
@@ -4304,10 +4464,22 @@ class MainWindow(QMainWindow):
         pstate["oncancel"]=worker.stop
         loop=QEventLoop()
         worker.finished_all.connect(lambda *a: loop.quit())
+        # 留引用：run 期间关窗能停掉它；跑完断开信号＋deleteLater，
+        # 避免局部变量释放直接析构仍在投递信号的 QThread（野指针崩溃）
+        self._verify_worker=worker
         worker.start()
         loop.exec()
         try:
             worker.wait()
+        except Exception:
+            pass
+        for _sig in ("progress", "finished_all"):
+            try:
+                getattr(worker, _sig).disconnect()
+            except Exception:
+                pass
+        try:
+            worker.deleteLater()
         except Exception:
             pass
         self._verify_worker=None
@@ -4334,20 +4506,41 @@ class MainWindow(QMainWindow):
         pstate["finish"](summary)
         self._load_coll_works()
         self._show_verify_results(imp, vdir, base)
+        self._maybe_review_failed(imp, vdir, base, allow_delete=True)
 
     def _show_verify_results(self, imp, vdir, base):
-        """把逐本/逐格式校验结果写入「书籍信息」页签（含目录链接），并切到该页。"""
+        """把逐本/逐格式校验结果写入「书籍信息」页签（含目录/文件链接），并切到该页。
+
+        已入库条目列出每部书入库了哪个格式文件（可点开），如：
+        ・T1852（docx/pdf）；未入 epub
+        """
         import html as _html
         from PySide6.QtCore import QUrl as _QU
         def _dirlink(p):
             return (f'<a href="{_QU.fromLocalFile(str(Path(p).resolve())).toString()}">'
                     f'{_html.escape(str(p))}</a>')
+        def _filelink(p, label):
+            return (f'<a href="{_QU.fromLocalFile(str(Path(p).resolve())).toString()}">'
+                    f'{_html.escape(label)}</a>')
         WARN='<span style="color:#c62828;">%s</span>'
         parts=["<b>校验结果</b>",
                "验证输出目录：" + _dirlink(vdir)]
         if imp["ok"]:
             parts.append(f"<b>已入库 {len(imp['ok'])} 部</b>")
-            parts += [f"・{_html.escape(x)}" for x in imp["ok"]]
+            _okf = imp.get("ok_files") or {}
+            _manual = imp.get("manual") or set()
+            for x in imp["ok"]:
+                _work = x.split("（", 1)[0]
+                _files = _okf.get(_work)
+                if not _files:
+                    parts.append(f"・{_html.escape(x)}")
+                    continue
+                _links = "/".join(_filelink(_dst, _fmt) for _fmt, _dst in _files)
+                _tail = ""
+                if "；未入 " in x:
+                    _tail = "；未入 " + x.split("；未入 ", 1)[1]
+                _mark = "（人工放行）" if _work in _manual else ""
+                parts.append(f"・{_html.escape(_work)}（{_links}）{_html.escape(_tail)}{_mark}")
         if imp["fail"]:
             parts += [WARN % f"未入库 {len(imp['fail'])} 部："]
             parts += [WARN % f"・{_html.escape(x)}" for x in imp["fail"]]
@@ -4382,9 +4575,15 @@ class MainWindow(QMainWindow):
         return out
 
     def _do_import_verified(self, works, vdir, base, update=None):
-        """扫描校验目录报告，把通过项的产物拷入自制书目录改名 `{fmt}/{work}.{fmt}`。
+        """扫描校验目录报告，把通过项的产物移入自制书目录 `{fmt}/{id 书名}.{fmt}`（L2 带书名）。
 
-        返回 {"ok": [...], "fail": [...], "undet": [...], "skip": [...]}。
+        返回 {"ok": [...], "fail": [...], "undet": [...], "skip": [...],
+              "ok_files": {work: [(fmt, dest_str)]},
+              "review": [(work, fmt, src_str, report_str, reason, missing, extra)]}
+        （dest 供结果页显示可点文件链接；review 供人工检验：
+        未通过/未判定格式都可人工放行；未放行项由 `_maybe_review_failed`
+        在托管校验目录内删除）。
+        通过项以 **move** 入 `{fmt}/{上游产物名}.{fmt}`（L2 带书名，同名不改）。
         """
         import shutil
         from cbeta_publish.books import xml2pdf_bridge as _b
@@ -4394,7 +4593,16 @@ class MainWindow(QMainWindow):
             pass
         reports=sorted(_b.verify_reports(vdir), key=lambda x: str(x[0]))
         ok_list, fail_list, undet_list, skip_list=[], [], [], []
+        ok_files={}
+        review=[]
         done=0
+        def _num_text(_f, _nums):
+            _mi, _ex=_nums.get(_f, (None, None))
+            if _mi is None and _ex is None:
+                return _f
+            _ms="?" if _mi is None else str(_mi)
+            _es="?" if _ex is None else str(_ex)
+            return f"{_f} 缺{_ms}/多{_es}"
         for rp, stem in reports:
             hit=next((w for w in works if stem==w or (stem and stem.startswith(w+" "))),
                      None)
@@ -4404,12 +4612,16 @@ class MainWindow(QMainWindow):
             else:
                 # 逐格式判定：某格式通过即入库该格式，未通过的格式跳过（不拖累通过者）
                 fmt_status=_b.verify_report_formats(rp)
+                pending=_b.verify_report_pending(rp)
+                # docx通过即pdf通过（pdf由docx校验覆盖，不重复验）
+                fmt_status=_b.apply_verify_coverage(fmt_status, pending)
                 overall=_b.verify_report_pass(rp)
+                nums=_b.verify_report_numbers(rp)
                 products=self._verify_products(vdir, hit)
                 if not products:
                     fail_list.append(f"{hit} 缺产物")
                 else:
-                    copied=[]; bad=[]; undet=[]
+                    moved=[]; bad=[]; undet=[]
                     for fmt, src in products:
                         st=fmt_status.get(fmt)
                         if st is None:
@@ -4417,33 +4629,206 @@ class MainWindow(QMainWindow):
                         if st is True:
                             try:
                                 (base/fmt).mkdir(parents=True, exist_ok=True)
-                                shutil.copy2(src, base/fmt/f"{hit}.{fmt}")
-                                copied.append(fmt)
+                                _dst=base/fmt/src.name   # L2：保留上游带书名
+                                shutil.move(str(src), str(_dst))
+                                moved.append(fmt)
+                                ok_files.setdefault(hit, []).append((fmt, str(_dst)))
                             except Exception as e:
-                                fail_list.append(f"{hit} {fmt} 拷贝失败: {e}")
+                                fail_list.append(f"{hit} {fmt} 入库失败: {e}")
                         elif st is False:
                             bad.append(fmt)
+                            _mi, _ex=nums.get(fmt, (None, None))
+                            _r="校验未通过"
+                            if _mi is not None or _ex is not None:
+                                _r+=f"（缺{'?' if _mi is None else _mi}/多{'?' if _ex is None else _ex}）"
+                            review.append((hit, fmt, str(src), str(rp), _r, _mi, _ex))
                         else:
                             undet.append(fmt)
-                    if copied:
-                        label=f"{hit}（{'/'.join(copied)}）"
+                            _r=pending.get(fmt)
+                            if _r == "no baseline":
+                                _reason="无基线"
+                            elif _r == "gen not found":
+                                _reason="无生成档"
+                            elif isinstance(_r, str) and _r.startswith("covered:"):
+                                _reason=f"由{_r.split(':',1)[1]}覆盖待定"
+                            elif isinstance(_r, str) and _r:
+                                _reason=_r
+                            else:
+                                _reason="未判定"
+                            review.append((hit, fmt, str(src), str(rp), _reason, None, None))
+                    if moved:
+                        label=f"{hit}（{'/'.join(moved)}）"
                         if bad or undet:
-                            label+=f"；未入 {'/'.join(bad+undet)}"
+                            label+=f"；未入 {'/'.join(_num_text(_f, nums) for _f in bad+undet)}"
                         ok_list.append(label)
                     elif bad:
-                        fail_list.append(f"{hit} 校验未通过（{'/'.join(bad)}）")
+                        fail_list.append(f"{hit} 校验未通过（{'/'.join(_num_text(_f, nums) for _f in bad)}）")
                     else:
-                        undet_list.append(f"{hit} 未判定")
+                        # 未判定：标注原因（无基线/覆盖源未过等），免得人工逐份翻报告
+                        _reasons=[]
+                        for _f in undet:
+                            _r=pending.get(_f)
+                            if _r == "no baseline":
+                                _reasons.append(f"{_f}无基线")
+                            elif _r == "gen not found":
+                                _reasons.append(f"{_f}无生成档")
+                            elif isinstance(_r, str) and _r.startswith("covered:"):
+                                _reasons.append(f"{_f}由{_r.split(':',1)[1]}覆盖待定")
+                        _suffix=f"（{'/'.join(_reasons)}）" if _reasons else ""
+                        undet_list.append(f"{hit} 未判定{_suffix}")
             done+=1
             if update is not None and not update(done, done_label):
                 break
-        return {"ok": ok_list, "fail": fail_list, "undet": undet_list, "skip": skip_list}
+        return {"ok": ok_list, "fail": fail_list, "undet": undet_list,
+                "skip": skip_list, "ok_files": ok_files, "review": review}
+
+    def _review_failed_dialog(self, review, base, allow_delete=False):
+        """人工检验未通过/未判定项：左勾选放行项，右预览校验报告＋可打开产物。
+
+        review: [(work, fmt, src, report, reason, missing, extra)]。
+        勾选＝放行入库（move，保留带书名）；未勾选的在 allow_delete 时从校验目录删除。
+        返回 [(work, fmt, dest_str)]（本次勾选并已入库的）。
+        """
+        import shutil
+        from PySide6.QtCore import Qt, QUrl as _QU
+        from PySide6.QtWidgets import (QDialog, QHBoxLayout, QLabel, QListWidget,
+                                       QListWidgetItem, QPushButton, QSplitter,
+                                       QTextBrowser, QVBoxLayout, QWidget)
+        dlg = QDialog(self)
+        dlg.setWindowTitle("人工检验未通过项")
+        dlg.resize(780, 480)
+        lay = QVBoxLayout(dlg)
+        _tail = "未勾选的将从校验目录删除。" if allow_delete else \
+                "未勾选的不入库（外部目录，不删除）。"
+        lay.addWidget(QLabel(f"勾选看过报告、确认差异可接受的格式，确定后放行入库；{_tail}"))
+        sp = QSplitter(Qt.Horizontal, dlg)
+        lay.addWidget(sp, 1)
+        left = QListWidget(sp)
+        for work, fmt, src, rp, reason, mi, ex in review:
+            it = QListWidgetItem(f"{work}（{fmt}）{reason}", left)
+            it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
+            it.setCheckState(Qt.Unchecked)
+            it.setData(Qt.UserRole, (work, fmt, src, rp))
+        rw = QWidget(sp)
+        rl = QVBoxLayout(rw)
+        rl.setContentsMargins(0, 0, 0, 0)
+        links = QLabel(rw)
+        links.setOpenExternalLinks(True)
+        links.setTextFormat(Qt.RichText)
+        rl.addWidget(links)
+        view = QTextBrowser(rw)
+        view.setReadOnly(True)
+        view.setOpenLinks(False)
+        rl.addWidget(view, 1)
+        sp.setSizes([260, 500])
+
+        def _show_report():
+            cur = left.currentItem()
+            if cur is None:
+                view.setPlainText("")
+                links.setText("")
+                return
+            _work, _fmt, _src, _rp = cur.data(Qt.UserRole)
+            try:
+                view.setPlainText(Path(_rp).read_text(encoding="utf-8", errors="replace"))
+            except Exception as e:
+                view.setPlainText(f"报告打不开：{e}")
+            _src_href = _QU.fromLocalFile(str(Path(_src).resolve())).toString()
+            _rp_href = _QU.fromLocalFile(str(Path(_rp).resolve())).toString()
+            _vd = str(Path(_rp).resolve().parent)
+            _vd_href = _QU.fromLocalFile(_vd).toString()
+            links.setText(
+                f'<a href="{_src_href}">打开产物</a>　'
+                f'<a href="{_rp_href}">打开报告</a>　'
+                f'<a href="{_vd_href}">打开校验目录</a>')
+
+        left.currentItemChanged.connect(lambda *_: _show_report())
+        if left.count():
+            left.setCurrentRow(0)
+        else:
+            _show_report()
+        bar = QHBoxLayout()
+        b_all = QPushButton("全选", dlg)
+        b_none = QPushButton("全不选", dlg)
+        b_all.clicked.connect(lambda: [left.item(i).setCheckState(Qt.Checked)
+                                       for i in range(left.count())])
+        b_none.clicked.connect(lambda: [left.item(i).setCheckState(Qt.Unchecked)
+                                        for i in range(left.count())])
+        b_ok = QPushButton("确定放行", dlg)
+        b_cancel = QPushButton("取消", dlg)
+        b_ok.clicked.connect(dlg.accept)
+        b_cancel.clicked.connect(dlg.reject)
+        for b in (b_all, b_none, b_ok, b_cancel):
+            bar.addWidget(b)
+        bar.addStretch()
+        lay.addLayout(bar)
+        if dlg.exec() != QDialog.Accepted:
+            return []
+        passed = []
+        for i in range(left.count()):
+            it = left.item(i)
+            work, fmt, src, _rp = it.data(Qt.UserRole)
+            if it.checkState() == Qt.Checked:
+                try:
+                    (base / fmt).mkdir(parents=True, exist_ok=True)
+                    dst = base / fmt / Path(src).name      # L2：保留带书名
+                    shutil.move(str(src), str(dst))
+                    passed.append((work, fmt, str(dst)))
+                except Exception as e:
+                    print("manual approve move fail", work, fmt, e)
+            elif allow_delete:
+                try:
+                    Path(src).unlink(missing_ok=True)
+                except Exception as e:
+                    print("manual reject delete fail", work, fmt, e)
+        return passed
+
+    def _maybe_review_failed(self, imp, vdir, base, allow_delete=False):
+        """导入后人工检验：通过项已入库；未通过/未判定项看报告后可放行。
+
+        托管校验目录（allow_delete）内：未放行项在检验后删除（未选中即删）；
+        外部目录不删。放行后刷新「书籍信息」结果页。
+        """
+        review = [t for t in imp.get("review", [])
+                  if (t[0], t[1]) not in self._manual_approved]
+        if not review:
+            return
+        works = sorted({t[0] for t in review})
+        _tail = "（不检验则未通过项将从校验目录删除）" if allow_delete else ""
+        ret = self._wrap_box(
+            QMessageBox.Question, "人工检验",
+            f"有 {len(review)} 个格式未通过校验（{len(works)} 部："
+            f"{'、'.join(works[:10])}），是否人工检验报告后放行入库？{_tail}",
+            QMessageBox.Yes | QMessageBox.No)
+        if ret == QMessageBox.Yes:
+            passed = self._review_failed_dialog(review, base, allow_delete=allow_delete)
+        else:
+            passed = []
+            if allow_delete:
+                # 不检验＝全部未放行 → 从校验目录删除
+                for _w, _f, _src, _rp, *_rest in review:
+                    try:
+                        Path(_src).unlink(missing_ok=True)
+                    except Exception as e:
+                        print("reject delete fail", _w, _f, e)
+        if passed:
+            by_work = {}
+            for work, fmt, dst in passed:
+                self._manual_approved.add((work, fmt))
+                by_work.setdefault(work, []).append((fmt, dst))
+            for work, files in by_work.items():
+                imp.setdefault("ok_files", {}).setdefault(work, []).extend(files)
+                imp["ok"].append(f"{work}（{'/'.join(f for f, _ in files)}）")
+                imp.setdefault("manual", set()).add(work)
+            self._load_coll_works()
+        self._show_verify_results(imp, vdir, base)
 
     def _import_verified(self):
-        """手动导入：校验目录报告判通过 → 产物拷入自制书目录。
+        """手动导入：校验目录报告判通过 → 产物移入自制书目录。
 
         - 当前丛书的 `verify_dir/<丛书>/` 有报告则直接导入；
         - 否则弹目录选择（用于导入 xml2pdf 独立窗输出目录里已校验的书）。
+        托管校验目录内的未放行项由人工检验环节删除；外部目录只导入不删。
         """
         from cbeta_publish.books import xml2pdf_bridge as _b
         got=self._verify_coll()
@@ -4468,6 +4853,7 @@ class MainWindow(QMainWindow):
                                f"（需要 `*_verify_report.txt` 或 `（验证）/report.txt`）")
                 return
         base=_b.xml_books_dir(self.config)
+        allow_delete=self._is_managed_verify_dir(vdir)
         dlg, update, pstate=self._make_progress("导入校验通过E书", max(1,len(reports)))
         imp=self._do_import_verified(works, vdir, base, update=update)
         msg=[f"入库 {len(imp['ok'])} 部 → {base}"]
@@ -4480,16 +4866,27 @@ class MainWindow(QMainWindow):
         pstate["finish"](msg)
         self._load_coll_works()
         self._show_verify_results(imp, vdir, base)
+        self._maybe_review_failed(imp, vdir, base, allow_delete=allow_delete)
+
+    def _is_managed_verify_dir(self, vdir):
+        """vdir 是否位于本程序校验根（`verify_dir`）内——只有托管目录才允许删除未放行项。"""
+        from cbeta_publish.books import xml2pdf_bridge as _b
+        try:
+            root=_b.verify_dir(self.config).resolve()
+            p=Path(vdir).resolve()
+            return p==root or root in p.parents
+        except Exception:
+            return False
 
     def _verify_rules_text(self):
-        """导入规范正文（HTML；与契约 §9 同文）。"""
+        """导入说明正文（HTML；完整规范见契约 §9）。"""
         return VERIFY_IMPORT_RULES_HTML
 
     def _show_verify_rules(self):
-        """「自制书籍 → 独立窗输出与导入规则…」：只读可滚动弹窗。"""
+        """「制作书籍 → 导入说明…」：只读可滚动弹窗。"""
         from PySide6.QtWidgets import QDialog, QVBoxLayout, QTextBrowser, QPushButton
         dlg = QDialog(self)
-        dlg.setWindowTitle("独立窗输出与导入规则")
+        dlg.setWindowTitle("导入说明")
         dlg.resize(560, 480)
         lay = QVBoxLayout(dlg)
         view = QTextBrowser(dlg)
@@ -4581,6 +4978,32 @@ class MainWindow(QMainWindow):
         s=_re.sub(r"\s+", " ", s).strip(" ._")
         return s or fallback
 
+    def _pack_display_stem(self, work):
+        """打包显示名（不含扩展名）：与合并书名书签同款（`title_of`），
+        取不到书名回退裸 id；文件名清洗。缓存不动。"""
+        try:
+            t=(self.sutra.title_of(work) or "").strip()
+        except Exception:
+            t=""
+        if not t:
+            return work
+        return self._safe_name(t)
+
+    @staticmethod
+    def _pack_unique_name(used: set, name: str) -> str:
+        """包内重名 guard：已占用则加 _2/_3…（保留扩展名）。"""
+        if name not in used:
+            used.add(name)
+            return name
+        stem, dot, ext = name.partition(".")
+        i = 2
+        while True:
+            cand = f"{stem}_{i}{dot}{ext}" if dot else f"{stem}_{i}"
+            if cand not in used:
+                used.add(cand)
+                return cand
+            i += 1
+
     def _work_vol_map(self):
         # 作品 → {"edition","seq","label"}（由 mulu/vol.json 派生，缓存；拖拽记录优先作人工覆盖）
         if getattr(self, "_wvol_cache", None) is None:
@@ -4594,7 +5017,7 @@ class MainWindow(QMainWindow):
         return self._wvol_cache
 
     def _group_works(self, d, ok, ok_titles, ok_works, mode=None, depth=None):
-        """按 mode 分组，返回 [ {label, stem, ok, titles, works, sortkey}, ... ]。
+        """按 mode 分组，返回 [ {label, stem, segments, ok, titles, works, sortkey}, ... ]。
 
         mode：none=单组；volume=按刊本册；catalog=按部类目录（路径取前 depth 段）。
         depth 默认取配置（默认 2）。文件名 stem = 清洗后路径段用 `_` 连接。
@@ -4608,7 +5031,7 @@ class MainWindow(QMainWindow):
         if depth is None:
             depth = self._merge_depth()
         if mode == "none":
-            return [{"label": None, "stem": None, "ok": ok, "titles": ok_titles,
+            return [{"label": None, "stem": None, "segments": [], "ok": ok, "titles": ok_titles,
                      "works": ok_works, "sortkey": (9, "")}]
         manual = (d.get("work_groups") or {}) if mode == "volume" else {}
         volume_map = self._work_vol_map() if mode == "volume" else None
@@ -4621,33 +5044,136 @@ class MainWindow(QMainWindow):
                 ed = (info or {}).get("edition") or ""
                 mlab = manual.get(w) or manual.get(nw)
                 if mlab and mlab != ed:
-                    key = ("m", mlab); label = mlab; stem = mlab
+                    key = ("m", mlab); label = mlab; stem = mlab; segs = [mlab]
+                    full_segs = [mlab]
                     sortkey = (0, "", 0, mlab)
                 else:
                     r = _cp.resolve(w, "volume", depth, volume_map=volume_map)
                     key = ("v",) + tuple(r["segments"]); label = r["label"]; stem = r["stem"]
+                    segs = list(r["segments"])
+                    full_segs = list(r.get("full_segments") or segs)
                     sortkey = (1,) + tuple(r["order"])
             else:  # catalog（部类）
                 r = _cp.resolve(w, "bulei", depth, bulei_map=bulei_map)
                 key = ("c",) + tuple(r["segments"]); label = r["label"]; stem = r["stem"]
+                segs = list(r["segments"])
+                full_segs = list(r.get("full_segments") or segs)
                 sortkey = (1,) + tuple(r["order"])
-            g = buckets.setdefault(key, {"label": label, "stem": stem,
+            g = buckets.setdefault(key, {"label": label, "stem": stem, "segments": segs,
+                                         "full_segments": full_segs,
                                          "ok": [], "titles": [], "works": [],
                                          "sortkey": sortkey})
             g["ok"].append(f); g["titles"].append(t); g["works"].append(w)
         return sorted(buckets.values(), key=lambda g: g["sortkey"])
 
-    def _merge_preview(self, works, mode, depth):
-        """合并弹框预览：[(label, 部数, 文件名说明), ...]。"""
+    def _merge_name_template(self):
+        """分册文件名模板（`merge.name_template`），缺省 `{coll}.{nn}.{seg}`。"""
+        t = ((self.config.get("merge", {}) or {}).get("name_template") or "").strip()
+        return t or "{coll}.{nn}.{seg}"
+
+    def _cover_group_label(self, g, titles=None):
+        """封面副标题（分册 label 的显示形态）：按 cover.bulei 配置
+        {enabled(总开关，默认开；关则部类书名全不显示),
+        depth(0=跟随分册深度，即分册截断处，与旧版封面一致；显式 N 取全路径前 N 段，
+        超出截断的段只反映首部), layout(lines=每层一行/one=一行), sep(默认·),
+        show_num(默认关，关则去段首序号),
+        titles(none=不显示书名/all=显示所有书名，一行一个，不跟部类行设置)}。
+        书名中 `｜` 转全角 `／`（防冲掉 `丛书名｜副标题` 切分）。
+        文件名模板继续用截断后 segments，此处只影响封面/EPUB 显示。"""
+        bcfg = (self.config.get("cover", {}) or {}).get("bulei") or {}
+        if not bool(bcfg.get("enabled", True)):
+            return ""
+        full = list(g.get("full_segments") or g.get("segments") or [])
+        trunc = list(g.get("segments") or [])
+        try:
+            depth = int(bcfg.get("depth", 0) or 0)
+        except Exception:
+            depth = 0
+        # depth=0 跟随分册深度＝截断处（与旧版封面一致）；显式 depth 取全路径前 N 段
+        full = full[:depth] if depth > 0 else full[:len(trunc)]
+        if not bool(bcfg.get("show_num", False)):
+            full = [re.sub(r"^\s*\d+\s*", "", s) for s in full]
+        full = [s for s in full if s]
+        if (bcfg.get("layout", "lines") or "lines") == "one":
+            disp = str(bcfg.get("sep", "·") or "·").join(full)
+        else:
+            disp = " / ".join(full)
+        if (bcfg.get("titles", "none") or "none") == "all":
+            _ts = [str(t).replace("｜", "／").strip()
+                   for t in (titles or []) if str(t).strip()]
+            if _ts:
+                disp = (disp + " / " + " / ".join(_ts)) if disp else " / ".join(_ts)
+        return disp
+
+    def _merge_basename(self, d, g, idx, template=None, total=None):
+        """分册输出基名（无扩展名）：模板占位 `{coll}` 丛书名、`{n}` 全局序号（不补零）、
+        `{nn}` 全局序号（自适应补零：宽度＝总文件数的十进制位数，拿不到总数时固定两位）、
+        `{seg}` 末段名、`{seg0}` 首段前导数字（如 `06 寶積部類` → `06`，无则空）、
+        `{seg1}`…`{segN}` 第 N 段（超出段数为空；`{seg1}` 去掉首段前导数字，
+        因数字已由 `{seg0}` 表示；`{seg}`/`{stem}`/`{label}` 保持原样）、`{stem}` 下划线
+        全路径、`{label}` 斜杠全路径、`{count}` 本组电子书部数（裸数字）。
+        非法字符按 `_safe_name` 清洗。
+        不同分组模板展开重名时以预览为准（所见即所得），请避开。"""
+        segs = list(g.get("segments") or [])
+        seg = segs[-1] if segs else (g.get("stem") or "")
+        m0 = re.match(r"\s*(\d+)", segs[0]) if segs else None
+        try:
+            _idx = max(1, int(idx or 1))
+        except Exception:
+            _idx = 1
+        try:
+            _total = int(total) if total is not None else 0
+        except Exception:
+            _total = 0
+        _width = len(str(_total)) if _total > 0 else 2
+        # 不分册（idx=None）：单文件无序号，{n}/{nn} 置空（如缺省模板即 {coll}）；
+        # {coll}/{count} 正常展开
+        _no_serial = idx is None
+        vals = {
+            "{coll}": str((d or {}).get("name") or ""),
+            "{n}": "" if _no_serial else str(_idx),
+            "{nn}": "" if _no_serial else f"{_idx:0{_width}d}",
+            "{seg}": seg,
+            "{seg0}": m0.group(1) if m0 else "",
+            "{stem}": g.get("stem") or "",
+            "{label}": g.get("label") or "",
+            "{count}": str(len(g.get("works") or [])),
+        }
+        for i, s in enumerate(segs, 1):
+            if i == 1:
+                # {seg0} 已取走首段前导数字，{seg1} 去掉它（仅首段；{seg}/{stem}/{label} 保持原样）
+                s = re.sub(r"^\s*\d+\s*", "", s)
+            vals["{seg%d}" % i] = s
+        name = template if template is not None else self._merge_name_template()
+        for k, v in vals.items():
+            name = name.replace(k, v)
+        name = re.sub(r"\{seg\d+\}", "", name)   # 超出段数的分段变量置空
+        # 首个 _safe_name 用空 fallback（空模板展开为空时才能落到 stem；其自带 fallback 会短路 or）
+        # 传入 template 为空串同样回退缺省（与配置为空一致）
+        if not (name or "").strip():
+            name = self._merge_name_template()
+            for k, v in vals.items():
+                name = name.replace(k, v)
+            name = re.sub(r"\{seg\d+\}", "", name)
+        return self._safe_name(name, fallback="") or self._safe_name(g.get("stem"))
+
+    def _merge_preview(self, works, mode, depth, coll="", name_template=None):
+        """合并弹框预览：[(label, 部数, 文件名), ...]（文件名无后缀，与实际落盘同规则）。
+        name_template 非 None 时用它展开（合并窗实时输入），否则用配置模板。"""
         groups = self._group_works({}, list(works), list(works), list(works),
                                    mode=mode, depth=depth)
         out = []
-        for g in groups:
+        for idx, g in enumerate(groups, 1):
             if g["label"] is None:
-                out.append(("（不分册）", len(g["ok"]), "整部一个文件"))
+                # 不分册同样走模板（无序号；{coll}/{count} 可用；缺省即丛书名本身）
+                out.append(("（不分册）", len(g["ok"]),
+                            self._merge_basename({'name': coll}, g, None,
+                                                 template=name_template, total=1)))
             else:
                 out.append((g["label"], len(g["ok"]),
-                            f"{self._safe_name(g['stem'])}.pdf / .epub"))
+                            self._merge_basename({'name': coll}, g, idx,
+                                                 template=name_template,
+                                                 total=len(groups))))
         return out
 
     def _intro_for(self, ok_works, cover_cfg, made_by_xml=False):
@@ -4659,8 +5185,6 @@ class MainWindow(QMainWindow):
                 intro=bulei_index.summarize(ok_works, self._bulei_roots, title_of=self.sutra.title_of)
                 if intro_cfg.get("title"):
                     intro["title"]=intro_cfg["title"]
-                if not intro_cfg.get("list", True):
-                    intro["sections"]=[]
                 if made_by_xml:
                     # 自制来源在「说明」标题下一行居中注明（文案可在设置「封面/版式」改）
                     _note=(intro_cfg.get("note") or "").strip() or "依 CBETA XML 自制"
@@ -4774,14 +5298,19 @@ class MainWindow(QMainWindow):
             btn.clicked.connect(dlg.accept)
             if os.environ.get("QT_QPA_PLATFORM") == "offscreen":
                 dlg.close()
-                return
-            ms=int(st.get("autoclose_ms") or 0)
-            if ms > 0:
-                from PySide6.QtCore import QTimer
-                QTimer.singleShot(ms, dlg.accept)   # 到点自动关闭 → exec 返回后继续后续步骤
-            sb=log.verticalScrollBar()
-            sb.setValue(sb.maximum())
-            dlg.exec()
+            else:
+                ms=int(st.get("autoclose_ms") or 0)
+                if ms > 0:
+                    from PySide6.QtCore import QTimer
+                    QTimer.singleShot(ms, dlg.accept)   # 到点自动关闭 → exec 返回后继续后续步骤
+                sb=log.verticalScrollBar()
+                sb.setValue(sb.maximum())
+                dlg.exec()
+            # 收尾断开日志链接：该窗已结束，避免隐藏残留窗累积活连接
+            try:
+                log.anchorClicked.disconnect()
+            except Exception:
+                pass
         st["finish"]=finish
         return dlg, update, st
 
@@ -4813,7 +5342,8 @@ class MainWindow(QMainWindow):
         for fmt in fmts:
             for w in works:
                 out, reused = xml2pdf_bridge.ensure_one(
-                    w, fmt, xml_out, self.config, preset=preset, regen_all=regen_all)
+                    w, fmt, xml_out, self.config, preset=preset, regen_all=regen_all,
+                    name=xml2pdf_bridge.built_name(self.config, w))
                 done[0]+=1
                 if out is not None and out.exists():
                     ok_map[fmt][w]=out
@@ -4872,11 +5402,19 @@ class MainWindow(QMainWindow):
             from cbeta_publish.gui.merge_dialog import MergeDialog
             last=self._merge_ask_last()
             dlg=MergeDialog(self, default_mode=last["mode"], default_depth=last["depth"],
-                            preview=lambda m, dep: self._merge_preview(works, m, dep))
+                            default_template=self._merge_name_template(),
+                            preview=None)
+            dlg._preview = lambda m, dep: self._merge_preview(
+                works, m, dep, coll=d["name"], name_template=dlg.template())
+            dlg._refresh()
             if dlg.exec()!=_QD.Accepted:
                 self.detail.setText("已取消合成（未选择分册模式）")
                 return
             merge_mode, merge_depth = dlg.chosen()
+            # 窗内模板同步设置（随 ask_last 一并落盘；空保持原值）
+            _tpl = dlg.template()
+            if _tpl:
+                self.config.setdefault("merge", {})["name_template"] = _tpl
             self._set_merge_ask_last(merge_mode, merge_depth)
         from cbeta_publish.books.ebook_merger import merge_pdfs, merge_epubs, MergeCancelled
         from cbeta_publish.books import xml2pdf_bridge
@@ -4928,6 +5466,33 @@ class MainWindow(QMainWindow):
         done_units=0
         cancelled=False
         dlg, update, pstate = self._make_progress("合成", 100)
+        # 编辑说明前置检查（一次）：启用但未选文件 / 文件无效 / 封面总开关关闭
+        # 都会导致不插编辑说明页——弹框问是否继续，避免静默跳过
+        from cbeta_publish.books.ebook_merger import parse_editnote_file
+        _en_parsed=None
+        _encfg0=(cover_cfg.get("edit_note") or {})
+        if _encfg0.get("enabled", False):
+            _enf0=(_encfg0.get("file") or "").strip()
+            _en_problems=[]
+            if not _enf0:
+                _en_problems.append("已勾选插入编辑说明页，但未选择说明文件")
+            else:
+                _en_parsed=parse_editnote_file(_enf0)
+                if _en_parsed is None:
+                    _en_problems.append(f"说明文件缺失或无有效内容：{_enf0}")
+            if _en_parsed is not None and not cover_cfg.get("enabled", True):
+                _en_problems.append("封面总开关已关闭（合并时不加封面封底），编辑说明页需要封面区")
+            if _en_problems:
+                _ret=self._wrap_box(QMessageBox.Question, "编辑说明",
+                    "；".join(_en_problems) + "。\n是否继续合并（不插编辑说明页）？",
+                    QMessageBox.Yes | QMessageBox.No)
+                if _ret!=QMessageBox.Yes:
+                    self.btn_merge.setEnabled(True)
+                    pstate["finish"](["已取消合成（本次不输出/未完成）。"])
+                    self._load_coll_works()
+                    self.detail.setText("已取消合成")
+                    return
+                _en_parsed=None
         def bump(label=""):
             nonlocal done_units
             done_units+=1
@@ -4942,7 +5507,8 @@ class MainWindow(QMainWindow):
                     # 注意 CBReader 书库是 P5a（按卷切分），不是 xml2pdf 要的
                     # P5（整部经），publish 侧不再自行定位 XML 文件。
                     out, reused = xml2pdf_bridge.ensure_one(
-                        w, fmt, xml_out, self.config, preset=run_preset, regen_all=regen_all)
+                        w, fmt, xml_out, self.config, preset=run_preset, regen_all=regen_all,
+                        name=xml2pdf_bridge.built_name(self.config, w))
                     if out is not None and out.exists():
                         ok.append(out); ok_titles.append(self.sutra.title_of(w)); ok_works.append(w)
                     else:
@@ -4969,13 +5535,14 @@ class MainWindow(QMainWindow):
                 continue
             out_dir=self._out_dir()/d["name"]
             out_dir.mkdir(parents=True, exist_ok=True)
-            _sp = self.config.get("pdf", {}).get("split_pages", 5000)
-            split_pages = 5000 if _sp is None else max(0, int(_sp))
-            _si = self.config.get("epub", {}).get("split_items", 500)
-            split_items = 500 if _si is None else max(0, int(_si))
+            _sp = self.config.get("pdf", {}).get("split_pages", 0)
+            split_pages = 0 if _sp is None else max(0, int(_sp))
+            _si = self.config.get("epub", {}).get("split_items", 0)
+            split_items = 0 if _si is None else max(0, int(_si))
             organizer=cover_cfg.get("organizer","")
             groups=self._group_works(d, ok, ok_titles, ok_works,
                                      mode=merge_mode, depth=merge_depth)
+            # 编辑说明：前置已解析；仅第一分册传入
             import html as _html
             from PySide6.QtCore import QUrl as _QU
             def _flink(path):
@@ -4986,30 +5553,33 @@ class MainWindow(QMainWindow):
             merge_base=done_units
             group_offset=0
             try:
-                for g in groups:
+                for gindex, g in enumerate(groups, 1):
                     glabel=g["label"]; gok=g["ok"]; gtitles=g["titles"]; gworks=g["works"]; stem=g["stem"]
                     gbase=merge_base+group_offset
                     def gprog(dd, nn, ll, _gbase=gbase, _n=len(gok)):
                         return update(100*(_gbase+_n*(dd/max(1,nn)))/total_units, ll)
                     if glabel is None:
                         cname=d["name"]
-                        out=out_dir/f"{d['name']}.{fmt}"
+                        out=out_dir/f"{self._merge_basename(d, g, None, total=1)}.{fmt}"
                         update(100*gbase/total_units, f"[{fmt}] 不分册 → {out.name}（{len(gok)} 部）")
                     else:
-                        cname=f"{d['name']}｜{glabel}"
-                        out=out_dir/f"{self._safe_name(stem)}.{fmt}"
+                        _disp = self._cover_group_label(g, gtitles)
+                        cname = f"{d['name']}｜{_disp}" if _disp else d["name"]
+                        out=out_dir/f"{self._merge_basename(d, g, gindex, total=len(groups))}.{fmt}"
                         update(100*gbase/total_units, f"[{fmt}] 分册「{glabel}」 → {out.name}（{len(gok)} 部）")
                     intro=self._intro_for(gworks, cover_cfg, made_by_xml=(run_source=="xml"))
+                    # 编辑说明仅第一分册
+                    _en_one=_en_parsed if gindex==1 else None
                     gfiles=[]
                     if fmt=="pdf":
-                        parts=merge_pdfs(gok, out, titles=gtitles, collection_name=cname, organizer=organizer, cover_config=cover_cfg, intro=intro, progress=gprog, split_pages=split_pages)
+                        parts=merge_pdfs(gok, out, titles=gtitles, collection_name=cname, organizer=organizer, cover_config=cover_cfg, intro=intro, progress=gprog, split_pages=split_pages, editnote=_en_one)
                         gfiles=[str(pt.resolve()) for pt in parts] if parts else [str(out.resolve())]
                     else:
                         parts=merge_epubs(gok, out, collection_name=cname,
                                           organizer=organizer,
                                           titles=gtitles, cover_config=cover_cfg, intro=intro,
                                           progress=gprog,
-                                          split_items=split_items)
+                                          split_items=split_items, editnote=_en_one)
                         gfiles=[str(pt.resolve()) for pt in parts]
                     for s in gfiles:
                         success.append(s)
@@ -5103,6 +5673,19 @@ class MainWindow(QMainWindow):
             return None
         return [f for f, b in boxes if b.isChecked()]
 
+    @staticmethod
+    def _missing_by_fmt(missing):
+        """缺书清单按格式计数：["pdf 缺 5 部", "epub 缺 3 部"]（保持传入顺序，不列文件名）。"""
+        order = []
+        counts = {}
+        for item in missing or []:
+            fmt = item.rsplit(".", 1)[-1] if "." in str(item) else "?"
+            if fmt not in counts:
+                counts[fmt] = 0
+                order.append(fmt)
+            counts[fmt] += 1
+        return [f"{f} 缺 {counts[f]} 部" for f in order]
+
     def _zip(self):
         fmts = self._choose_pack_fmts()
         if fmts is None:
@@ -5148,20 +5731,20 @@ class MainWindow(QMainWindow):
                     if not dest.exists():
                         missing.append(f"{w}.{fmt}")
             if missing:
-                _pre=", ".join(missing[:3]) + ("..." if len(missing)>3 else "")
+                _miss_text = "、".join(self._missing_by_fmt(missing))
                 ret=QMessageBox.question(self, "下载确认",
-                    f"有 {len(missing)} 部未下载（{_pre}）。\n是否先下载？",
+                    f"缺书：{_miss_text}。\n是否先下载？",
                     QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel)
                 if ret!=QMessageBox.Yes:
-                    self._wrap_box(QMessageBox.Warning, "未全部下载", f"有 {len(missing)} 部未下载，请先下载后再打包。")
+                    self._wrap_box(QMessageBox.Warning, "未全部下载", f"缺书：{_miss_text}，请先下载后再打包。")
                     return
                 pairs=[(w, fmt) for fmt in fmts for w in works
-                       if not official_ebook_source.local_path(w, fmt, dest_dir).exists()]
+                        if not official_ebook_source.local_path(w, fmt, dest_dir).exists()]
                 self._download_missing(pairs, dest_dir, title="下载（ZIP 前）", autoclose_ok=True)
                 missing=[f"{w}.{fmt}" for fmt in fmts for w in works
                          if not official_ebook_source.local_path(w, fmt, dest_dir).exists()]
                 if missing:
-                    self._wrap_box(QMessageBox.Warning, "未全部下载", f"仍有 {len(missing)} 部未下载，已取消打包。")
+                    self._wrap_box(QMessageBox.Warning, "未全部下载", f"仍缺书：{'、'.join(self._missing_by_fmt(missing))}，已取消打包。")
                     return
             src_map = {fmt: {w: official_ebook_source.local_path(w, fmt, dest_dir) for w in works}
                        for fmt in fmts}
@@ -5178,12 +5761,13 @@ class MainWindow(QMainWindow):
         total=max(1, len(works)*len(fmts)*2)   # 收集文件 + 写入压缩 各占一半
         done=0
         dlg, update, pstate = self._make_progress("ZIP 打包", total)
+        used_names=set()   # 包内重名 guard（显示名维度）
         for fmt in fmts:
             files=[]
             for w in works:
                 f=src_map.get(fmt, {}).get(w)
                 if f is not None and Path(f).exists():
-                    files.append(Path(f))
+                    files.append((w, Path(f)))
                 else:
                     failed.append(f"{w}.{fmt} 缺失")
                 done+=1
@@ -5198,15 +5782,19 @@ class MainWindow(QMainWindow):
             zpath=out_dir/f"{d['name']}_{fmt}.zip"
             try:
                 with zipfile.ZipFile(zpath,"w", zipfile.ZIP_DEFLATED) as z:
-                    for i,f in enumerate(files):
+                    for i,(w,f) in enumerate(files):
                         if f.is_dir():
-                            # 目录型（html/docx/odt/txt/txt_notes 解压后）：walk 按 部/相对路径 写入
+                            # 目录型（html/docx/odt/txt/txt_notes 解压后）：顶层段改显示名，
+                            # 内部相对路径不变
+                            _disp=self._pack_unique_name(used_names, self._pack_display_stem(w))
                             for sub in sorted(p for p in f.rglob("*") if p.is_file()):
-                                z.write(sub, arcname=f"{f.name}/{sub.relative_to(f).as_posix()}")
+                                z.write(sub, arcname=f"{_disp}/{sub.relative_to(f).as_posix()}")
                         else:
-                            z.write(f, arcname=f.name)
+                            _disp=self._pack_unique_name(
+                                used_names, f"{self._pack_display_stem(w)}.{fmt}")
+                            z.write(f, arcname=_disp)
                         done+=1
-                        if not update(done, f"[{fmt}] 压缩 {f.name}"):
+                        if not update(done, f"[{fmt}] 压缩 {_disp}"):
                             cancelled=True
                             break
                 if cancelled:
@@ -5291,12 +5879,12 @@ class MainWindow(QMainWindow):
                     if not dest.exists():
                         missing.append(f"{w}.{fmt}")
             if missing:
-                _pre=", ".join(missing[:3]) + ("..." if len(missing)>3 else "")
+                _miss_text = "、".join(self._missing_by_fmt(missing))
                 ret=QMessageBox.question(self, "下载确认",
-                    f"有 {len(missing)} 部未下载（{_pre}）。\n是否先下载？",
+                    f"缺书：{_miss_text}。\n是否先下载？",
                     QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel)
                 if ret!=QMessageBox.Yes:
-                    self._wrap_box(QMessageBox.Warning, "未全部下载", f"有 {len(missing)} 部未下载，请先下载后再导出。")
+                    self._wrap_box(QMessageBox.Warning, "未全部下载", f"缺书：{_miss_text}，请先下载后再导出。")
                     return
                 pairs=[(w, fmt) for fmt in fmts for w in works
                        if not official_ebook_source.local_path(w, fmt, dest_dir).exists()]
@@ -5304,7 +5892,7 @@ class MainWindow(QMainWindow):
                 missing=[f"{w}.{fmt}" for fmt in fmts for w in works
                          if not official_ebook_source.local_path(w, fmt, dest_dir).exists()]
                 if missing:
-                    self._wrap_box(QMessageBox.Warning, "未全部下载", f"仍有 {len(missing)} 部未下载，已取消导出。")
+                    self._wrap_box(QMessageBox.Warning, "未全部下载", f"仍缺书：{'、'.join(self._missing_by_fmt(missing))}，已取消导出。")
                     return
             src_map = {fmt: {w: official_ebook_source.local_path(w, fmt, dest_dir) for w in works}
                        for fmt in fmts}
@@ -5318,6 +5906,7 @@ class MainWindow(QMainWindow):
         total=max(1, len(works)*len(fmts))
         done=0
         dlg, update, pstate = self._make_progress("导出", total)
+        used_names=set()   # 目标内重名 guard（显示名维度）
         for fmt in fmts:
             for w in works:
                 src=src_map.get(fmt, {}).get(w)
@@ -5325,12 +5914,15 @@ class MainWindow(QMainWindow):
                 if src is not None and src.exists():
                     try:
                         if src.is_dir():
-                            dest = Path(target)/src.name
+                            dest = Path(target)/self._pack_unique_name(
+                                used_names, self._pack_display_stem(w))
                             shutil.copytree(src, dest, dirs_exist_ok=True)
                             success.append(str(dest))
                         else:
-                            shutil.copy(src, Path(target)/src.name)
-                            success.append(str(Path(target)/src.name))
+                            dest = Path(target)/self._pack_unique_name(
+                                used_names, f"{self._pack_display_stem(w)}.{fmt}")
+                            shutil.copy(src, dest)
+                            success.append(str(dest))
                     except Exception as e:
                         failed.append(f"{w}.{fmt} 拷贝失败: {e}")
                 else:

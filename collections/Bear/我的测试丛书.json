@@ -1,0 +1,31 @@
+{
+  "id": "custom_kongbaicongshu_20260915",
+  "slug": "Bear_wodeceshicongshu_20260925",
+  "name": "我的测试丛书",
+  "category": "Bear",
+  "tags": [
+    "custom"
+  ],
+  "work_ids": [
+    "T0360",
+    "T0361",
+    "T0364",
+    "T0369",
+    "T1755",
+    "T1757",
+    "T1854",
+    "T1852",
+    "T0219",
+    "T0218",
+    "T0217"
+  ],
+  "works": [],
+  "source": "official",
+  "work_sources": {},
+  "work_groups": {},
+  "xml_options": {},
+  "created_at": "2026-09-15T22:28:47.799501Z",
+  "updated_at": "2026-09-25T15:08:36.459800Z",
+  "last_publish_at": "2026-09-25T15:59:42.747800Z",
+  "last_publish_dir": "E:\\dev\\cbeta\\publish\\collections_books\\我的测试丛书"
+}

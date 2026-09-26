@@ -20,7 +20,8 @@ _LAST = 10 ** 6
 
 def _clean_bulei_seg(title: str) -> str:
     """部类树节点标题 → 干净段名：去经号 token 及其逗号连带的卷号列表
-    （`T30a,42,45`/`X46,54`/`T1564-67`/`K1482`…）、`etc.`、列表标点；
+    （`T30a,42,45`/`X46,54`/`T1564-67`/`K1482`…；续号同样可带字母后缀，
+    如 `T11-12a,26a,37,40b`，否则残留孤立 `a`/`b` 进文件名）、`etc.`、列表标点；
     保留顶层序号前缀、全角 `／`（如 `中觀部／疏`）与作者等正文（`【隋 吉藏撰】`）。
     """
     t = title or ""
@@ -28,10 +29,11 @@ def _clean_bulei_seg(title: str) -> str:
     num = m.group(1) if m else ""
     if m:
         t = t[m.end():]
-    # 经号 token（含其后逗号分隔的裸卷号列表）
-    t = re.sub(r"[A-Za-z]{1,3}\d+[-\dA-Za-z]*(?:\s*[,，、;；]\s*\d+[-\d]*)*", " ", t)
-    # 残留的「逗号+裸卷号」（其前导经号已先被去掉）
-    t = re.sub(r"[,，、;；]\s*\d+[-\d]*", " ", t)
+    # 经号 token（含其后逗号分隔的裸卷号列表，续号可带字母后缀）
+    # 经号 token（含其后逗号分隔的裸卷号列表，续号可带字母后缀）
+    t = re.sub(r"[A-Za-z]{1,3}\d+[-\dA-Za-z]*(?:\s*[,，、;；]\s*\d+[-\dA-Za-z]*)*", " ", t)
+    # 残留的「逗号+裸卷号」（其前导经号已先被去掉；同样可带字母后缀）
+    t = re.sub(r"[,，、;；]\s*\d+[-\dA-Za-z]*", " ", t)
     t = re.sub(r"\betc\.?", " ", t, flags=re.I)
     t = re.sub(r"[,，、;；/]+", " ", t)          # 去列表标点与半角斜杠
     t = re.sub(r"\s*／\s*", "／", t)             # 全角斜杠两侧不留空格
@@ -103,11 +105,14 @@ def resolve(work, dim, depth=2, *, bulei_map=None, volume_map=None) -> dict:
         if not parts:
             parts = ["未歸類"]
             unclassified = True
-    parts = [p for p in parts if p][:depth]
+    parts = [p for p in parts if p]
+    full = list(parts)   # 未截断全路径（封面显示可取更深；文件名仍用截断后 segments）
+    parts = parts[:depth]
     if not parts:
         parts = ["未歸類" if dim != "volume" else "未分册"]
         unclassified = True
     label = " / ".join(parts)
     stem = "_".join(_safe_seg(p) for p in parts) or label
     return {"segments": parts, "label": label, "stem": stem,
-            "order": order, "unclassified": unclassified}
+            "order": order, "unclassified": unclassified,
+            "full_segments": full or parts}

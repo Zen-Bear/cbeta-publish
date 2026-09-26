@@ -146,7 +146,8 @@ class PackDirFormatTest(unittest.TestCase):
         self.assertTrue(zpath.is_file())
         with zipfile.ZipFile(zpath) as z:
             names = sorted(z.namelist())
-        self.assertEqual(names, ["T0001/T0001-toc.txt", "T0001/T0001.txt"])
+        stem = self.win._pack_display_stem("T0001")
+        self.assertEqual(names, [f"{stem}/T0001-toc.txt", f"{stem}/T0001.txt"])
         self.assertEqual(self.win.tab_bottom.currentIndex(), 1)   # 切到丛书信息页
 
     def test_export_copies_dir_tree(self):
@@ -158,8 +159,9 @@ class PackDirFormatTest(unittest.TestCase):
             self.win._export()
         finally:
             restore()
-        self.assertEqual((target / "T0001" / "T0001.txt").read_text(encoding="utf-8"), "經文")
-        self.assertTrue((target / "T0001" / "T0001-toc.txt").is_file())
+        stem = self.win._pack_display_stem("T0001")
+        self.assertEqual((target / stem / "T0001.txt").read_text(encoding="utf-8"), "經文")
+        self.assertTrue((target / stem / "T0001-toc.txt").is_file())
         self.assertEqual(self.win.tab_bottom.currentIndex(), 1)   # 切到丛书信息页
 
     def test_cancel_chooses_nothing(self):
@@ -175,6 +177,194 @@ class PackDirFormatTest(unittest.TestCase):
         finally:
             win._choose_pack_fmts = real_choose
             QFileDialog.getExistingDirectory = real_dir
+
+
+class PackDisplayNameTest(unittest.TestCase):
+    """打包显示名：与合并书名书签同款（title_of），取不到回退裸 id；
+    包内重名自动 _2/_3；缓存键不动。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.win, cls.tmp = _make_window()
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def test_display_stem_and_fallback(self):
+        win = self.win
+        stem = win._pack_display_stem("T0001")
+        self.assertTrue(stem.startswith("T0001"))
+        self.assertNotEqual(stem, "T0001")  # 真实目錄有书名
+        self.assertEqual(win._pack_display_stem("TX9Z9"), "TX9Z9")  # 查不到回退裸 id
+
+    def test_unique_name_guard(self):
+        from cbeta_publish.gui.main_window import MainWindow
+        used = set()
+        self.assertEqual(MainWindow._pack_unique_name(used, "A.pdf"), "A.pdf")
+        self.assertEqual(MainWindow._pack_unique_name(used, "A.pdf"), "A_2.pdf")
+        self.assertEqual(MainWindow._pack_unique_name(used, "A.pdf"), "A_3.pdf")
+        self.assertEqual(MainWindow._pack_unique_name(used, "D"), "D")
+        self.assertEqual(MainWindow._pack_unique_name(used, "D"), "D_2")
+
+    def test_zip_single_file_uses_display_name(self):
+        import zipfile
+        win = self.win
+        win.config["default_source"] = "official"
+        win.config["cbeta_ebooks_dir"] = str(self.tmp / "eb")
+        eb = self.tmp / "eb" / "pdf"
+        eb.mkdir(parents=True, exist_ok=True)
+        (eb / "T0001.pdf").write_bytes(b"PDF")
+        col = Path(win.config["collections_dir"]) / "custom" / "名单.json"
+        col.write_text(json.dumps({"id": "m", "name": "名单", "category": "custom",
+                                   "tags": [], "work_ids": ["T0001"]},
+                                  ensure_ascii=False), encoding="utf-8")
+        win._load_collections()
+        for i in range(win.coll_combo.count()):
+            if str(win.coll_combo.itemData(i)).endswith("名单.json"):
+                win.coll_combo.setCurrentIndex(i)
+                break
+        _ensure_app().processEvents()
+        out = self.tmp / "zout1"
+        out.mkdir(exist_ok=True)
+        real_choose = win._choose_pack_fmts
+        real_dir = QFileDialog.getExistingDirectory
+        real_prog = win._make_progress
+        real_prompt = win._prompt_save_collection
+        real_box = win._wrap_box
+        win._choose_pack_fmts = lambda *a, **k: ["pdf"]
+        QFileDialog.getExistingDirectory = staticmethod(lambda *a, **k: str(out))
+        win._make_progress = lambda title, total: (None, lambda *a, **k: True, {"finish": lambda *a, **k: None})
+        win._prompt_save_collection = lambda *a, **k: None
+        win._wrap_box = lambda *a, **k: None
+        try:
+            win._zip()
+        finally:
+            win._choose_pack_fmts = real_choose
+            QFileDialog.getExistingDirectory = real_dir
+            win._make_progress = real_prog
+            win._prompt_save_collection = real_prompt
+            win._wrap_box = real_box
+        stem = win._pack_display_stem("T0001")
+        with zipfile.ZipFile(out / "名单_pdf.zip") as z:
+            self.assertEqual(z.namelist(), [f"{stem}.pdf"])
+
+    def test_export_single_file_uses_display_name(self):
+        win = self.win
+        win.config["default_source"] = "official"
+        win.config["cbeta_ebooks_dir"] = str(self.tmp / "eb")
+        eb = self.tmp / "eb" / "pdf"
+        eb.mkdir(parents=True, exist_ok=True)
+        (eb / "T0001.pdf").write_bytes(b"PDF")
+        col = Path(win.config["collections_dir"]) / "custom" / "名单.json"
+        col.write_text(json.dumps({"id": "m", "name": "名单", "category": "custom",
+                                   "tags": [], "work_ids": ["T0001"]},
+                                  ensure_ascii=False), encoding="utf-8")
+        win._load_collections()
+        for i in range(win.coll_combo.count()):
+            if str(win.coll_combo.itemData(i)).endswith("名单.json"):
+                win.coll_combo.setCurrentIndex(i)
+                break
+        _ensure_app().processEvents()
+        target = self.tmp / "xout1"
+        target.mkdir(exist_ok=True)
+        real_choose = win._choose_pack_fmts
+        real_dir = QFileDialog.getExistingDirectory
+        real_prog = win._make_progress
+        real_prompt = win._prompt_save_collection
+        real_box = win._wrap_box
+        win._choose_pack_fmts = lambda *a, **k: ["pdf"]
+        QFileDialog.getExistingDirectory = staticmethod(lambda *a, **k: str(target))
+        win._make_progress = lambda title, total: (None, lambda *a, **k: True, {"finish": lambda *a, **k: None})
+        win._prompt_save_collection = lambda *a, **k: None
+        win._wrap_box = lambda *a, **k: None
+        try:
+            win._export()
+        finally:
+            win._choose_pack_fmts = real_choose
+            QFileDialog.getExistingDirectory = real_dir
+            win._make_progress = real_prog
+            win._prompt_save_collection = real_prompt
+            win._wrap_box = real_box
+        stem = win._pack_display_stem("T0001")
+        self.assertTrue((target / f"{stem}.pdf").is_file())
+        # 缓存键不动：原文件仍在
+        self.assertTrue((eb / "T0001.pdf").is_file())
+
+
+class PackMissingCountsTest(unittest.TestCase):
+    """ZIP/导出缺书确认：按格式分别显示缺数，不列文件名。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.win, cls.tmp = _make_window()
+        win = cls.win
+        win.config["default_source"] = "official"
+        win.config["cbeta_ebooks_dir"] = str(cls.tmp / "eb")
+        col = Path(win.config["collections_dir"]) / "custom" / "缺测.json"
+        col.write_text(json.dumps({"id": "q", "name": "缺测", "category": "custom",
+                                   "tags": [], "work_ids": ["T0001", "T0002"]},
+                                  ensure_ascii=False), encoding="utf-8")
+        win._load_collections()
+        eb = cls.tmp / "eb" / "pdf"
+        eb.mkdir(parents=True, exist_ok=True)
+        (eb / "T0001.pdf").write_bytes(b"PDF")  # 仅此一部有货
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def setUp(self):
+        win = self.win
+        for i in range(win.coll_combo.count()):
+            if str(win.coll_combo.itemData(i)).endswith("缺测.json"):
+                win.coll_combo.setCurrentIndex(i)
+                break
+        _ensure_app().processEvents()
+
+    def test_missing_by_fmt(self):
+        from cbeta_publish.gui.main_window import MainWindow
+        self.assertEqual(MainWindow._missing_by_fmt(
+            ["T0001.pdf", "T0002.pdf", "T0002.epub"]),
+            ["pdf 缺 2 部", "epub 缺 1 部"])
+        self.assertEqual(MainWindow._missing_by_fmt([]), [])
+
+    def _capture_question(self, fn):
+        from PySide6.QtWidgets import QMessageBox
+        win = self.win
+        real_choose = win._choose_pack_fmts
+        real_box = win._wrap_box
+        real_q = QMessageBox.question
+        texts = []
+        win._choose_pack_fmts = lambda *a, **k: ["pdf", "epub"]
+        win._wrap_box = lambda *a, **k: None
+        QMessageBox.question = staticmethod(
+            lambda *a, **k: texts.append(a[2]) or QMessageBox.No)
+        try:
+            fn()
+        finally:
+            win._choose_pack_fmts = real_choose
+            win._wrap_box = real_box
+            QMessageBox.question = real_q
+        return texts
+
+    def test_zip_question_counts_per_fmt(self):
+        win = self.win
+        eb = self.tmp / "eb" / "pdf"
+        eb.mkdir(parents=True, exist_ok=True)
+        (eb / "T0001.pdf").write_bytes(b"PDF")  # 仅此一部有货
+        texts = self._capture_question(win._zip)
+        self.assertTrue(texts)
+        self.assertIn("pdf 缺 1 部", texts[0])
+        self.assertIn("epub 缺 2 部", texts[0])
+        self.assertNotIn("T0001", texts[0])
+        self.assertNotIn("T0002", texts[0])
+
+    def test_export_question_counts_per_fmt(self):
+        texts = self._capture_question(self.win._export)
+        self.assertTrue(texts)
+        self.assertIn("pdf 缺 1 部", texts[0])
+        self.assertIn("epub 缺 2 部", texts[0])
 
 
 if __name__ == "__main__":
