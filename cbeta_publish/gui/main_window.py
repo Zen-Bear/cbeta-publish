@@ -2050,6 +2050,8 @@ class MainWindow(QMainWindow):
                 dlg.panel.set_options(_opts)
             except Exception as e:
                 print('preset formats fail', e)
+        # 上游已修（规则下到对话框实例）：构造不再碰 QApplication，
+        # 此处无需快照/恢复，见 docs/链路B-设计契约.md 相关条目。
         if dlg.exec() != _QD.Accepted:
             return
         merged = dlg.get_preset(base if isinstance(base, dict) else None)
@@ -4490,10 +4492,17 @@ class MainWindow(QMainWindow):
             from PySide6.QtCore import QUrl as _QU
             return (f'<a href="{_QU.fromLocalFile(str(Path(p).resolve())).toString()}">'
                     f'{_html.escape(str(p))}</a>')
+        def _flink(p):
+            from PySide6.QtCore import QUrl as _QU
+            return (f'<a href="{_QU.fromLocalFile(str(Path(p).resolve())).toString()}">'
+                    f'{_html.escape(Path(p).name)}</a>')
         def _warn(s):
             return f'<span style="color:#c62828;">{_html.escape(s)}</span>'
         summary=[f"校验完成 {result['ok']}/{total}"]
         summary.append("验证输出目录：" + _dirlink(vdir))          # 目录可点开
+        _sum_path=_b.write_verify_summary(vdir, d.get("name"))
+        if _sum_path is not None:
+            summary.append("总验证报告：" + _flink(_sum_path))
         if result["failed"]:
             summary.append(_warn(f"未通过 {len(result['failed'])}：{', '.join(result['failed'][:10])}"))
         summary.append(f"已自动导入 {len(imp['ok'])} 部 → " + _dirlink(base))
@@ -4505,14 +4514,15 @@ class MainWindow(QMainWindow):
             summary.append("已取消。")
         pstate["finish"](summary)
         self._load_coll_works()
-        self._show_verify_results(imp, vdir, base)
+        self._show_verify_results(imp, vdir, base, summary_path=_sum_path)
         self._maybe_review_failed(imp, vdir, base, allow_delete=True)
 
-    def _show_verify_results(self, imp, vdir, base):
+    def _show_verify_results(self, imp, vdir, base, summary_path=None):
         """把逐本/逐格式校验结果写入「书籍信息」页签（含目录/文件链接），并切到该页。
 
         已入库条目列出每部书入库了哪个格式文件（可点开），如：
         ・T1852（docx/pdf）；未入 epub
+        summary_path 非空时首行给出总验证报告链接。
         """
         import html as _html
         from PySide6.QtCore import QUrl as _QU
@@ -4525,6 +4535,8 @@ class MainWindow(QMainWindow):
         WARN='<span style="color:#c62828;">%s</span>'
         parts=["<b>校验结果</b>",
                "验证输出目录：" + _dirlink(vdir)]
+        if summary_path is not None:
+            parts.append("总验证报告：" + _filelink(summary_path, Path(summary_path).name))
         if imp["ok"]:
             parts.append(f"<b>已入库 {len(imp['ok'])} 部</b>")
             _okf = imp.get("ok_files") or {}
@@ -4857,6 +4869,9 @@ class MainWindow(QMainWindow):
         dlg, update, pstate=self._make_progress("导入校验通过E书", max(1,len(reports)))
         imp=self._do_import_verified(works, vdir, base, update=update)
         msg=[f"入库 {len(imp['ok'])} 部 → {base}"]
+        _sum_path=_b.write_verify_summary(vdir, d.get("name"))
+        if _sum_path is not None:
+            msg.append(f"总验证报告 → {_sum_path}")
         if imp["fail"]:
             msg.append(f"未通过/失败 {len(imp['fail'])}：{', '.join(imp['fail'][:10])}")
         if imp["undet"]:
@@ -4865,7 +4880,7 @@ class MainWindow(QMainWindow):
             msg.append(f"跳过 {len(imp['skip'])}（不在丛书中）")
         pstate["finish"](msg)
         self._load_coll_works()
-        self._show_verify_results(imp, vdir, base)
+        self._show_verify_results(imp, vdir, base, summary_path=_sum_path)
         self._maybe_review_failed(imp, vdir, base, allow_delete=allow_delete)
 
     def _is_managed_verify_dir(self, vdir):

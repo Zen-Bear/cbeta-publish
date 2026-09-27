@@ -935,7 +935,7 @@ class EditNoteTest(unittest.TestCase):
             shutil.rmtree(d, ignore_errors=True)
 
     def test_pdf_body_uses_base_size(self):
-        # PDF 编辑说明正文用页面基准字号（body_a4=16 → 16.0，而非 base+delta）
+        # PDF 编辑说明正文用独立字号（sizes.editnote_body，缺省 12，不跟页面基准）
         import tempfile
         from cbeta_publish.books import ebook_merger as m
         d = Path(tempfile.mkdtemp())
@@ -947,21 +947,26 @@ class EditNoteTest(unittest.TestCase):
             doc.close()
             p = self._txt(d, "<title>T\n正文行\n")
             parsed = m.parse_editnote_file(p)
-            e = d / "en.pdf"
-            m._editnote_pdf(parsed, a, e, config={
-                "sizes": {"body_a4": 16},
-                "styles": {"toc_title": {"font": "C:/Windows/Fonts/simhei.ttf"},
-                           "toc_item": {"font": "C:/Windows/Fonts/simhei.ttf"}}})
-            doc = pymupdf.open(e)
-            sizes = {}
-            for b in doc[0].get_text("dict")["blocks"]:
-                for l in b.get("lines", []):
-                    for s in l.get("spans", []):
-                        t = s.get("text", "")
-                        if "正文行" in t:
-                            sizes["body"] = round(s.get("size", 0), 1)
-            doc.close()
-            self.assertEqual(sizes.get("body"), 16.0)
+            cfg = {"sizes": {"body_a4": 16},
+                   "styles": {"toc_title": {"font": "C:/Windows/Fonts/simhei.ttf"},
+                              "toc_item": {"font": "C:/Windows/Fonts/simhei.ttf"}}}
+
+            def body_size(config):
+                e = d / "en.pdf"
+                m._editnote_pdf(parsed, a, e, config=config)
+                doc = pymupdf.open(e)
+                out = None
+                for b in doc[0].get_text("dict")["blocks"]:
+                    for l in b.get("lines", []):
+                        for s in l.get("spans", []):
+                            if "正文行" in s.get("text", ""):
+                                out = round(s.get("size", 0), 1)
+                doc.close()
+                return out
+            self.assertEqual(body_size(cfg), 12.0)   # 缺省 12（body_a4=16 不影响）
+            cfg2 = dict(cfg)
+            cfg2["sizes"] = {"body_a4": 16, "editnote_body": 18}
+            self.assertEqual(body_size(cfg2), 18.0)
         finally:
             shutil.rmtree(d, ignore_errors=True)
 

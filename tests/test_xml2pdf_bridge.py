@@ -719,5 +719,57 @@ class BridgeBuiltNamingTest(unittest.TestCase):
             b.convert = real
 
 
+class BridgeVerifySummaryTest(unittest.TestCase):
+    """总验证报告：合并单本报告为固定名文件（摘要＋全文），二次扫描不认它。"""
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def _reports(self):
+        (self.dir / "T0001_verify_report.txt").write_text(
+            "=== T0001\n  [OK]  docx 缺0 多0\n  [OK]  pdf 缺0 多0\n",
+            encoding="utf-8")
+        (self.dir / "T0002_verify_report.txt").write_text(
+            "[T0002] 2 format: 1[docx=OK(0/0)], 2[epub=FAIL(3/1)]\n"
+            "=== T0002\n  [OK]  docx 缺0 多0\n  [FAIL] epub 缺3 多1\n",
+            encoding="utf-8")
+        (self.dir / "T0003_verify_report.txt").write_text(
+            "=== T0003\n  [--]  epub 无基线（no baseline）\n",
+            encoding="utf-8")
+        (self.dir / "T0004_verify_report.txt").write_text(
+            "=== T0004\n  [OK]  docx 缺0 多0\n"
+            "  [--]  pdf 已覆盖（已由 docx 校验）\n",
+            encoding="utf-8")
+
+    def test_write_and_reread(self):
+        import cbeta_publish.books.xml2pdf_bridge as b
+        self._reports()
+        out = b.write_verify_summary(self.dir, "测丛书")
+        self.assertEqual(out.name, "总验证报告.txt")
+        text = out.read_text(encoding="utf-8")
+        self.assertIn("共 4 部：通过 2 部 / 未通过 1 部 / 未判定 1 部", text)
+        self.assertIn("T0002 校验未通过（epub 缺3/多1）", text)
+        self.assertIn("T0004 通过（docx/pdf）", text)
+        self.assertIn("T0003 未判定（epub无基线）", text)
+        for stem in ("T0001", "T0002", "T0003", "T0004"):
+            self.assertIn(f"===== {stem}（{stem}_verify_report.txt）=====", text)
+        # 总报告不参与导入扫描；覆盖写更新内容
+        self.assertEqual(len(b.verify_reports(self.dir)), 4)
+        (self.dir / "T0001_verify_report.txt").write_text(
+            "=== T0001\n  [FAIL] docx 缺1 多0\n", encoding="utf-8")
+        out2 = b.write_verify_summary(self.dir, "测丛书")
+        self.assertEqual(out2, out)
+        text2 = out2.read_text(encoding="utf-8")
+        self.assertIn("T0001 校验未通过（docx）", text2)
+
+    def test_no_reports_returns_none(self):
+        import cbeta_publish.books.xml2pdf_bridge as b
+        self.assertIsNone(b.write_verify_summary(self.dir, "空丛书"))
+        self.assertFalse((self.dir / "总验证报告.txt").exists())
+
+
 if __name__ == "__main__":
     unittest.main()

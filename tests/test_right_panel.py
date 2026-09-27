@@ -626,6 +626,48 @@ class RightPanelTest(unittest.TestCase):
             for _ in range(4):
                 _ensure_app().processEvents()
 
+    def test_upstream_dialog_no_app_pollution(self):
+        # 回归：上游 CssEditorDialog 不得碰 QApplication 样式表（曾追加全局
+        # QToolTip 规则，左栏最小值 346→1272 锁死分栏；上游已修，规则下到
+        # 对话框实例）。构造真对话框，应用样式表/最小值/分栏纹丝不动。
+        from PySide6.QtWidgets import QApplication
+        win = self.win
+        app = QApplication.instance()
+        old_sheet = app.styleSheet()
+        left = win._splitter.widget(0)
+        old_hint = left.minimumSizeHint().width()
+        old_sizes = list(win._splitter.sizes())
+        try:
+            import sys
+            sys.path.insert(0, "E:/dev/cbeta/xml2pdf")
+            from pycbeta.gui.css_editor import CssEditorDialog
+        except Exception as e:
+            self.skipTest(f"无上游仓库可验证：{e}")
+        import shutil
+        dlg = None
+        try:
+            dlg = CssEditorDialog(sample_xml=None, engine_chain=None,
+                                  parent=None)
+            _ensure_app().processEvents()
+            self.assertEqual(app.styleSheet(), old_sheet)
+            self.assertEqual(left.minimumSizeHint().width(), old_hint)
+            self.assertEqual(list(win._splitter.sizes()), old_sizes)
+            self.assertIn("QToolTip", dlg.styleSheet())
+        finally:
+            try:
+                if dlg is not None:
+                    tmpd = getattr(dlg, "_tmp", None)
+                    dlg.close()
+                    dlg.deleteLater()
+                    if tmpd:
+                        shutil.rmtree(tmpd, ignore_errors=True)
+            except Exception:
+                pass
+            try:
+                app.setStyleSheet(old_sheet)
+            except Exception:
+                pass
+
     def test_author_lists_works(self):
         # 作者条目下挂著作叶（标题取源数据叶标题；展开/双击/拖拽共用）
         win = self.win

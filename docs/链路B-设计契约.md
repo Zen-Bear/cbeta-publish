@@ -69,6 +69,11 @@ def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=No
 - publish 的**预设[调整…]**入口即调 `XmlOptionsDialog`：读取当前预设 →
   编辑 → `exec()` Accepted 后取 `dlg.get_preset(base)`（合并后的预设 dict）→
   覆盖保存或另存为（写盘经 xml2pdf 公开函数 `save_config_preset`，见下）。
+- 上游 `CssEditorDialog` 曾在构造时往 `QApplication` 追加全局样式
+  （`ensure_tooltip_style`），触发全应用 repolish，左栏最小值 346→1272 级别
+  抬高且粘住回不来，导致分栏锁死、主窗口无法缩小；上游已修（规则下到
+  对话框实例，`test_upstream_dialog_no_app_pollution` 构造真对话框锁定），
+  publish 侧无残留 workaround。
 - **公开 API（不碰私有名）**：`XmlOptionsPanel.get_options()/set_options()`、
   `XmlOptionsPanel.merged_preset(base=None)`（面板值+base → 预设 dict）、
   `XmlOptionsDialog.get_options()/get_preset(base=None)`、
@@ -265,6 +270,9 @@ publish 的「自制/重制（校验）」产物目录天然符合本规范；�
      如 `T0032 四谛经（验证）` → `T0032`）。
 3. 同一书两份报告并存时，以 **mtime 最新者**为准（同刻优先 `report.txt`）。
    只转换、未校验的产物**没有判据，一律不入库**。
+4. 总报告 `总验证报告.txt`（`bridge.write_verify_summary`，固定名覆盖写）：
+   头＋摘要（行文同导入标签）＋全文（按 stem 拼接原文）；刻意避开两种发现模式，
+   不参与导入扫描；自制/重制跑完与手动导入均写一份，链接进进度总结与结果页。
 
 ### 9.2 publish 侧导入规则
 
