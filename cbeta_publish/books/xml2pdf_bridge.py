@@ -806,3 +806,101 @@ def verify_report_formats(path) -> dict:
                 out[fmt] = pending
             pending = None
     return out
+
+
+#: 总验证报告固定名（覆盖写；刻意避开单本报告的两种发现模式
+#: `*_verify_report.txt` / `（验证）/report.txt`，不参与导入扫描）
+VERIFY_SUMMARY_FILENAME = "总验证报告.txt"
+
+
+def _pending_reason(fmt, pending):
+    _r = (pending or {}).get(fmt)
+    if _r == "no baseline":
+        return "无基线"
+    if _r == "gen not found":
+        return "无生成档"
+    if isinstance(_r, str) and _r.startswith("covered:"):
+        return f"由{_r.split(':', 1)[1]}覆盖待定"
+    return "未判定"
+
+
+def write_verify_summary(vdir, coll_name=None):
+    """合并校验目录下全部单本报告为总报告（固定名覆盖写；无报告返回 None）。
+
+    摘要行文与 `_do_import_verified` 一致（通过列格式、未通过带缺/多 numbers、
+    未判定带原因），只读报告不搬产物；全文区按 stem 排序拼接各报告原文。
+    """
+    import datetime as _dt
+    vdir = Path(vdir)
+    try:
+        reports = sorted(verify_reports(vdir), key=lambda r: r[1])
+    except Exception:
+        return None
+    if not reports:
+        return None
+    ok_lines, fail_lines, undet_lines, bodies = [], [], [], []
+    for rp, stem in reports:
+        label = stem or rp.name
+        try:
+            text = rp.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            text = ""
+        fmt_status = apply_verify_coverage(verify_report_formats(rp),
+                                           verify_report_pending(rp))
+        nums = verify_report_numbers(rp)
+        pending = verify_report_pending(rp)
+        passed = sorted(f for f, v in fmt_status.items() if v is True)
+        bad = sorted(f for f, v in fmt_status.items() if v is False)
+        undet = sorted(f for f, v in fmt_status.items() if v is not True and v is not False)
+        # [--]-only 格式（如无基线）不在 formats 表里，同样视为未定
+        for _f in (pending or {}):
+            if _f and _f not in fmt_status and _f not in undet:
+                undet.append(_f)
+        undet = sorted(undet)
+
+        def _num(f):
+            mi, ex = nums.get(f, (None, None))
+            if mi is None and ex is None:
+                return f
+            ms = "?" if mi is None else mi
+            es = "?" if ex is None else ex
+            return f"{f} 缺{ms}/多{es}"
+
+        def _rs(fs):
+            out = []
+            for _f in fs:
+                _r = _pending_reason(_f, pending)
+                out.append(f"{_f}{_r}" if _r != "未判定" else _f)
+            return out
+        if passed and not bad:
+            tail = f"；未入 {'/'.join(_num(f) for f in undet)}" if undet else ""
+            ok_lines.append(f"{label} 通过（{'/'.join(passed)}）{tail}")
+        elif bad:
+            tail = ""
+            if undet:
+                tail = f"；未入 {'/'.join(_num(f) for f in undet)}"
+            fail_lines.append(f"{label} 校验未通过（{'/'.join(_num(f) for f in bad)}）{tail}")
+        else:
+            rs = _rs(undet)
+            suffix = f"（{'/'.join(rs)}）" if rs else ""
+            undet_lines.append(f"{label} 未判定{suffix}")
+        bodies.append(f"===== {label}（{rp.name}）=====\n{text.rstrip()}")
+    total = len(reports)
+    head = [f"总验证报告",
+            f"丛书：{coll_name or vdir.name}",
+            f"时间：{_dt.datetime.now().isoformat(timespec='seconds')}",
+            f"共 {total} 部：通过 {len(ok_lines)} 部 / "
+            f"未通过 {len(fail_lines)} 部 / 未判定 {len(undet_lines)} 部",
+            "（通过=判定格式全过；未通过=任一格式 FAIL；未判定=无 FAIL 但有未定格式）",
+            "--- 摘要 ---",
+            *([f"通过 {len(ok_lines)} 部："] + [f"・{l}" for l in ok_lines] if ok_lines else []),
+            *([f"未通过 {len(fail_lines)} 部："] + [f"・{l}" for l in fail_lines] if fail_lines else []),
+            *([f"未判定 {len(undet_lines)} 部："] + [f"・{l}" for l in undet_lines] if undet_lines else []),
+            "--- 全文 ---",
+            *bodies]
+    try:
+        out = vdir / VERIFY_SUMMARY_FILENAME
+        out.write_text("\n".join(head) + "\n", encoding="utf-8")
+        return out
+    except OSError:
+        return None

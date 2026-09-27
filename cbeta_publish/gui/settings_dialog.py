@@ -60,6 +60,7 @@ DEFAULT_CONFIG = {
         },
         "sizes": {
             "body_a5": 10, "body_a4": 12, "body_16k": 11, "body_32k": 9,
+            "editnote_body": 12,
             "margins": {
                 "a5": {"left": 36, "right": 36, "top": 40, "bottom": 40},
                 "a4": {"left": 48, "right": 48, "top": 48, "bottom": 48},
@@ -769,7 +770,7 @@ class SettingsDialog(QDialog):
             pass
 
     def _cover_tab_sizes(self, cover):
-        # 子页签 3：封面页基准字号（纸张联动基准）
+        # 子页签 3：封面页基准字号（纸张联动基准）＋编辑说明正文字号
         w = QWidget()
         form = QFormLayout(w)
         sizes = cover.setdefault("sizes", {})
@@ -779,6 +780,15 @@ class SettingsDialog(QDialog):
             self.sp_body[paper].setRange(6, 40)
             self.sp_body[paper].setValue(int(sizes.get(f"body_{paper}", {"a5":10,"a4":12,"16k":11,"32k":9}[paper])))
             form.addRow(f"封面页基准字号（{paper}）", self.sp_body[paper])
+        self.sp_editnote_body = self._no_wheel_until_focused(QSpinBox())
+        self.sp_editnote_body.setRange(6, 40)
+        try:
+            _eb = int(sizes.get("editnote_body", 12) or 12)
+        except Exception:
+            _eb = 12
+        self.sp_editnote_body.setValue(max(6, min(40, _eb)))
+        self.sp_editnote_body.setToolTip("编辑说明页正文（PDF）字号，不跟页面基准")
+        form.addRow("编辑说明正文字号", self.sp_editnote_body)
         hint = QLabel("基准字号按源 PDF 纸张自动选用；其余位置/字号由此派生。")
         hint.setStyleSheet("color: gray;")
         hint.setWordWrap(True)
@@ -887,6 +897,11 @@ class SettingsDialog(QDialog):
         sizes = cover.setdefault("sizes", {})
         for paper, sp in self.sp_body.items():
             sp.setValue(int(sizes.get(f"body_{paper}", {"a5":10,"a4":12,"16k":11,"32k":9}[paper])))
+        try:
+            _eb = int(sizes.get("editnote_body", 12) or 12)
+        except Exception:
+            _eb = 12
+        self.sp_editnote_body.setValue(max(6, min(40, _eb)))
         margins = sizes.setdefault("margins", {})
         defaults = {
             "a5": {"left":36,"right":36,"top":40,"bottom":40},
@@ -1523,6 +1538,7 @@ class SettingsDialog(QDialog):
         sizes = cover.setdefault("sizes", {})
         for paper, sp in self.sp_body.items():
             sizes[f"body_{paper}"] = sp.value()
+        sizes["editnote_body"] = self.sp_editnote_body.value()
         margins = sizes.setdefault("margins", {})
         for paper, sides in self.sp_margins.items():
             margins[paper] = {side: sp.value() for side, sp in sides.items()}

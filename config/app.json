@@ -18,7 +18,7 @@
     "app_font": "SimSun",
     "app_font_size": 10,
     "supplement_ttf": "E:\\dev\\cbeta\\xml2pdf\\cbeta\\CBETA 補充字型\\CBETASupplement.ttf",
-    "last_collection": "E:\\dev\\cbeta\\publish\\collections\\custom\\起信论疏.json"
+    "last_collection": "E:\\dev\\cbeta\\publish\\collections\\ceshi\\霞鹜文楷.json"
   },
   "default_source": "xml",
   "default_formats": {
@@ -56,9 +56,9 @@
   },
   "xml2pdf": {
     "path": "E:\\dev\\cbeta\\xml2pdf",
-    "preset": "A5 校验带框",
+    "preset": "A5 霞鹜文楷",
     "cbeta_ebook": "E:\\dev\\cbeta\\publish\\cbeta_xml",
-    "verify_build": true
+    "verify_build": false
   },
   "catalog": {
     "filters": {
@@ -95,7 +95,7 @@
       }
     },
     "sizes": {
-      "body_a5": 16,
+      "body_a5": 14,
       "body_a4": 16,
       "body_16k": 16,
       "body_32k": 16,
@@ -130,7 +130,8 @@
         "right": 0.1,
         "top": 0.1,
         "bottom": 0.1
-      }
+      },
+      "editnote_body": 14
     },
     "styles": {
       "cbeta": {

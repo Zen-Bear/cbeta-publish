@@ -470,6 +470,19 @@ class SettingsDialogTest(unittest.TestCase):
         self.assertFalse(cv["images"]["buddha"]["enabled"])
         self.assertIn("font", cv["styles"]["title"])
 
+    def test_editnote_body_size_roundtrip(self):
+        # 编辑说明正文字号：缺省 12；改值落盘回读
+        dlg = self._dlg()
+        self.assertEqual(dlg.sp_editnote_body.value(), 12)
+        dlg.sp_editnote_body.setValue(18)
+        out = dlg._collect()
+        self.assertEqual(out["cover"]["sizes"]["editnote_body"], 18)
+        cfg = copy.deepcopy(DEFAULT_CONFIG)
+        cfg["cover"]["sizes"]["editnote_body"] = 15
+        d2 = SettingsDialog(cfg, None)
+        self.assertEqual(d2.sp_editnote_body.value(), 15)
+        self.assertEqual(d2._collect()["cover"]["sizes"]["editnote_body"], 15)
+
     def test_intro_toc_bg_default_follow_cover(self):
         # 缺席＝跟随封面：默认显示封面色、落盘不写键；单独选色后独立落盘
         from PySide6.QtGui import QColor

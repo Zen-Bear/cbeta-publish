@@ -949,7 +949,12 @@ def _editnote_pdf(parsed, first_src: Path, out_path: Path, config: dict=None) ->
     tm=_toc_text_style(cfg, width, height, _detect_paper(width, height))
     left=tm["left"]; right=tm["right"]; bottom=tm["bottom"]
     title_sz=tm["title_sz"]; item_sz=tm["item_sz"]
-    body_sz=tm.get("base", item_sz)   # 编辑说明正文用页面基准字号（非目录条目字号）
+    # 编辑说明正文用独立字号（cover.sizes.editnote_body，缺省 12；6–40 钳制）
+    try:
+        body_sz=int((sizes.get("editnote_body", 12) or 12))
+    except Exception:
+        body_sz=12
+    body_sz=max(6, min(40, body_sz))
     from reportlab.pdfgen import canvas
     from reportlab.pdfbase import pdfmetrics
     from reportlab.lib.colors import Color

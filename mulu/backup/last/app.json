@@ -58,7 +58,7 @@
     "path": "E:\\dev\\cbeta\\xml2pdf",
     "preset": "A5 校验带框",
     "cbeta_ebook": "E:\\dev\\cbeta\\publish\\cbeta_xml",
-    "verify_build": false
+    "verify_build": true
   },
   "catalog": {
     "filters": {
@@ -130,7 +130,8 @@
         "right": 0.1,
         "top": 0.1,
         "bottom": 0.1
-      }
+      },
+      "editnote_body": 14
     },
     "styles": {
       "cbeta": {
