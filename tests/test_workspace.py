@@ -235,10 +235,10 @@ class WorkspaceTest(unittest.TestCase):
     def _select_coll_row(self, w, wid):
         w._load_coll_works()
         _ensure_app().processEvents()
-        for i in range(w.coll_list.count()):
-            if w.coll_list.item(i).data(Qt.UserRole) == wid:
-                w.coll_list.setCurrentRow(i)
-                w.coll_list.item(i).setSelected(True)
+        for it in w._coll_book_items():
+            if it.data(0, Qt.UserRole) == wid:
+                w.coll_list.setCurrentItem(it)
+                it.setSelected(True)
                 return True
         return False
 

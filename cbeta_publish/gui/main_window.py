@@ -1,5 +1,5 @@
 ﻿# -*- coding: utf-8 -*-
-from PySide6.QtWidgets import QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QTreeWidget, QTreeWidgetItem, QListWidget, QListWidgetItem, QSplitter, QSplitterHandle, QLabel, QPushButton, QToolButton, QLineEdit, QComboBox, QInputDialog, QMessageBox, QApplication, QTabWidget, QTextBrowser, QSizePolicy, QProgressDialog, QScrollArea, QGroupBox, QRadioButton, QButtonGroup
+from PySide6.QtWidgets import QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QTreeWidget, QTreeWidgetItem, QListWidget, QListWidgetItem, QSplitter, QSplitterHandle, QLabel, QPushButton, QToolButton, QLineEdit, QComboBox, QInputDialog, QMessageBox, QApplication, QTabWidget, QTextBrowser, QSizePolicy, QProgressDialog, QScrollArea, QGroupBox, QRadioButton, QButtonGroup, QAbstractItemView, QMenu
 from PySide6.QtCore import Qt, QEvent, QTimer, Signal
 from PySide6.QtGui import QShortcut, QKeySequence
 from pathlib import Path
@@ -307,6 +307,7 @@ class MainWindow(QMainWindow):
         self._last_coll_path=(config.get("ui",{}) or {}).get("last_collection") or None
         self._last_publish={}
         self._work_groups={}   # {work_id: 册标签}（从刊本树拖入时记录，供「按册分册」）
+        self._coll_view={}     # {coll_path: flat|volume|catalog|manual} 右栏显示方式（内存，不落盘）
         self._left_search_active=False   # 左栏当前是否显示「搜索结果」（导航树被暂存）
         self._nav_stash=None   # 搜索结果占用左栏时暂存的导航树顶层项（供搜索/恢复）
         self._tmp_preset=None  # 「调整…」本次临时预设文件（不落盘；作用于 自制/合并 等）
@@ -539,13 +540,16 @@ class MainWindow(QMainWindow):
         mh.addWidget(self.btn_tags)
         mh.addStretch()
         rv.addWidget(mgmt)
-        self.coll_list=QListWidget()
-        self.coll_list.setSelectionMode(QListWidget.ExtendedSelection)
+        self.coll_list=QTreeWidget()
+        self.coll_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.coll_list.setMinimumWidth(300)
-        self.coll_list.setDragDropMode(QListWidget.DragDrop)
+        self.coll_list.setHeaderHidden(True)
+        self.coll_list.setRootIsDecorated(False)   # 平铺默认无展开箭头
+        self.coll_list.setIndentation(16)
+        self.coll_list.setDragDropMode(QAbstractItemView.DragDrop)
         self.coll_list.setDefaultDropAction(Qt.MoveAction)
         self.coll_list.setAcceptDrops(True)
-        self.coll_list.setStyleSheet("QListWidget::item:selected { background: #bbdefb; color: #000; } QListWidget::item:hover { background: #fff3c4; } QListWidget::item:selected:hover { background: #90caf9; color: #000; }")
+        self.coll_list.setStyleSheet("QTreeWidget::item:selected { background: #bbdefb; color: #000; } QTreeWidget::item:hover { background: #fff3c4; } QTreeWidget::item:selected:hover { background: #90caf9; color: #000; }")
         rv.addWidget(self.coll_list)
         self.lbl_coll_info=QLabel("未选择丛书")
         self.lbl_coll_info.setTextFormat(Qt.RichText)
@@ -563,11 +567,21 @@ class MainWindow(QMainWindow):
         self.btn_down.setToolTip("下移选中（Alt+↓）")
         self.btn_coll_sel_all=QPushButton("全选")
         self.btn_coll_sel_all.setToolTip("选中并勾选右栏全部书籍")
+        self.btn_coll_sel_all.setFixedWidth(44)
         self.btn_coll_sel_none=QPushButton("不选")
         self.btn_coll_sel_none.setToolTip("取消右栏全部选中与勾选（不删除书籍）")
+        self.btn_coll_sel_none.setFixedWidth(44)
         hb.addWidget(self.btn_up); hb.addWidget(self.btn_down)
         hb.addWidget(self.btn_coll_sel_all); hb.addWidget(self.btn_coll_sel_none)
         hb.addStretch()
+        self.coll_view_combo=QComboBox()
+        self.coll_view_combo.addItem("平铺", "flat")
+        self.coll_view_combo.addItem("按刊本册", "volume")
+        self.coll_view_combo.addItem("按部类", "catalog")
+        self.coll_view_combo.addItem("手工分册", "manual")
+        self.coll_view_combo.setToolTip("书单显示方式：平铺／按刊本册／按部类（只读视图）／手工分册（可编辑）")
+        self.coll_view_combo.setMinimumWidth(150)
+        hb.addWidget(self.coll_view_combo)
         hb.addWidget(self.btn_remove)
         rv.addWidget(btn_box)
         publish_group = QGroupBox("发布")
@@ -810,6 +824,9 @@ class MainWindow(QMainWindow):
         self.coll_list.itemClicked.connect(self._on_coll_item_detail)
         self.coll_list.itemDoubleClicked.connect(self._on_coll_double_open)
         self.coll_list.itemSelectionChanged.connect(self._refresh_coll_text_colors)
+        self.coll_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.coll_list.customContextMenuRequested.connect(self._on_coll_context_menu)
+        self.coll_view_combo.currentIndexChanged.connect(self._on_coll_view_changed)
         try:
             self.coll_list.model().rowsMoved.connect(self._on_coll_reordered)
         except: pass
@@ -2687,7 +2704,9 @@ class MainWindow(QMainWindow):
         # 右栏拖出的作品：选中项 UserRole；兜底 mime 文本（真实拖拽只有内部 model mime）
         works=[]
         for it in self.coll_list.selectedItems():
-            w=it.data(Qt.UserRole)
+            if not self._coll_is_book(it):
+                continue
+            w=it.data(0, Qt.UserRole)
             if w:
                 works.append(w)
         if not works:
@@ -3533,13 +3552,12 @@ class MainWindow(QMainWindow):
             return
         from PySide6.QtWidgets import QCheckBox as _Chk3
         sel=[]
-        for i in range(self.coll_list.count()):
-            it=self.coll_list.item(i)
-            row=self.coll_list.itemWidget(it)
+        for it in self._coll_book_items():
+            row=self._coll_row(it)
             if row:
                 for cb in row.findChildren(_Chk3):
                     if cb.isChecked():
-                        w=it.data(Qt.UserRole)
+                        w=it.data(0, Qt.UserRole)
                         if w:
                             sel.append(w)
         if not sel:
@@ -3602,9 +3620,9 @@ class MainWindow(QMainWindow):
     def _load_coll_works(self):
         data=self.coll_combo.currentData()
         is_placeholder = self._is_coll_placeholder(data)
-        self.coll_list.clear()
         self.lbl_coll_info.setVisible(True)
         if is_placeholder:
+            self.coll_list.clear()
             # 分类过滤有效但该分类暂无丛书：显示空提示，不跳转、不重置过滤
             if self.coll_cat_filter.currentData() is not None:
                 self.lbl_coll_info.setText("该分类下暂无丛书")
@@ -3621,6 +3639,13 @@ class MainWindow(QMainWindow):
             d=self._coll_dict(data)
             if d is None:
                 d=self._read_coll(p)
+            # 同步分组下拉到该丛书记忆的显示方式
+            _mode=self._coll_display_mode(data)
+            _i=self.coll_view_combo.findData(_mode)
+            self.coll_view_combo.blockSignals(True)
+            if _i>=0: self.coll_view_combo.setCurrentIndex(_i)
+            self.coll_view_combo.blockSignals(False)
+            self._apply_coll_drag_mode()
             import html as _html
             info=f"{_html.escape(d.get('name',''))} [{_html.escape(self._cat_name(d.get('category','')))}] {len(d.get('work_ids',[]))}部<br>最后发布: {_html.escape(str(d.get('last_publish_at','-')))}<br>{_html.escape(str(d.get('last_publish_dir','')))}"
             _tg=d.get("tags",[]) or []
@@ -3646,68 +3671,168 @@ class MainWindow(QMainWindow):
         dest=official_ebook_source.local_path(w, fmt, base)
         return dest if dest.exists() else None
 
+    # ---------- 右栏书单：树/分组 ----------
+    def _coll_display_mode(self, data=None):
+        if data is None:
+            data=self.coll_combo.currentData()
+        return getattr(self, "_coll_view", {}).get(str(data), "flat")
+
+    def _coll_is_book(self, item):
+        return item is not None and bool(item.data(0, Qt.UserRole))
+
+    def _coll_row(self, item):
+        return self.coll_list.itemWidget(item, 0) if item is not None else None
+
+    def _coll_book_items(self):
+        """按树序返回所有书籍行（跳过组头）。"""
+        out=[]
+        def walk(node):
+            for i in range(node.childCount()):
+                c=node.child(i)
+                if self._coll_is_book(c):
+                    out.append(c)
+                walk(c)
+        walk(self.coll_list.invisibleRootItem())
+        return out
+
+    def _coll_group_headers(self):
+        out=[]
+        root=self.coll_list.invisibleRootItem()
+        for i in range(root.childCount()):
+            c=root.child(i)
+            if not self._coll_is_book(c):
+                out.append(c)
+        return out
+
+    def _manual_structure(self, d, works):
+        """手工分册结构：[(组标签, [work...], vol_index), ...]。无卷时 [(None, works, None)]。"""
+        works=list(works)
+        vols=(d or {}).get("manual_volumes") or []
+        if not vols:
+            return [(None, works, None)]
+        assigned=set()
+        structure=[]
+        for i,v in enumerate(vols,1):
+            ids=[w for w in (v.get("work_ids") or []) if w in works and w not in assigned]
+            assigned.update(ids)
+            title=(v.get("title") or "").strip()
+            structure.append((f"第{i}册"+(f" · {title}" if title else ""), ids, i-1))
+        rest=[w for w in works if w not in assigned]
+        if rest or not structure:
+            structure.append(("未分组", rest, None))
+        return structure
+
+    def _coll_view_structure(self, d, works):
+        mode=self._coll_display_mode()
+        if mode=="flat":
+            return [(None, list(works), None)]
+        if mode in ("volume","catalog"):
+            try:
+                titles=[self.sutra.title_of(w) for w in works]
+                groups=self._group_works(d or {}, list(works), titles, list(works),
+                                         mode=mode, depth=self._merge_depth())
+                return [((g.get("label") or "未分组"), list(g["works"]), None) for g in groups]
+            except Exception:
+                return [(None, list(works), None)]
+        return self._manual_structure(d, works)
+
     def _render_coll_rows(self, works):
+        d=self._coll_dict(self.coll_combo.currentData())
+        mode=self._coll_display_mode()
+        # 重建前捕获展开/选中/滚动：拖拽或分册操作后整树重排，界面尽量保持原状
+        _had_headers=False
+        _expanded=set()
+        for h in self._coll_group_headers():
+            _had_headers=True
+            if h.isExpanded():
+                _expanded.add(h.text(0))
+        _selected=set()
+        for it in self._coll_book_items():
+            if it.isSelected():
+                _selected.add(it.data(0, Qt.UserRole))
+        try:
+            _scroll=self.coll_list.verticalScrollBar().value()
+        except Exception:
+            _scroll=0
+        self.coll_list.clear()
+        self.coll_list.setRootIsDecorated(mode!="flat")
+        structure=self._coll_view_structure(d, works)
+        root=self.coll_list.invisibleRootItem()
+        idx=0
+        for label, ws, vol_index in structure:
+            parent=root
+            if label is not None:
+                hdr=QTreeWidgetItem()
+                hdr.setFlags(Qt.ItemIsEnabled | Qt.ItemIsDropEnabled)
+                hdr.setText(0, label)
+                hdr.setData(0, Qt.UserRole+1, vol_index)
+                self.coll_list.addTopLevelItem(hdr)
+                # 已有卷保持原展开态；全新视图/新卷默认展开，避免整树合上
+                hdr.setExpanded((label in _expanded) if _had_headers else True)
+                parent=hdr
+            for w in ws:
+                idx+=1
+                item=self._make_coll_book_item(w, idx, parent)
+                if w in _selected:
+                    item.setSelected(True)
+        try:
+            self.coll_list.verticalScrollBar().setValue(_scroll)
+        except Exception:
+            pass
+
+    def _make_coll_book_item(self, w, idx, parent):
         fmts=self._checked_fmts()
         if not fmts: fmts=["pdf"]
         from PySide6.QtGui import QPixmap
         from PySide6.QtWidgets import QCheckBox as _Chk
         icon_dir=Path(__file__).parent / "theme" / "icons"
-        for idx, w in enumerate(works, 1):
-            title=self.sutra.title_of(w)   # 已含「编号 名称」
-            if title==w:                   # 未收录：退回经录名
-                m=self.mapping.resolve(w)
-                if m: title=f"{w} {m['name']}"
-            fmts_status=[]
-            for fmt in fmts:
-                # 已有标志随来源：官方查 cbeta_ebooks，自制查 xml_to_ebooks_dir
-                exists=self._ebook_path(w, fmt) is not None
-                fmts_status.append((fmt, exists))
-            item=QListWidgetItem()
-            item.setData(Qt.UserRole, w)
-            item.setFlags(item.flags() | Qt.ItemIsDragEnabled | Qt.ItemIsEnabled | Qt.ItemIsSelectable)
-            # 行级 tooltip 不再设置：与图标 tooltip 冲突/闪烁；图标提示由 eventFilter 悬停显示
-            row=QWidget()
-            # setItemWidget 的子控件会吞掉鼠标事件导致拖拽无法启动；
-            # 让整行对鼠标透明，事件直达 viewport 从而可拖拽。
-            row.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-            hl=QHBoxLayout(row)
-            hl.setContentsMargins(2,1,2,1)
-            hl.setSpacing(4)
-            # 行内复选框：右栏本地标记（供“移除”收集），与中栏勾选缓存(_selected)相互独立；
-            # 勾选/取消只改本行视觉，不影响丛书内容与中栏。
-            # 注意：行整体对鼠标透明（保证拖拽），子控件收不到事件，
-            # 勾选/图标点击统一在 view 层按位置命中处理（eventFilter）。
-            cb=_Chk()
-            cb.setChecked(False)
-            cb.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-            cb.setEnabled(True)
-            cb.setFocusPolicy(Qt.NoFocus)
-            hl.addWidget(cb)
-            for fmt, exists in fmts_status:
-                lab=QLabel()
-                pix=QPixmap(str(icon_dir/(f"{fmt}.png" if exists else f"{fmt}_gray.png")))
-                lab.setPixmap(pix.scaled(16,16, Qt.KeepAspectRatio, Qt.SmoothTransformation))
-                lab.fmt=fmt
-                lab.exists_flag=exists
-                lab.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-                hl.addWidget(lab)
-            text_lab=QLabel(f"{idx}. {title}")
-            text_lab.missing=not any(ex for _,ex in fmts_status)
-            if text_lab.missing:
-                text_lab.setStyleSheet("color: gray;")
-            hl.addWidget(text_lab)
-            hl.addStretch()
-            # 先激活布局再取 sizeHint，否则新行未布局，图标被裁剪不显示
-            hl.activate()
-            item.setSizeHint(row.sizeHint())
-            self.coll_list.addItem(item)
-            self.coll_list.setItemWidget(item, row)
+        title=self.sutra.title_of(w)   # 已含「编号 名称」
+        if title==w:                   # 未收录：退回经录名
+            m=self.mapping.resolve(w)
+            if m: title=f"{w} {m['name']}"
+        fmts_status=[]
+        for fmt in fmts:
+            exists=self._ebook_path(w, fmt) is not None
+            fmts_status.append((fmt, exists))
+        item=QTreeWidgetItem()
+        item.setData(0, Qt.UserRole, w)
+        item.setFlags(Qt.ItemIsDragEnabled | Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsDropEnabled)
+        row=QWidget()
+        # 子控件会吞掉鼠标事件导致拖拽无法启动：整行对鼠标透明，事件直达 viewport。
+        row.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        hl=QHBoxLayout(row)
+        hl.setContentsMargins(2,1,2,1)
+        hl.setSpacing(4)
+        cb=_Chk()
+        cb.setChecked(False)
+        cb.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        cb.setEnabled(True)
+        cb.setFocusPolicy(Qt.NoFocus)
+        hl.addWidget(cb)
+        for fmt, exists in fmts_status:
+            lab=QLabel()
+            pix=QPixmap(str(icon_dir/(f"{fmt}.png" if exists else f"{fmt}_gray.png")))
+            lab.setPixmap(pix.scaled(16,16, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            lab.fmt=fmt
+            lab.exists_flag=exists
+            lab.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+            hl.addWidget(lab)
+        text_lab=QLabel(f"{idx}. {title}")
+        text_lab.missing=not any(ex for _,ex in fmts_status)
+        if text_lab.missing:
+            text_lab.setStyleSheet("color: gray;")
+        hl.addWidget(text_lab)
+        hl.addStretch()
+        hl.activate()   # 先激活布局再取 sizeHint，否则图标被裁剪
+        item.setSizeHint(0, row.sizeHint())
+        parent.addChild(item)
+        self.coll_list.setItemWidget(item, 0, row)
+        return item
 
     def _refresh_coll_text_colors(self):
         # 选中行文字转黑（未下载的灰字在绿底上对比不足）；取消选中则恢复
-        for i in range(self.coll_list.count()):
-            it=self.coll_list.item(i)
-            row=self.coll_list.itemWidget(it) if it else None
+        for it in self._coll_book_items():
+            row=self._coll_row(it)
             if not row:
                 continue
             sel=it.isSelected()
@@ -3722,9 +3847,9 @@ class MainWindow(QMainWindow):
                     lab.setStyleSheet("")
 
     def _on_coll_item_detail(self, item):
-        if not item:
+        if not self._coll_is_book(item):
             return
-        self.detail.setText(self._book_info_text(item.data(Qt.UserRole)))
+        self.detail.setText(self._book_info_text(item.data(0, Qt.UserRole)))
         # 点书 → 激活「书籍信息」页签
         self.tab_bottom.setCurrentIndex(0)
 
@@ -3756,9 +3881,9 @@ class MainWindow(QMainWindow):
 
     def _coll_hit_checkbox(self, pos):
         item=self.coll_list.itemAt(pos)
-        if not item:
+        if not self._coll_is_book(item):
             return False
-        row=self.coll_list.itemWidget(item)
+        row=self._coll_row(item)
         if not row:
             return False
         local=row.mapFrom(self.coll_list.viewport(), pos)
@@ -3772,9 +3897,9 @@ class MainWindow(QMainWindow):
     def _coll_icon_at(self, pos):
         """返回视口坐标 pos 下的格式图标 QLabel（无则 None）。"""
         item=self.coll_list.itemAt(pos)
-        if not item:
+        if not self._coll_is_book(item):
             return None
-        row=self.coll_list.itemWidget(item)
+        row=self._coll_row(item)
         if not row:
             return None
         local=row.mapFrom(self.coll_list.viewport(), pos)
@@ -3785,11 +3910,11 @@ class MainWindow(QMainWindow):
 
     def _coll_hit_icon(self, pos):
         item=self.coll_list.itemAt(pos)
-        if not item:
+        if not self._coll_is_book(item):
             return False
         lab=self._coll_icon_at(pos)
         if lab is not None:
-            self._open_ebook(item.data(Qt.UserRole), prefer=lab.fmt, only_prefer=True)
+            self._open_ebook(item.data(0, Qt.UserRole), prefer=lab.fmt, only_prefer=True)
             return True
         return False
 
@@ -3797,11 +3922,9 @@ class MainWindow(QMainWindow):
         e.acceptProposedAction()
 
     def _coll_drop(self, e):
-        # 内部拖拽（右栏自身）：移动排序
+        # 内部拖拽（右栏自身）：移动排序 / 手工分册搬移
         if e.source() is self.coll_list:
-            from PySide6.QtWidgets import QListWidget as _L
-            _L.dropEvent(self.coll_list, e)
-            self._on_coll_reordered()
+            self._coll_internal_drop(e)
             return
         try:
             # 外部拖拽（中栏/目录树/工作区）：提取书籍加入当前丛书
@@ -3844,16 +3967,225 @@ class MainWindow(QMainWindow):
                 return
         except Exception as ex:
             print(ex)
-        from PySide6.QtWidgets import QListWidget as _L
-        _L.dropEvent(self.coll_list, e)
-        self._on_coll_reordered()
+        e.ignore()
 
     def _on_coll_double_open(self, item):
         # 双击书名：打开存在的格式（先 PDF 再 epub）；都没有则无反应
-        if not item:
+        if not self._coll_is_book(item):
             return
-        w=item.data(Qt.UserRole)
+        w=item.data(0, Qt.UserRole)
         self._open_ebook(w, prefer="pdf", only_prefer=False)
+
+    # ---------- 手工分册（右键菜单＋拖拽） ----------
+    def _coll_selected_works(self):
+        out=[]
+        for it in self.coll_list.selectedItems():
+            if self._coll_is_book(it):
+                w=it.data(0, Qt.UserRole)
+                if w and w not in out:
+                    out.append(w)
+        return out
+
+    def _apply_coll_drag_mode(self):
+        mode=self._coll_display_mode()
+        read_only = mode in ("volume","catalog")
+        self.coll_list.setRootIsDecorated(mode!="flat")
+        if read_only:
+            self.coll_list.setDragEnabled(False)
+            self.coll_list.setDragDropMode(QAbstractItemView.DropOnly)
+        else:
+            self.coll_list.setDragEnabled(True)
+            self.coll_list.setDragDropMode(QAbstractItemView.DragDrop)
+
+    def _on_coll_view_changed(self, index):
+        mode=self.coll_view_combo.itemData(index) or "flat"
+        data=self.coll_combo.currentData()
+        if not self._is_coll_placeholder(data):
+            self._coll_view[str(data)]=mode
+        self._apply_coll_drag_mode()
+        self._load_coll_works()
+
+    def _manual_commit(self, d, msg=""):
+        data=self.coll_combo.currentData()
+        self._reindex_work_ids(d)
+        d["updated_at"]=__import__("datetime").datetime.utcnow().isoformat()+"Z"
+        self._coll_view[str(data)]="manual"
+        self.coll_view_combo.blockSignals(True)
+        _i=self.coll_view_combo.findData("manual")
+        if _i>=0: self.coll_view_combo.setCurrentIndex(_i)
+        self.coll_view_combo.blockSignals(False)
+        self._apply_coll_drag_mode()
+        self._mark_coll_changed(str(data))
+        self._load_coll_works()
+        if msg:
+            self.detail.setText(msg)
+
+    def _vol_remove(self, d, ids):
+        s=set(ids)
+        for v in d.get("manual_volumes") or []:
+            v["work_ids"]=[w for w in v.get("work_ids",[]) if w not in s]
+
+    def _vol_append(self, d, vol_index, ids, before=None):
+        vols=d.setdefault("manual_volumes", [])
+        while len(vols)<=vol_index:
+            vols.append({"title":"","work_ids":[]})
+        tgt=vols[vol_index]["work_ids"]
+        ids=[w for w in ids if w not in tgt]
+        if before is not None and before in tgt:
+            pos=tgt.index(before)
+            tgt[pos:pos]=ids
+        else:
+            tgt.extend(ids)
+
+    def _reindex_work_ids(self, d):
+        old=[w for w in d.get("work_ids",[])]
+        seen=set(); out=[]
+        for v in d.get("manual_volumes") or []:
+            for w in v.get("work_ids",[]):
+                if w in old and w not in seen:
+                    seen.add(w); out.append(w)
+        for w in old:
+            if w not in seen:
+                seen.add(w); out.append(w)
+        d["work_ids"]=out
+
+    def _manual_new_volume(self, d, ids):
+        vols=d.setdefault("manual_volumes", [])
+        in_vol={w for v in vols for w in v.get("work_ids",[])}
+        vols.append({"title":"","work_ids":[w for w in (ids or []) if w not in in_vol]})
+        self._manual_commit(d, f"已新建第{len(vols)}册（{(ids or []) and len([w for w in ids if w not in in_vol]) or 0} 部）")
+
+    def _manual_move_to(self, d, ids, vol_index):
+        ids=[w for w in (ids or []) if w]
+        if not ids:
+            return
+        self._vol_remove(d, ids)
+        if vol_index is not None:
+            self._vol_append(d, vol_index, ids)
+        self._manual_commit(d, f"已移动 {len(ids)} 部")
+
+    def _manual_set_title(self, d, vol_index):
+        vols=d.get("manual_volumes") or []
+        if not (0<=vol_index<len(vols)):
+            return
+        cur=vols[vol_index].get("title") or ""
+        text,ok=QInputDialog.getText(self, "分册副标题", f"第{vol_index+1}册副标题（可空）", text=cur)
+        if not ok:
+            return
+        vols[vol_index]["title"]=text.strip()
+        self._manual_commit(d, f"第{vol_index+1}册副标题已更新")
+
+    def _manual_move_volume(self, d, vol_index, delta):
+        vols=d.get("manual_volumes") or []
+        j=vol_index+delta
+        if not (0<=vol_index<len(vols) and 0<=j<len(vols)):
+            return
+        vols[vol_index],vols[j]=vols[j],vols[vol_index]
+        self._manual_commit(d, f"第{vol_index+1}册已{'上' if delta<0 else '下'}移")
+
+    def _manual_delete_volume(self, d, vol_index):
+        vols=d.get("manual_volumes") or []
+        if not (0<=vol_index<len(vols)):
+            return
+        vols.pop(vol_index)
+        self._manual_commit(d, "已删除分册")
+
+    def _on_coll_context_menu(self, pos):
+        data=self.coll_combo.currentData()
+        if self._is_coll_placeholder(data):
+            return
+        d=self._coll_dict(data)
+        if d is None:
+            return
+        item=self.coll_list.itemAt(pos)
+        menu=QMenu(self.coll_list)
+        if self._coll_is_book(item):
+            sel=self._coll_selected_works() or [item.data(0, Qt.UserRole)]
+            menu.addAction("新建分册（含选中书）").triggered.connect(
+                lambda: self._manual_new_volume(d, sel))
+            sub=menu.addMenu("移入分册")
+            vols=d.get("manual_volumes") or []
+            for i,v in enumerate(vols,1):
+                title=(v.get("title") or "").strip()
+                a=sub.addAction(f"第{i}册"+(f" · {title}" if title else ""))
+                a.triggered.connect(lambda _c=False, idx=i-1, s=list(sel):
+                                    self._manual_move_to(d, s, idx))
+            if vols:
+                sub.addAction("未分组").triggered.connect(
+                    lambda _c=False, s=list(sel): self._manual_move_to(d, s, None))
+            else:
+                sub.setEnabled(False)
+        elif item is not None:
+            vol_index=item.data(0, Qt.UserRole+1)
+            if vol_index is not None:
+                menu.addAction("设副标题…").triggered.connect(
+                    lambda _c=False, idx=vol_index: self._manual_set_title(d, idx))
+                menu.addAction("上移").triggered.connect(
+                    lambda _c=False, idx=vol_index: self._manual_move_volume(d, idx, -1))
+                menu.addAction("下移").triggered.connect(
+                    lambda _c=False, idx=vol_index: self._manual_move_volume(d, idx, 1))
+                menu.addSeparator()
+                menu.addAction("删除分册").triggered.connect(
+                    lambda _c=False, idx=vol_index: self._manual_delete_volume(d, idx))
+            menu.addAction("新建空分册").triggered.connect(
+                lambda: self._manual_new_volume(d, []))
+        else:
+            menu.addAction("新建空分册").triggered.connect(
+                lambda: self._manual_new_volume(d, []))
+        if menu.actions():
+            menu.exec(self.coll_list.viewport().mapToGlobal(pos))
+
+    def _coll_internal_drop(self, e):
+        mode=self._coll_display_mode()
+        if mode in ("volume","catalog"):
+            e.ignore(); return
+        data=self.coll_combo.currentData()
+        d=self._coll_dict(data)
+        if d is None:
+            e.ignore(); return
+        ids=self._coll_dragged_works(e)
+        if not ids:
+            e.ignore(); return
+        pos=e.position().toPoint()
+        target=self.coll_list.itemAt(pos)
+        ind=self.coll_list.dropIndicatorPosition()
+        if mode=="flat":
+            order=[w for w in d.get("work_ids",[]) if w not in ids]
+            if self._coll_is_book(target) and target.data(0,Qt.UserRole) in order:
+                ti=order.index(target.data(0,Qt.UserRole))
+                at=ti if ind!=QAbstractItemView.BelowItem else ti+1
+            else:
+                at=len(order)
+            order[at:at]=ids
+            d["work_ids"]=order
+        else:
+            vols=d.setdefault("manual_volumes", [])
+            root=self.coll_list.invisibleRootItem()
+            if self._coll_is_book(target):
+                parent=target.parent()
+                vol_index=(parent.data(0,Qt.UserRole+1)
+                           if parent is not None and parent is not root else None)
+                sibs=[parent.child(k) for k in range(parent.childCount())
+                      if self._coll_is_book(parent.child(k))]
+                p=next((k for k,c in enumerate(sibs) if c is target), len(sibs))
+                if ind==QAbstractItemView.BelowItem:
+                    before=sibs[p+1].data(0,Qt.UserRole) if p+1<len(sibs) else None
+                else:
+                    before=target.data(0,Qt.UserRole)
+            elif target is not None:
+                vol_index=target.data(0,Qt.UserRole+1); before=None
+            else:
+                vol_index=None; before=None
+            self._vol_remove(d, ids)
+            if vol_index is not None:
+                self._vol_append(d, vol_index, ids, before=before)
+            self._reindex_work_ids(d)
+        d["updated_at"]=__import__("datetime").datetime.utcnow().isoformat()+"Z"
+        if mode=="manual":
+            self._coll_view[str(data)]="manual"
+        self._mark_coll_changed(str(data))
+        self._load_coll_works()
+        e.acceptProposedAction()
 
     def _on_icon_clicked(self, work, fmt):
         # 双击格式图标：只打开该格式；该格式不存在则无反应
@@ -4025,9 +4357,8 @@ class MainWindow(QMainWindow):
             except Exception:
                 return
         new_order=[]
-        for i in range(self.coll_list.count()):
-            it=self.coll_list.item(i)
-            w=it.data(Qt.UserRole)
+        for it in self._coll_book_items():
+            w=it.data(0, Qt.UserRole)
             if w:
                 new_order.append(w)
         new_order=[w for w in new_order if w]
@@ -4040,12 +4371,9 @@ class MainWindow(QMainWindow):
     def _coll_select_all(self):
         # 右栏全选：选中所有行 + 勾选所有复选框（复选框仅作本栏标记，供“移除”收集）
         from PySide6.QtWidgets import QCheckBox as _Chk4
-        for i in range(self.coll_list.count()):
-            it=self.coll_list.item(i)
-            if not it:
-                continue
+        for it in self._coll_book_items():
             it.setSelected(True)
-            row=self.coll_list.itemWidget(it)
+            row=self._coll_row(it)
             if not row:
                 continue
             for cb in row.findChildren(_Chk4):
@@ -4055,11 +4383,8 @@ class MainWindow(QMainWindow):
         # 右栏不选：取消所有行选中 + 取消所有复选框勾选（不删除书籍）
         from PySide6.QtWidgets import QCheckBox as _Chk5
         self.coll_list.clearSelection()
-        for i in range(self.coll_list.count()):
-            it=self.coll_list.item(i)
-            if not it:
-                continue
-            row=self.coll_list.itemWidget(it)
+        for it in self._coll_book_items():
+            row=self._coll_row(it)
             if not row:
                 continue
             for cb in row.findChildren(_Chk5):
@@ -4071,15 +4396,17 @@ class MainWindow(QMainWindow):
         if self._is_coll_placeholder(data):
             self.detail.setText("请选择一个丛书再排序")
             return
+        if self._coll_display_mode() in ("volume","catalog"):
+            self.detail.setText("该分组视图只读，切到平铺/手工分册再排序")
+            return
         d=self._coll_dict(data)
         if d is None:
             return
         order=list(d.get("work_ids",[]))
         sel=[]
-        for i in range(self.coll_list.count()):
-            it=self.coll_list.item(i)
-            if it and it.isSelected():
-                w=it.data(Qt.UserRole)
+        for it in self._coll_book_items():
+            if it.isSelected():
+                w=it.data(0, Qt.UserRole)
                 if w in order and w not in sel:
                     sel.append(w)
         if not sel:
@@ -4108,14 +4435,13 @@ class MainWindow(QMainWindow):
             self._mark_coll_changed(str(data))
             self._load_coll_works()
             first=None
-            for i in range(self.coll_list.count()):
-                it=self.coll_list.item(i)
-                if it and it.data(Qt.UserRole) in sel:
+            for it in self._coll_book_items():
+                if it.data(0, Qt.UserRole) in sel:
                     it.setSelected(True)
                     if first is None:
                         first=it
             if first is not None:
-                self.coll_list.scrollToItem(first, QListWidget.PositionAtCenter)
+                self.coll_list.scrollToItem(first, QAbstractItemView.PositionAtCenter)
             self.detail.setText(f"已移动 {len(sel)} 部")
 
     # ---------- 下载 ----------
@@ -5115,9 +5441,9 @@ class MainWindow(QMainWindow):
         return bool((self.config.get("merge", {}) or {}).get("by_volume", False))
 
     def _merge_mode(self):
-        """none=不分册｜volume=按刊本册｜catalog=按目录(部类)｜ask=合并时选择。"""
+        """none=不分册｜volume=按刊本册｜catalog=按目录(部类)｜manual=按手工分册｜ask=合并时选择。"""
         m = (self.config.get("merge", {}) or {}).get("mode")
-        if m in ("none", "volume", "catalog", "ask"):
+        if m in ("none", "volume", "catalog", "manual", "ask"):
             return m
         return "volume" if self._by_volume() else "none"
 
@@ -5130,7 +5456,7 @@ class MainWindow(QMainWindow):
 
     def _merge_ask_last(self):
         v = (self.config.get("merge", {}) or {}).get("ask_last") or {}
-        mode = v.get("mode") if v.get("mode") in ("none", "volume", "catalog") else "none"
+        mode = v.get("mode") if v.get("mode") in ("none", "volume", "catalog", "manual") else "none"
         try:
             depth = int(v.get("depth", 2))
         except Exception:
@@ -5209,6 +5535,35 @@ class MainWindow(QMainWindow):
         if mode == "none":
             return [{"label": None, "stem": None, "segments": [], "ok": ok, "titles": ok_titles,
                      "works": ok_works, "sortkey": (9, "")}]
+        if mode == "manual":
+            # 按丛书 manual_volumes（右栏手工分册）分组：卷顺序=册序；未分组自成一组。
+            # 无任何手工卷 → 回退不分册（单文件）。
+            vols = (d or {}).get("manual_volumes") or []
+            if not vols:
+                return [{"label": None, "stem": None, "segments": [], "ok": ok,
+                         "titles": ok_titles, "works": ok_works, "sortkey": (9, "")}]
+            ok_map = {}
+            for f, t, w in zip(ok, ok_titles, ok_works):
+                ok_map.setdefault(self._normalize_work(w), (f, t, w))
+            assigned = set()
+            out = []
+            for i, v in enumerate(vols, 1):
+                members = []
+                for w in (v.get("work_ids") or []):
+                    nw = self._normalize_work(w)
+                    if nw in ok_map and nw not in assigned:
+                        assigned.add(nw)
+                        members.append(ok_map[nw])
+                if not members:
+                    continue
+                title = (v.get("title") or "").strip()
+                label = f"第{i}册" + (f" · {title}" if title else "")
+                out.append(self._manual_group(label, members))
+            rest = [ok_map[self._normalize_work(w)] for w in ok_works
+                    if self._normalize_work(w) in ok_map and self._normalize_work(w) not in assigned]
+            if rest or not out:
+                out.append(self._manual_group("未分组", rest))
+            return out
         manual = (d.get("work_groups") or {}) if mode == "volume" else {}
         volume_map = self._work_vol_map() if mode == "volume" else None
         bulei_map = self._catalog_bulei_map() if mode == "catalog" else None
@@ -5241,6 +5596,14 @@ class MainWindow(QMainWindow):
                                          "sortkey": sortkey})
             g["ok"].append(f); g["titles"].append(t); g["works"].append(w)
         return sorted(buckets.values(), key=lambda g: g["sortkey"])
+
+    def _manual_group(self, label, members):
+        f = [m[0] for m in members]
+        t = [m[1] for m in members]
+        w = [m[2] for m in members]
+        return {"label": label, "stem": self._safe_name(label), "segments": [label],
+                "full_segments": [label], "ok": f, "titles": t, "works": w,
+                "sortkey": (0, label)}
 
     def _merge_name_template(self):
         """分册文件名模板（`merge.name_template`），缺省 `{coll}.{nn}.{seg}`。"""
@@ -5333,10 +5696,10 @@ class MainWindow(QMainWindow):
             name = re.sub(r"\{seg\d+\}", "", name)
         return self._safe_name(name, fallback="") or self._safe_name(g.get("stem"))
 
-    def _merge_preview(self, works, mode, depth, coll="", name_template=None):
+    def _merge_preview(self, works, mode, depth, coll="", name_template=None, d=None):
         """合并弹框预览：[(label, 部数, 文件名), ...]（文件名无后缀，与实际落盘同规则）。
         name_template 非 None 时用它展开（合并窗实时输入），否则用配置模板。"""
-        groups = self._group_works({}, list(works), list(works), list(works),
+        groups = self._group_works(d or {}, list(works), list(works), list(works),
                                    mode=mode, depth=depth)
         out = []
         for idx, g in enumerate(groups, 1):
@@ -5581,7 +5944,7 @@ class MainWindow(QMainWindow):
                             default_template=self._merge_name_template(),
                             preview=None)
             dlg._preview = lambda m, dep: self._merge_preview(
-                works, m, dep, coll=d["name"], name_template=dlg.template())
+                works, m, dep, coll=d["name"], name_template=dlg.template(), d=d)
             dlg._refresh()
             if dlg.exec()!=_QD.Accepted:
                 self.detail.setText("已取消合成（未选择分册模式）")
@@ -5920,8 +6283,13 @@ class MainWindow(QMainWindow):
                     missing=[f"{w}.{fmt}" for fmt in fmts for w in works
                               if not official_ebook_source.local_path(w, fmt, dest_dir).exists()]
                     if missing:
-                        self._wrap_box(QMessageBox.Warning, "未全部下载", f"仍缺书：{'、'.join(self._missing_by_fmt(missing))}，已取消打包。")
-                        return
+                        _miss2 = "、".join(self._missing_by_fmt(missing))
+                        r2=QMessageBox.question(self, "仍缺书",
+                            f"仍缺书：{_miss2}。\n是否继续打包（仅打已有）？",
+                            QMessageBox.Yes | QMessageBox.No)
+                        if r2!=QMessageBox.Yes:
+                            self._wrap_box(QMessageBox.Warning, "未全部下载", f"仍缺书：{_miss2}，已取消打包。")
+                            return
             src_map = {fmt: {w: official_ebook_source.local_path(w, fmt, dest_dir) for w in works}
                        for fmt in fmts}
         from PySide6.QtWidgets import QFileDialog
@@ -6068,8 +6436,13 @@ class MainWindow(QMainWindow):
                     missing=[f"{w}.{fmt}" for fmt in fmts for w in works
                              if not official_ebook_source.local_path(w, fmt, dest_dir).exists()]
                     if missing:
-                        self._wrap_box(QMessageBox.Warning, "未全部下载", f"仍缺书：{'、'.join(self._missing_by_fmt(missing))}，已取消导出。")
-                        return
+                        _miss2 = "、".join(self._missing_by_fmt(missing))
+                        r2=QMessageBox.question(self, "仍缺书",
+                            f"仍缺书：{_miss2}。\n是否继续导出（仅导已有）？",
+                            QMessageBox.Yes | QMessageBox.No)
+                        if r2!=QMessageBox.Yes:
+                            self._wrap_box(QMessageBox.Warning, "未全部下载", f"仍缺书：{_miss2}，已取消导出。")
+                            return
             src_map = {fmt: {w: official_ebook_source.local_path(w, fmt, dest_dir) for w in works}
                        for fmt in fmts}
         from PySide6.QtWidgets import QFileDialog

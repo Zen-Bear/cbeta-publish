@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QRadioButton,
                                QButtonGroup, QLabel, QSpinBox, QListWidget,
                                QDialogButtonBox, QWidget, QLineEdit)
 
-MODE_NONE, MODE_VOLUME, MODE_CATALOG = "none", "volume", "catalog"
+MODE_NONE, MODE_VOLUME, MODE_CATALOG, MODE_MANUAL = "none", "volume", "catalog", "manual"
 
 
 class MergeDialog(QDialog):
@@ -33,9 +33,11 @@ class MergeDialog(QDialog):
         self.rb_none = QRadioButton("不分册")
         self.rb_volume = QRadioButton("按刊本册")
         self.rb_catalog = QRadioButton("按目录（部类）")
+        self.rb_manual = QRadioButton("按手工分册")
         self.rb_volume.setToolTip("按 mulu/vol.json 的刊本/册分组")
         self.rb_catalog.setToolTip("按部类树路径分组（如 01 阿含部類 / 長阿含經）")
-        for i, b in enumerate((self.rb_none, self.rb_volume, self.rb_catalog)):
+        self.rb_manual.setToolTip("按右栏「手工分册」的卷分组（未分组自成一组）")
+        for i, b in enumerate((self.rb_none, self.rb_volume, self.rb_catalog, self.rb_manual)):
             h.addWidget(b)
             self.group.addButton(b, i)
         h.addStretch()
@@ -74,20 +76,24 @@ class MergeDialog(QDialog):
         self.rb_none.toggled.connect(self._refresh)
         self.rb_volume.toggled.connect(self._refresh)
         self.rb_catalog.toggled.connect(self._refresh)
+        self.rb_manual.toggled.connect(self._refresh)
         self.sp_depth.valueChanged.connect(self._refresh)
         self.ed_template.textChanged.connect(self._refresh)
         self._refresh()
 
     def _select(self, mode):
-        rb = {MODE_VOLUME: self.rb_volume, MODE_CATALOG: self.rb_catalog}.get(mode)
+        rb = {MODE_VOLUME: self.rb_volume, MODE_CATALOG: self.rb_catalog,
+              MODE_MANUAL: self.rb_manual}.get(mode)
         (rb or self.rb_none).setChecked(True)
 
     def chosen(self):
-        """返回 (mode, depth)：none/volume/catalog。"""
+        """返回 (mode, depth)：none/volume/catalog/manual。"""
         if self.rb_volume.isChecked():
             mode = MODE_VOLUME
         elif self.rb_catalog.isChecked():
             mode = MODE_CATALOG
+        elif self.rb_manual.isChecked():
+            mode = MODE_MANUAL
         else:
             mode = MODE_NONE
         return mode, int(self.sp_depth.value())
@@ -98,7 +104,7 @@ class MergeDialog(QDialog):
 
     def _refresh(self, *_):
         mode, depth = self.chosen()
-        self.sp_depth.setEnabled(mode != MODE_NONE)
+        self.sp_depth.setEnabled(mode in (MODE_VOLUME, MODE_CATALOG))
         self.lbl_example.clear()
         self.lst.clear()
         if self._preview is None:
