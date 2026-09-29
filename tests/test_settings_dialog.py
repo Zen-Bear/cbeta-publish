@@ -28,18 +28,22 @@ class SettingsDialogTest(unittest.TestCase):
         return SettingsDialog(copy.deepcopy(DEFAULT_CONFIG), None)
 
     def test_official_library_roundtrip(self):
-        # 本地库：根目录＋覆盖落盘；重扫弹窗说明结果
+        # 本地库分组面板：根目录＋覆盖落盘；重扫弹窗说明结果
         import tempfile
-        from PySide6.QtWidgets import QMessageBox
+        from PySide6.QtWidgets import QGroupBox, QMessageBox
         dlg = self._dlg()
         lib = Path(tempfile.mkdtemp()) / "lib"
         (lib / "cbeta_epub_2026r2" / "T").mkdir(parents=True)
         (lib / "cbeta_epub_2026r2" / "T" / "T0001.epub").write_bytes(b"E")
         try:
-            # 默认收起（显式隐藏；offscreen 下用 isHidden 断言）
-            from PySide6.QtCore import Qt as _Qt
-            self.assertTrue(dlg.lib_body.isHidden())
-            self.assertEqual(dlg.btn_lib_collapse.arrowType(), _Qt.RightArrow)
+            # 分组面板常显（无折叠），控件归属其下
+            boxes = [g for g in dlg.findChildren(QGroupBox)
+                     if g.title() == "官方电子书本地库（本地优先）"]
+            self.assertEqual(len(boxes), 1)
+            box = boxes[0]
+            self.assertTrue(box.isAncestorOf(dlg.ed_official_lib))
+            self.assertTrue(box.isAncestorOf(dlg.btn_lib_refresh))
+            self.assertTrue(box.isAncestorOf(dlg.lib_override_edits["epub"]))
             dlg.ed_official_lib.setText(str(lib))
             dlg.lib_override_edits["epub"].setText("")
             shown = []
@@ -50,10 +54,6 @@ class SettingsDialogTest(unittest.TestCase):
             finally:
                 QMessageBox.information = real
             self.assertTrue(any("epub" in s for s in shown), shown)
-            # 展开箭头切换
-            dlg.btn_lib_collapse.click()
-            self.assertFalse(dlg.lib_body.isHidden())
-            self.assertEqual(dlg.btn_lib_collapse.arrowType(), _Qt.DownArrow)
             cfg = dlg._collect()
             self.assertEqual(cfg["official_library"]["root"], str(lib))
             self.assertEqual(cfg["official_library"]["overrides"], {})
@@ -68,16 +68,22 @@ class SettingsDialogTest(unittest.TestCase):
             dlg.close()
 
     def test_cover_subtabs_order(self):
-        # 封面/版式 4 个子页签，按 封面/封底图、背景色 → 字体 → 基准字号 → 边距
+        # 封面/版式 5 个子页签，首项 封面/说明（含合并开关/编辑说明/说明页/部类行），
+        # 随后 封面/封底图、背景色 → 字体 → 基准字号 → 边距
         dlg = self._dlg()
         sub = dlg._cover_subtabs
         names = [sub.tabText(i) for i in range(sub.count())]
-        self.assertEqual(names, ["封面/封底图、背景色", "字体", "基准字号", "边距"])
-        # 控件归属：背景色在页签1、字体在页签2、基准字号在页签3、边距在页签4
-        self.assertTrue(sub.widget(0).isAncestorOf(dlg.btn_bg))
-        self.assertTrue(sub.widget(1).isAncestorOf(dlg.font_rows["title"]))
-        self.assertTrue(sub.widget(2).isAncestorOf(dlg.sp_body["a5"]))
-        self.assertTrue(sub.widget(3).isAncestorOf(dlg.sp_margins["a5"]["left"]))
+        self.assertEqual(names, ["封面/说明", "封面/封底图、背景色", "字体", "基准字号", "边距"])
+        # 控件归属：首项含合并开关/编辑说明/部类行；背景色在页签2、字体页签3、
+        # 基准字号页签4、边距页签5
+        self.assertTrue(sub.widget(0).isAncestorOf(dlg.chk_cover_enabled))
+        self.assertTrue(sub.widget(0).isAncestorOf(dlg.chk_editnote_enabled))
+        self.assertTrue(sub.widget(0).isAncestorOf(dlg.chk_intro_enabled))
+        self.assertTrue(sub.widget(0).isAncestorOf(dlg.chk_bulei_num))
+        self.assertTrue(sub.widget(1).isAncestorOf(dlg.btn_bg))
+        self.assertTrue(sub.widget(2).isAncestorOf(dlg.font_rows["title"]))
+        self.assertTrue(sub.widget(3).isAncestorOf(dlg.sp_body["a5"]))
+        self.assertTrue(sub.widget(4).isAncestorOf(dlg.sp_margins["a5"]["left"]))
 
     def test_font_input_uses_native_separator(self):
         cfg = copy.deepcopy(DEFAULT_CONFIG)
@@ -492,9 +498,9 @@ class SettingsDialogTest(unittest.TestCase):
                          dlg._bg_color.getRgb()[:3])
         self.assertEqual(dlg._bg_colors["toc_background"].getRgb()[:3],
                          dlg._bg_color.getRgb()[:3])
-        self.assertTrue(dlg._cover_subtabs.widget(0).isAncestorOf(
+        self.assertTrue(dlg._cover_subtabs.widget(1).isAncestorOf(
             dlg._bg_btns["intro_background"]))
-        self.assertTrue(dlg._cover_subtabs.widget(0).isAncestorOf(
+        self.assertTrue(dlg._cover_subtabs.widget(1).isAncestorOf(
             dlg._bg_btns["toc_background"]))
         out0 = dlg._collect()["cover"]["styles"]
         self.assertNotIn("intro_background", out0)
@@ -540,6 +546,13 @@ class SettingsDialogTest(unittest.TestCase):
         names = [tabs.tabText(i) for i in range(tabs.count())]
         self.assertIn("自制E书", names)
         self.assertIn("更新源", names)
+        # 主 tab 顺序：数据/输出，封面/版式，自制E书，缓存，目录过滤，更新源，外观
+        self.assertEqual(names, ["数据/输出", "封面/版式", "自制E书", "缓存",
+                                 "目录过滤", "更新源", "外观"])
+        # 分册模式面板：标签行/控件行贴紧（spacing=2，不用默认 6）
+        mode_box = dlg._dirs_tabs.widget(0)
+        self.assertTrue(mode_box.title().startswith("分册模式"))
+        self.assertEqual(mode_box.layout().spacing(), 2)
         labels = []
 
         def _labels_of(form):
@@ -564,6 +577,16 @@ class SettingsDialogTest(unittest.TestCase):
         self.assertTrue(hasattr(dlg, "_dir_row"))
         self.assertFalse(hasattr(dlg, "ed_book"))
         self.assertFalse(hasattr(dlg, "ed_xmlroot"))
+
+    def test_dirs_subtabs_order(self):
+        # 数据/输出三组改 tab 面板，顺序：分册模式 / E书默认来源和格式 / 官方电子书本地库
+        dlg = self._dlg()
+        tabs = dlg._dirs_tabs
+        self.assertEqual([tabs.tabText(i) for i in range(tabs.count())],
+                         ["分册模式", "E书默认来源和格式", "官方电子书本地库"])
+        self.assertTrue(tabs.widget(0).isAncestorOf(dlg.rb_merge_none))
+        self.assertTrue(tabs.widget(1).isAncestorOf(dlg.src_default_box))
+        self.assertTrue(tabs.widget(2).isAncestorOf(dlg.ed_official_lib))
 
     def test_paths_use_native_separator(self):
         # 路径统一本地分隔符显示与落盘（Windows 反斜杠）

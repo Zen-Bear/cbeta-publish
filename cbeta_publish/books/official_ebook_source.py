@@ -124,12 +124,42 @@ def download_ebook(work: str, fmt: str, dest_dir, config=None) -> Path | None:
     if got is not None:
         return got
     url = ebook_url(fmt, canon_of(work), work)
+    if _head_absent_404(url):
+        raise RemoteNotFound(url)
     if fmt in _ZIP_FORMATS:
         out_dir = zip_dest_dir(work, fmt, dest_dir)
         return out_dir if cf.download(url, str(out_dir), unzip=True) else None
     dest = dest_path(work, fmt, dest_dir)
     dest.parent.mkdir(parents=True, exist_ok=True)
     return dest if cf.download(url, str(dest)) else None
+
+
+#: HEAD 探针超时（秒）：只用于“确定不存在”快判；超时/异常一律视为不定，照常下载
+_HEAD_PROBE_TIMEOUT = 10
+#: 确定不存在的 HTTP 状态：不再重试下载，直接失败
+_GONE_STATUS = (404, 410)
+
+
+class RemoteNotFound(Exception):
+    """远端确定不存在（HEAD 探针 404/410）：调用方记 `不存在`，不再重试下载。"""
+
+
+def _head_absent_404(url, timeout=_HEAD_PROBE_TIMEOUT) -> bool:
+    """远端是否确定不存在：HEAD 返回 404/410 为 True；2xx 为 False；
+    超时/405/其它异常一律 False（不定，照常下载，不断生路）。"""
+    import urllib.request
+    import urllib.error
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": cf.USER_AGENT},
+                                     method="HEAD")
+        with urllib.request.urlopen(req, timeout=timeout,
+                                    context=cf._ctx()) as r:
+            return False
+    except urllib.error.HTTPError as e:
+        return e.code in _GONE_STATUS
+    except Exception:
+        return False
+    return False
 
 
 # ---------- 官方电子书本地库（只读；本地优先、缺失回退下载） ----------

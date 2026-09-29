@@ -510,25 +510,32 @@ class MainWindow(QMainWindow):
         rh.addWidget(self.btn_tag_mgr)
         rh.addStretch()
         rv.addLayout(rh)
+        combo_row=QWidget()
+        ch=QHBoxLayout(combo_row)
+        ch.setContentsMargins(0,0,0,0)
+        self.btn_blank=QPushButton("空白")
+        self.btn_blank.setToolTip("选择空白工作丛书（不存在则创建）")
+        ch.addWidget(self.btn_blank)
         self.coll_combo=QComboBox()
         self.coll_combo.setToolTip("丛书缓存 + 丛书列表（上方分类下拉可过滤）")
-        rv.addWidget(self.coll_combo)
+        ch.addWidget(self.coll_combo, 1)
+        rv.addWidget(combo_row)
         mgmt=QWidget()
         mh=QHBoxLayout(mgmt)
         mh.setContentsMargins(0,0,0,0)
-        self.btn_blank=QPushButton("空白")
-        self.btn_blank.setToolTip("选择空白工作丛书（不存在则创建）")
         self.btn_save=QPushButton("保存")
         self.btn_save.setToolTip("保存所有未保存的丛书改动（去除星号）")
         self.btn_saveas=QPushButton("另存")
         self.btn_saveas.setToolTip("当前丛书改名、选择分类并保存")
         self.btn_restore=QPushButton("恢复")
         self.btn_restore.setToolTip("恢复当前丛书到上次保存时的书单，并取消星号")
+        self.btn_rename=QPushButton("改名")
+        self.btn_rename.setToolTip("重命名当前丛书（检测重名，立即保存）")
         self.btn_delete=QPushButton("删除")
         self.btn_delete.setToolTip("删除当前丛书")
-        self.btn_tags=QPushButton("标签…")
+        self.btn_tags=QPushButton("标签")
         self.btn_tags.setToolTip("为当前丛书设置标签（可多选）")
-        mh.addWidget(self.btn_blank); mh.addWidget(self.btn_save); mh.addWidget(self.btn_saveas); mh.addWidget(self.btn_restore); mh.addWidget(self.btn_delete)
+        mh.addWidget(self.btn_save); mh.addWidget(self.btn_saveas); mh.addWidget(self.btn_restore); mh.addWidget(self.btn_rename); mh.addWidget(self.btn_delete)
         mh.addWidget(self.btn_tags)
         mh.addStretch()
         rv.addWidget(mgmt)
@@ -744,6 +751,8 @@ class MainWindow(QMainWindow):
         self.sort_combo.currentTextChanged.connect(self._set_sort_mode)
         self.tree.itemClicked.connect(self._on_tree_preview)
         self.tree.itemDoubleClicked.connect(self._on_tree_double_click)
+        self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.tree.customContextMenuRequested.connect(self._on_tree_context_menu)
         # 工作区树：点书显示信息（同目录树）、双击加入右栏、可拖入右栏；
         # 右栏可拖入工作区 = 移除（书自然流入工作区）
         self.ws_tree.itemClicked.connect(self._on_tree_preview)
@@ -769,6 +778,7 @@ class MainWindow(QMainWindow):
         self.btn_tags.clicked.connect(self._edit_coll_tags)
         self.coll_tag_filter.currentIndexChanged.connect(self._on_coll_tag_filter)
         self.btn_blank.clicked.connect(self._new_blank_collection)
+        self.btn_rename.clicked.connect(self._rename_collection)
         self.btn_delete.clicked.connect(self._delete_collection)
         self.btn_save.clicked.connect(self._save_collections)
         self.btn_restore.clicked.connect(self._restore_collection)
@@ -2186,17 +2196,17 @@ class MainWindow(QMainWindow):
         self.coll_tag_filter.setVisible(mode=="丛书")
         # 左栏状态栏：操作提示（按模式）
         if mode=="部类":
-            self.lbl_hint.setText("提示：拖动或双击单本书加入工作区")
+            self.lbl_hint.setText("提示：拖动或双击单本书加入工作区；右键打开本地书")
         elif mode=="三藏":
-            self.lbl_hint.setText("提示：经/律/论/藏外；拖动或双击单本书加入工作区")
+            self.lbl_hint.setText("提示：经/律/论/藏外；拖动或双击单本书加入工作区；右键打开本地书")
         elif mode=="朝代":
-            self.lbl_hint.setText("提示：按朝代浏览；拖动或双击单本书加入工作区")
+            self.lbl_hint.setText("提示：按朝代浏览；拖动或双击单本书加入工作区；右键打开本地书")
         elif mode=="刊本":
-            self.lbl_hint.setText("提示：依刊本（藏经版本）→ 册 → 经；拖动或双击单本书加入工作区")
+            self.lbl_hint.setText("提示：依刊本（藏经版本）→ 册 → 经；拖动或双击单本书加入工作区；右键打开本地书")
         elif mode=="作者":
             self.lbl_hint.setText("提示：拖动或双击作者（其全部作品）加入工作区")
         elif mode=="丛书":
-            self.lbl_hint.setText("提示：双击丛书追加其书目到工作区；拖入右栏加入丛书")
+            self.lbl_hint.setText("提示：双击丛书追加其书目到工作区；拖入右栏加入丛书；右键打开本地书")
         if self._layout_mode()=="two":
             self.lbl_hint.setText((self.lbl_hint.text() or "") + "　【二栏】拖动/双击=直接加入右栏")
         self._refresh_current_tree()
@@ -3454,15 +3464,32 @@ class MainWindow(QMainWindow):
         newname=newname.strip()
         if newname==d.get("name"):
             return
-        # 仅改内存（文件名保持不变，保存时才落盘）
+        if self._name_taken(newname, exclude_path=data):
+            self._wrap_box(QMessageBox.Warning, "重名", f"已有同名丛书「{newname}」，请换一个名称。")
+            return
+        # 立即落盘：文件名保持不变，只改内容（name/slug/updated_at）
         d["name"]=newname
         d["slug"]=slugify(d.get("category","custom"), newname)
         d["updated_at"]=__import__("datetime").datetime.utcnow().isoformat()+"Z"
+        p=Path(data)
+        try:
+            content=json.dumps(d, ensure_ascii=False, indent=2)
+            p.write_text(content, encoding="utf-8")
+        except Exception as e:
+            self.detail.setText(f"改名保存失败 {e}")
+            return
+        for i,(pp,dd) in enumerate(self._collections):
+            if str(pp)==str(data):
+                self._collections[i]=(pp,d)
+                break
         for i in range(self.coll_combo.count()):
             if self.coll_combo.itemData(i)==str(data):
                 self.coll_combo.setItemText(i, newname)
                 break
-        self._mark_coll_changed(str(data))
+        self._coll_originals[str(data)]=content
+        self._changed_colls.discard(str(data))
+        if not self._changed_colls:
+            self._coll_changed=False
         self.detail.setText(f"已改名：{newname}")
 
     def _delete_collection(self):
@@ -3852,6 +3879,140 @@ class MainWindow(QMainWindow):
                     self.detail.setText(f"打开失败 {e}")
                 return True
         return False
+
+    #: 右键“打开本地书”菜单格式（显示名）
+    _OPEN_FMTS = (("pdf", "PDF"), ("epub", "EPUB"), ("docx", "DOCX"),
+                  ("txt", "TXT"), ("txt_notes", "TXT注释"))
+
+    def _collect_open_rows(self, work, coll_first=True):
+        """右键菜单行：[(source, label, Path)]，按源分组排序（组内 pdf→…→txt_notes）。
+
+        coll_first=True（丛书树）：自制→官方缓存→本地库；
+        False（其它树）：本地库→官方缓存→自制。
+        单文件命中 → `{FMT}（{源}）`开文件；目录命中（本地库 juan 多文件、
+        缓存 zip 型目录）→ `{FMT}（{源}）`开首个文件 ＋
+        `打开多卷{FMT}目录（{源}）`开目录。只读，不拷贝不下载。
+        """
+        from cbeta_publish.books import xml2pdf_bridge as _b
+        from cbeta_publish.books import official_ebook_source as _oes
+        rows = []
+        try:
+            _made_base = _b.xml_books_dir(self.config)
+        except Exception:
+            _made_base = None
+        try:
+            _cache_base = _oes.official_books_dir(self.config)
+        except Exception:
+            _cache_base = None
+        order = (("made", "自制"), ("cache", "官方缓存"), ("lib", "本地库"))
+        if not coll_first:
+            order = tuple(reversed(order))
+        for src, src_label in order:
+            for fmt, flabel in self._OPEN_FMTS:
+                if src == "made":
+                    if _made_base is None:
+                        continue
+                    try:
+                        hit = _b.find_built(work, fmt, _made_base)
+                    except Exception:
+                        hit = None
+                    if hit is not None and Path(hit).is_file():
+                        rows.append((src, f"{flabel}（{src_label}）", Path(hit)))
+                elif src == "cache":
+                    if _cache_base is None:
+                        continue
+                    try:
+                        hit = _oes.local_path(work, fmt, _cache_base)
+                    except Exception:
+                        hit = None
+                    if hit is None:
+                        continue
+                    hit = Path(hit)
+                    try:
+                        exists = hit.exists()
+                    except OSError:
+                        continue
+                    if not exists:
+                        continue
+                    if hit.is_file():
+                        rows.append((src, f"{flabel}（{src_label}）", hit))
+                    elif hit.is_dir():
+                        first = self._first_file_in(hit)
+                        if first is not None:
+                            rows.append((src, f"{flabel}（{src_label}）", first))
+                        rows.append((src, f"打开多卷{flabel}目录（{src_label}）", hit))
+                else:
+                    try:
+                        hits = _oes.find_in_library(work, fmt, self.config) or []
+                    except Exception:
+                        hits = []
+                    hits = [Path(p) for p in hits]
+                    if not hits:
+                        continue
+                    if len(hits) == 1 and hits[0].is_file():
+                        rows.append((src, f"{flabel}（{src_label}）", hits[0]))
+                    else:
+                        wdir = hits[0].parent if hits[0].is_file() else hits[0]
+                        rows.append((src, f"{flabel}（{src_label}）", hits[0]))
+                        rows.append((src, f"打开多卷{flabel}目录（{src_label}）", wdir))
+        return rows
+
+    @staticmethod
+    def _first_file_in(d):
+        try:
+            files = sorted((p for p in Path(d).iterdir() if p.is_file()),
+                           key=lambda p: p.name.lower())
+        except OSError:
+            return None
+        return files[0] if files else None
+
+    def _on_tree_context_menu(self, pos):
+        # 左栏右键“打开本地书”：存在性检查后按源分组列格式菜单；不动选择区
+        from PySide6.QtWidgets import QMenu
+        from PySide6.QtGui import QDesktopServices
+        from PySide6.QtCore import QUrl
+        item = self.tree.itemAt(pos)
+        work = self._tree_item_work(item) if item is not None else None
+        if not work:
+            return
+        try:
+            title = self.sutra.title_of(work)
+        except Exception:
+            title = work
+        rows = self._collect_open_rows(
+            work, self.nav_combo.currentText() == "丛书")
+        menu = QMenu(self.tree)
+        header = menu.addAction(f"{work}　{title}")
+        header.setEnabled(False)
+        if not rows:
+            empty = menu.addAction("本地无此书文件")
+            empty.setEnabled(False)
+        else:
+            # 文件行按源分组（组间分隔线）；目录行集中沉底（组内原顺序）
+            def _isdir(p):
+                try:
+                    return Path(p).is_dir()
+                except OSError:
+                    return False
+            files = [r for r in rows if not _isdir(r[2])]
+            dirs = [r for r in rows if _isdir(r[2])]
+            prev_src = None
+            for src, label, path in files:
+                if prev_src is not None and src != prev_src:
+                    menu.addSeparator()
+                prev_src = src
+                act = menu.addAction(label)
+                act.triggered.connect(
+                    lambda _c=False, p=str(path):
+                        QDesktopServices.openUrl(QUrl.fromLocalFile(p)))
+            if dirs:
+                menu.addSeparator()
+                for _src, label, path in dirs:
+                    act = menu.addAction(label)
+                    act.triggered.connect(
+                        lambda _c=False, p=str(path):
+                            QDesktopServices.openUrl(QUrl.fromLocalFile(p)))
+        menu.exec(self.tree.viewport().mapToGlobal(pos))
 
     def _on_coll_reordered(self, *args):
         data=self.coll_combo.currentData()

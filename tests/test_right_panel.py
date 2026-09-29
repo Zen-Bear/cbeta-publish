@@ -711,6 +711,148 @@ class RightPanelTest(unittest.TestCase):
             self.assertTrue(txt.strip())
             self.assertRegex(txt, r"^[A-Z]+\d", txt)
 
+    def _open_fixture(self):
+        # 右键菜单存在性解析脚手架：自制 pdf＋缓存 epub＋缓存 docx 目录＋
+        # 本地库 epub 单文件＋txt 多卷；返回恢复函数
+        import tempfile
+        from cbeta_publish.books import official_ebook_source as oes
+        win = self.win
+        tmp = Path(tempfile.mkdtemp())
+        saved = {k: win.config.get(k) for k in
+                 ("xml_to_ebooks_dir", "official_ebooks_dir",
+                  "cbeta_ebooks_dir", "official_library")}
+        xb = tmp / "xb"
+        (xb / "pdf").mkdir(parents=True)
+        (xb / "pdf" / "T0001.pdf").write_bytes(b"P")
+        eb = tmp / "eb"
+        (eb / "epub").mkdir(parents=True)
+        (eb / "epub" / "T0001.epub").write_bytes(b"E")
+        (eb / "docx" / "T0001").mkdir(parents=True)
+        (eb / "docx" / "T0001" / "a.docx").write_bytes(b"D")
+        (eb / "docx" / "T0001" / "b.docx").write_bytes(b"D")
+        lib = tmp / "lib"
+        (lib / "cbeta_epub_2026r2" / "T").mkdir(parents=True)
+        (lib / "cbeta_epub_2026r2" / "T" / "T0001.epub").write_bytes(b"LE")
+        (lib / "cbeta-text" / "T" / "T0001").mkdir(parents=True)
+        (lib / "cbeta-text" / "T" / "T0001" / "T0001_001.txt").write_bytes(b"T")
+        (lib / "cbeta-text" / "T" / "T0001" / "T0001_002.txt").write_bytes(b"T")
+        win.config["xml_to_ebooks_dir"] = str(xb)
+        win.config["official_ebooks_dir"] = str(eb)
+        win.config.pop("cbeta_ebooks_dir", None)
+        win.config["official_library"] = {"root": str(lib), "overrides": {}}
+        oes.refresh_library_map()
+
+        def _restore():
+            for k, v in saved.items():
+                if v is None:
+                    win.config.pop(k, None)
+                else:
+                    win.config[k] = v
+            oes.refresh_library_map()
+            shutil.rmtree(tmp, ignore_errors=True)
+        return tmp, xb, eb, lib, _restore
+
+    def test_collect_open_rows_coll_first(self):
+        # 丛书树：自制→缓存→本地库；目录命中出文件行＋多卷行
+        win = self.win
+        tmp, xb, eb, lib, restore = self._open_fixture()
+        try:
+            rows = win._collect_open_rows("T0001", True)
+            got = [(s, l) for s, l, _ in rows]
+            self.assertEqual(got, [
+                ("made", "PDF（自制）"),
+                ("cache", "EPUB（官方缓存）"),
+                ("cache", "DOCX（官方缓存）"),
+                ("cache", "打开多卷DOCX目录（官方缓存）"),
+                ("lib", "EPUB（本地库）"),
+                ("lib", "TXT（本地库）"),
+                ("lib", "打开多卷TXT目录（本地库）"),
+            ])
+            by_label = {l: p for _, l, p in rows}
+            self.assertEqual(by_label["PDF（自制）"], xb / "pdf" / "T0001.pdf")
+            self.assertEqual(by_label["EPUB（官方缓存）"], eb / "epub" / "T0001.epub")
+            self.assertEqual(by_label["DOCX（官方缓存）"], eb / "docx" / "T0001" / "a.docx")
+            self.assertEqual(by_label["打开多卷DOCX目录（官方缓存）"],
+                             eb / "docx" / "T0001")
+            self.assertEqual(by_label["TXT（本地库）"],
+                             lib / "cbeta-text" / "T" / "T0001" / "T0001_001.txt")
+            self.assertEqual(by_label["打开多卷TXT目录（本地库）"],
+                             lib / "cbeta-text" / "T" / "T0001")
+            self.assertEqual(by_label["EPUB（本地库）"],
+                             lib / "cbeta_epub_2026r2" / "T" / "T0001.epub")
+        finally:
+            restore()
+
+    def test_collect_open_rows_other_first_and_empty(self):
+        # 其它树：本地库→缓存→自制；零命中为空
+        win = self.win
+        tmp, xb, eb, lib, restore = self._open_fixture()
+        try:
+            rows = win._collect_open_rows("T0001", False)
+            srcs = [s for s, _, _ in rows]
+            self.assertEqual(srcs, ["lib"] * 3 + ["cache"] * 3 + ["made"])
+            self.assertEqual(win._collect_open_rows("TX9Z9", True), [])
+            self.assertEqual(win._collect_open_rows("TX9Z9", False), [])
+        finally:
+            restore()
+
+    def test_tree_context_menu(self):
+        # 右键：书叶弹菜单（含分隔线＋标题行）；非书叶不弹；点击打开文件
+        from PySide6.QtCore import Qt
+        win = self.win
+        tmp, xb, eb, lib, restore = self._open_fixture()
+        shown = []
+
+        class CapMenu(__import__("PySide6.QtWidgets", fromlist=["QMenu"]).QMenu):
+            def exec(self, *a, **k):
+                shown.append(self)
+                return None
+
+        import PySide6.QtWidgets as qw
+        _real_qmenu = qw.QMenu
+        try:
+            from PySide6.QtWidgets import QTreeWidgetItem
+            self._nav("丛书")
+            it = QTreeWidgetItem(["T0001"])
+            it.setData(0, Qt.UserRole, {"key": "T0001"})
+            win.tree.addTopLevelItem(it)
+            win.show()
+            win.tree.scrollToItem(it)
+            for _ in range(4):
+                _ensure_app().processEvents()
+            rect = win.tree.visualItemRect(it)
+            qw.QMenu = CapMenu
+            win._on_tree_context_menu(rect.center())
+            self.assertEqual(len(shown), 1)
+            acts = [a.text() for a in shown[0].actions() if not a.isSeparator()]
+            self.assertTrue(acts[0].startswith("T0001"), acts)
+            self.assertIn("PDF（自制）", acts)
+            self.assertIn("打开多卷TXT目录（本地库）", acts)
+            # 文件行在前（按源分组）、目录行沉底
+            self.assertLess(acts.index("TXT（本地库）"),
+                            acts.index("打开多卷TXT目录（本地库）"))
+            self.assertLess(acts.index("DOCX（官方缓存）"),
+                            acts.index("打开多卷DOCX目录（官方缓存）"))
+            self.assertEqual(acts[-2:], ["打开多卷DOCX目录（官方缓存）",
+                                         "打开多卷TXT目录（本地库）"])
+            seps = [a for a in shown[0].actions() if a.isSeparator()]
+            self.assertEqual(len(seps), 3)
+            # 非书叶不弹
+            shown.clear()
+            grp = QTreeWidgetItem(["分组"])
+            win.tree.addTopLevelItem(grp)
+            win.tree.scrollToItem(grp)
+            for _ in range(4):
+                _ensure_app().processEvents()
+            win._on_tree_context_menu(
+                win.tree.visualItemRect(grp).center())
+            win.tree.takeTopLevelItem(win.tree.indexOfTopLevelItem(grp))
+            self.assertEqual(shown, [])
+            win.tree.takeTopLevelItem(win.tree.indexOfTopLevelItem(it))
+        finally:
+            qw.QMenu = _real_qmenu
+            restore()
+
     def test_search_works_in_all_views(self):
         win = self.win
         cases = [("部类", "般若"), ("三藏", "阿含"), ("刊本", "T0001"),
