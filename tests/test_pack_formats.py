@@ -335,17 +335,21 @@ class PackMissingCountsTest(unittest.TestCase):
         real_choose = win._choose_pack_fmts
         real_box = win._wrap_box
         real_q = QMessageBox.question
+        real_dir = QFileDialog.getExistingDirectory
         texts = []
         win._choose_pack_fmts = lambda *a, **k: ["pdf", "epub"]
         win._wrap_box = lambda *a, **k: None
         QMessageBox.question = staticmethod(
             lambda *a, **k: texts.append(a[2]) or QMessageBox.No)
+        # 选「否」后继续走：在目录选择处空返回中止（只取弹窗文本，不真打）
+        QFileDialog.getExistingDirectory = staticmethod(lambda *a, **k: "")
         try:
             fn()
         finally:
             win._choose_pack_fmts = real_choose
             win._wrap_box = real_box
             QMessageBox.question = real_q
+            QFileDialog.getExistingDirectory = real_dir
         return texts
 
     def test_zip_question_counts_per_fmt(self):
@@ -365,6 +369,97 @@ class PackMissingCountsTest(unittest.TestCase):
         self.assertTrue(texts)
         self.assertIn("pdf 缺 1 部", texts[0])
         self.assertIn("epub 缺 2 部", texts[0])
+
+
+class PackMissingSkipTest(unittest.TestCase):
+    """ZIP/导出缺书选「否」= 跳过缺书继续（与合并一致）；选「取消」= 不打。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.win, cls.tmp = _make_window()
+        win = cls.win
+        win.config["default_source"] = "official"
+        win.config["cbeta_ebooks_dir"] = str(cls.tmp / "eb")
+        col = Path(win.config["collections_dir"]) / "custom" / "跳测.json"
+        col.write_text(json.dumps({"id": "t", "name": "跳测", "category": "custom",
+                                   "tags": [], "work_ids": ["T0001", "T0002"]},
+                                  ensure_ascii=False), encoding="utf-8")
+        win._load_collections()
+        eb = cls.tmp / "eb" / "pdf"
+        eb.mkdir(parents=True, exist_ok=True)
+        (eb / "T0001.pdf").write_bytes(b"PDF")  # T0002 缺货
+        for i in range(win.coll_combo.count()):
+            if str(win.coll_combo.itemData(i)).endswith("跳测.json"):
+                win.coll_combo.setCurrentIndex(i)
+                break
+        _ensure_app().processEvents()
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def _run(self, fn, answer, outdir):
+        from PySide6.QtWidgets import QMessageBox
+        win = self.win
+        real_choose = win._choose_pack_fmts
+        real_dir = QFileDialog.getExistingDirectory
+        real_prog = win._make_progress
+        real_prompt = win._prompt_save_collection
+        real_box = win._wrap_box
+        real_q = QMessageBox.question
+        boxes = []
+        win._choose_pack_fmts = lambda *a, **k: ["pdf"]
+        QFileDialog.getExistingDirectory = staticmethod(lambda *a, **k: str(outdir))
+        win._make_progress = lambda title, total: (None, lambda *a, **k: True, {"finish": lambda *a, **k: None})
+        win._prompt_save_collection = lambda *a, **k: None
+        win._wrap_box = lambda *a, **k: boxes.append(a) or None
+        QMessageBox.question = staticmethod(lambda *a, **k: answer)
+        try:
+            fn()
+        finally:
+            win._choose_pack_fmts = real_choose
+            QFileDialog.getExistingDirectory = real_dir
+            win._make_progress = real_prog
+            win._prompt_save_collection = real_prompt
+            win._wrap_box = real_box
+            QMessageBox.question = real_q
+        return boxes
+
+    def test_zip_no_packs_present(self):
+        from PySide6.QtWidgets import QMessageBox
+        out = self.tmp / "zskip"
+        out.mkdir(exist_ok=True)
+        boxes = self._run(self.win._zip, QMessageBox.No, out)
+        self.assertFalse([a for a in boxes if "未全部下载" in str(a)], boxes)
+        zpath = out / "跳测_pdf.zip"
+        self.assertTrue(zpath.is_file())
+        stem1 = self.win._pack_display_stem("T0001")
+        with zipfile.ZipFile(zpath) as z:
+            self.assertEqual(z.namelist(), [f"{stem1}.pdf"])  # 缺的 T0002 不在包内
+
+    def test_zip_cancel_aborts(self):
+        from PySide6.QtWidgets import QMessageBox
+        out = self.tmp / "zcancel"
+        out.mkdir(exist_ok=True)
+        self._run(self.win._zip, QMessageBox.Cancel, out)
+        self.assertEqual(list(out.iterdir()), [])  # 无产物
+
+    def test_export_no_exports_present(self):
+        from PySide6.QtWidgets import QMessageBox
+        target = self.tmp / "xskip"
+        target.mkdir(exist_ok=True)
+        boxes = self._run(self.win._export, QMessageBox.No, target)
+        self.assertFalse([a for a in boxes if "未全部下载" in str(a)], boxes)
+        stem1 = self.win._pack_display_stem("T0001")
+        self.assertTrue((target / f"{stem1}.pdf").is_file())
+        self.assertEqual(len(list(target.iterdir())), 1)  # 只有有货的一部
+
+    def test_export_cancel_aborts(self):
+        from PySide6.QtWidgets import QMessageBox
+        target = self.tmp / "xcancel"
+        target.mkdir(exist_ok=True)
+        self._run(self.win._export, QMessageBox.Cancel, target)
+        self.assertEqual(list(target.iterdir()), [])  # 无产物
 
 
 if __name__ == "__main__":

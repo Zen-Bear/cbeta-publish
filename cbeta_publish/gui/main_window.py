@@ -5909,19 +5909,19 @@ class MainWindow(QMainWindow):
             if missing:
                 _miss_text = "、".join(self._missing_by_fmt(missing))
                 ret=QMessageBox.question(self, "下载确认",
-                    f"缺书：{_miss_text}。\n是否先下载？",
+                    f"缺书：{_miss_text}。\n是否先下载？（「否」= 跳过缺书继续打包）",
                     QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel)
-                if ret!=QMessageBox.Yes:
-                    self._wrap_box(QMessageBox.Warning, "未全部下载", f"缺书：{_miss_text}，请先下载后再打包。")
+                if ret==QMessageBox.Cancel:
                     return
-                pairs=[(w, fmt) for fmt in fmts for w in works
-                        if not official_ebook_source.local_path(w, fmt, dest_dir).exists()]
-                self._download_missing(pairs, dest_dir, title="下载（ZIP 前）", autoclose_ok=True)
-                missing=[f"{w}.{fmt}" for fmt in fmts for w in works
-                         if not official_ebook_source.local_path(w, fmt, dest_dir).exists()]
-                if missing:
-                    self._wrap_box(QMessageBox.Warning, "未全部下载", f"仍缺书：{'、'.join(self._missing_by_fmt(missing))}，已取消打包。")
-                    return
+                if ret==QMessageBox.Yes:
+                    pairs=[(w, fmt) for fmt in fmts for w in works
+                            if not official_ebook_source.local_path(w, fmt, dest_dir).exists()]
+                    self._download_missing(pairs, dest_dir, title="下载（ZIP 前）", autoclose_ok=True)
+                    missing=[f"{w}.{fmt}" for fmt in fmts for w in works
+                              if not official_ebook_source.local_path(w, fmt, dest_dir).exists()]
+                    if missing:
+                        self._wrap_box(QMessageBox.Warning, "未全部下载", f"仍缺书：{'、'.join(self._missing_by_fmt(missing))}，已取消打包。")
+                        return
             src_map = {fmt: {w: official_ebook_source.local_path(w, fmt, dest_dir) for w in works}
                        for fmt in fmts}
         from PySide6.QtWidgets import QFileDialog
@@ -6057,19 +6057,19 @@ class MainWindow(QMainWindow):
             if missing:
                 _miss_text = "、".join(self._missing_by_fmt(missing))
                 ret=QMessageBox.question(self, "下载确认",
-                    f"缺书：{_miss_text}。\n是否先下载？",
+                    f"缺书：{_miss_text}。\n是否先下载？（「否」= 跳过缺书继续导出）",
                     QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel)
-                if ret!=QMessageBox.Yes:
-                    self._wrap_box(QMessageBox.Warning, "未全部下载", f"缺书：{_miss_text}，请先下载后再导出。")
+                if ret==QMessageBox.Cancel:
                     return
-                pairs=[(w, fmt) for fmt in fmts for w in works
-                       if not official_ebook_source.local_path(w, fmt, dest_dir).exists()]
-                self._download_missing(pairs, dest_dir, title="下载（导出前）", autoclose_ok=True)
-                missing=[f"{w}.{fmt}" for fmt in fmts for w in works
-                         if not official_ebook_source.local_path(w, fmt, dest_dir).exists()]
-                if missing:
-                    self._wrap_box(QMessageBox.Warning, "未全部下载", f"仍缺书：{'、'.join(self._missing_by_fmt(missing))}，已取消导出。")
-                    return
+                if ret==QMessageBox.Yes:
+                    pairs=[(w, fmt) for fmt in fmts for w in works
+                           if not official_ebook_source.local_path(w, fmt, dest_dir).exists()]
+                    self._download_missing(pairs, dest_dir, title="下载（导出前）", autoclose_ok=True)
+                    missing=[f"{w}.{fmt}" for fmt in fmts for w in works
+                             if not official_ebook_source.local_path(w, fmt, dest_dir).exists()]
+                    if missing:
+                        self._wrap_box(QMessageBox.Warning, "未全部下载", f"仍缺书：{'、'.join(self._missing_by_fmt(missing))}，已取消导出。")
+                        return
             src_map = {fmt: {w: official_ebook_source.local_path(w, fmt, dest_dir) for w in works}
                        for fmt in fmts}
         from PySide6.QtWidgets import QFileDialog
