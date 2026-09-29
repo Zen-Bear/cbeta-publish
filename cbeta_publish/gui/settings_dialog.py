@@ -220,6 +220,7 @@ class SettingsDialog(QDialog):
     def _tab_dirs(self):
         w = QWidget()
         form = QFormLayout(w)
+        form.setVerticalSpacing(2)   # 路径行与页签面板贴紧，默认 6 太空
         self.ed_mulu = QLineEdit(self._cfg.get("mulu_dir", ""))
         self.ed_collections = QLineEdit(self._cfg.get("collections_dir", ""))
         self.ed_ebooks = QLineEdit(self._cfg.get("official_ebooks_dir", ""))
@@ -289,6 +290,7 @@ class SettingsDialog(QDialog):
         mode_box = QGroupBox("分册模式（合并）")
         mv = QVBoxLayout(mode_box)
         mv.setSpacing(2)   # 标签行/控件行贴紧，默认 6 太空
+        mv.setContentsMargins(4, 9, 4, 2)   # 压 GroupBox 内边距，顶部 9 与另两页签对齐
         self.merge_mode_group = QButtonGroup(mode_box)
         self.rb_merge_none = QRadioButton("不分册")
         self.rb_merge_volume = QRadioButton("按刊本册")
@@ -340,6 +342,7 @@ class SettingsDialog(QDialog):
         _seghint.setStyleSheet("color: gray;")
         _seghint.setWordWrap(True)
         mv.addWidget(_seghint)
+        mv.addStretch(1)   # 余高沉底：行只取自然高度，不均摊拉高（否则行间空两行）
         dirs_tabs = QTabWidget()
         self._dirs_tabs = dirs_tabs
         dirs_tabs.addTab(mode_box, "分册模式")

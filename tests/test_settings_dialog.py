@@ -553,6 +553,18 @@ class SettingsDialogTest(unittest.TestCase):
         mode_box = dlg._dirs_tabs.widget(0)
         self.assertTrue(mode_box.title().startswith("分册模式"))
         self.assertEqual(mode_box.layout().spacing(), 2)
+        # 面板内边距收窄，内容整体上移
+        _m = mode_box.layout().contentsMargins()
+        self.assertEqual((_m.left(), _m.top(), _m.right(), _m.bottom()), (4, 9, 4, 2))
+        # 顶部与另两页签（E书默认来源和格式/官方电子书本地库）对齐
+        for i in (1, 2):
+            _om = dlg._dirs_tabs.widget(i).layout().contentsMargins()
+            self.assertEqual(_m.top(), _om.top())
+        # 余高沉底：末项是 stretch，行只取自然高度（对话框拉高时行间不均摊）
+        _lay = mode_box.layout()
+        self.assertIsNotNone(_lay.itemAt(_lay.count() - 1).spacerItem())
+        # 数据/输出页行距压缩（路径行与页签面板贴紧）
+        self.assertEqual(dlg._dirs_tabs.parentWidget().layout().verticalSpacing(), 2)
         labels = []
 
         def _labels_of(form):
