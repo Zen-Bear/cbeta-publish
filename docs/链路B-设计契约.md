@@ -135,6 +135,8 @@ def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=No
 ```
 右栏来源 = official → official_ebook_source.download_ebook → cbeta_ebooks/{fmt}/...
   （本地库优先：`official_library.root` 非空时先拷贝，缺失回退下载；
+  下载前 HEAD 探针（10s）：404/410 确定不存在即抛 `RemoteNotFound` 快失败
+  （失败项记 `不存在`，跳过 90s×3 重试），超时/其它异常照常下载；
   校验基线同库 `seed` 进工作根 `{id 书名}/docx|txt|epub/`，只补缺失）
 右栏来源 = xml      → xml2pdf_bridge.ensure_one(work_id, preset, regen_all) → xml_to_ebooks_dir/{fmt}/{work}.{fmt}
 → ebook_merger 单一格式合并 / ZIP 打包 / 拷贝导出

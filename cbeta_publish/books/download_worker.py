@@ -29,7 +29,7 @@ class DownloadWorker(QThread):
     def run(self):
         from cbeta_publish.books.official_ebook_source import (
             download_ebook, remote_info, is_unchanged, local_path, local_size_kb,
-            copy_from_library,
+            copy_from_library, RemoteNotFound,
         )
         ok = 0
         total = len(self.pairs)
@@ -51,7 +51,12 @@ class DownloadWorker(QThread):
                 got = copy_from_library(w, fmt, self.dest_dir, self._config)
                 kind = "本地库" if got is not None else None
                 if got is None:
-                    got = download_ebook(w, fmt, self.dest_dir, self._config)
+                    try:
+                        got = download_ebook(w, fmt, self.dest_dir, self._config)
+                    except RemoteNotFound:
+                        failed.append(f"{w}.{fmt} 不存在")
+                        self.progress.emit(f"{REPLACE_LAST}下载 {w}.{fmt} ...不存在")
+                        continue
                 if got and got.exists():
                     ok += 1
                     kb = local_size_kb(got)
@@ -66,6 +71,6 @@ class DownloadWorker(QThread):
             # 否则主线程嵌套事件循环永不退出（界面挂死）
             print("download worker fail", e)
             for w, fmt in self.pairs:
-                if f"{w}.{fmt}" not in failed:
+                if not any(f.startswith(f"{w}.{fmt}") for f in failed):
                     failed.append(f"{w}.{fmt}")
         self.finished_all.emit(ok, total, failed)

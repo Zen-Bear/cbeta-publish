@@ -18,6 +18,64 @@ class SourceMetaTest(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.dir, ignore_errors=True)
 
+    def test_head_probe_404(self):
+        # HEAD 探针：404/410 确定不存在；2xx 存在；超时/405/其它不定
+        import urllib.error
+        import urllib.request
+        real = urllib.request.urlopen
+
+        class _Resp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        def boom_404(*a, **k):
+            raise urllib.error.HTTPError("u", 404, "x", {}, None)
+
+        def boom_500(*a, **k):
+            raise urllib.error.HTTPError("u", 500, "x", {}, None)
+
+        def boom_timeout(*a, **k):
+            raise TimeoutError("t")
+
+        try:
+            urllib.request.urlopen = boom_404
+            self.assertTrue(oes._head_absent_404("http://x"))
+            urllib.request.urlopen = lambda *a, **k: (_ for _ in ()).throw(
+                urllib.error.HTTPError("u", 410, "x", {}, None))
+            self.assertTrue(oes._head_absent_404("http://x"))
+            urllib.request.urlopen = lambda *a, **k: _Resp()
+            self.assertFalse(oes._head_absent_404("http://x"))
+            urllib.request.urlopen = boom_500
+            self.assertFalse(oes._head_absent_404("http://x"))
+            urllib.request.urlopen = boom_timeout
+            self.assertFalse(oes._head_absent_404("http://x"))
+        finally:
+            urllib.request.urlopen = real
+
+    def test_download_ebook_404_skips_download(self):
+        # 404 直接抛 RemoteNotFound，不调 cf.download（省 3 次重试）
+        import urllib.request
+        import urllib.error
+        from cbeta_publish.books import official_ebook_source as _o
+        real_open = urllib.request.urlopen
+        real_dl = _o.cf.download
+        called = []
+
+        def boom_404(*a, **k):
+            raise urllib.error.HTTPError("u", 404, "x", {}, None)
+        urllib.request.urlopen = boom_404
+        _o.cf.download = lambda *a, **k: called.append(a) or True
+        try:
+            with self.assertRaises(_o.RemoteNotFound):
+                _o.download_ebook("T9999", "pdf", self.dir, None)
+            self.assertEqual(called, [])
+        finally:
+            urllib.request.urlopen = real_open
+            _o.cf.download = real_dl
+
     def test_dest_path(self):
         self.assertEqual(dest_path("T0001", "pdf", self.dir),
                          self.dir / "pdf" / "T0001.pdf")
@@ -166,6 +224,32 @@ class DownloadWorkerTest(unittest.TestCase):
         self.assertTrue(any(m.startswith("下载 T0004.pdf ...失败") for m in text), text)
         from cbeta_publish.books.download_worker import REPLACE_LAST
         self.assertTrue(any(m.startswith(REPLACE_LAST) for m in msgs), msgs)
+
+    def test_worker_marks_not_found(self):
+        # download_ebook 抛 RemoteNotFound → 失败项记"不存在"，其余照常
+        from cbeta_publish.books.download_worker import DownloadWorker
+        from cbeta_publish.books.official_ebook_source import RemoteNotFound
+        msgs = []
+        done = {}
+        w = DownloadWorker(["T0001", "T0002"], ["pdf"], self.dir)
+        oes.remote_info = lambda work, fmt: None
+
+        def fake_dl(work, fmt, dest_dir, config=None):
+            if work == "T0002":
+                raise RemoteNotFound("http://x/T0002.pdf")
+            p = oes.dest_path(work, fmt, dest_dir)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(b"z" * 10)
+            return p
+
+        oes.download_ebook = fake_dl
+        w.progress.connect(msgs.append)
+        w.finished_all.connect(lambda ok, total, failed: done.update(
+            ok=ok, total=total, failed=list(failed)))
+        w.run()
+        self.assertEqual(done, {"ok": 1, "total": 2, "failed": ["T0002.pdf 不存在"]})
+        text = [m.lstrip("\r") for m in msgs]
+        self.assertTrue(any(m.startswith("下载 T0002.pdf ...不存在") for m in text), text)
 
     def test_stop_breaks(self):
         from cbeta_publish.books.download_worker import DownloadWorker

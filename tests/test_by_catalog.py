@@ -542,5 +542,97 @@ class BlankSaveDupTest(unittest.TestCase):
         self.assertFalse((self.tmp / "collections" / "custom" / "Y.json").exists())
 
 
+class RenameCollectionTest(unittest.TestCase):
+    """丛书改名：管理行「改名」在删除左；重名拦截（与空白保存一致）；成功立即落盘。
+    右栏布局：空白按钮与丛书下拉框同行（下拉框 stretch 收窄）；标签按钮改名「标签」。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.win, cls.tmp = _make_window()
+        _ensure_app().processEvents()
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def _add(self, rel, d):
+        p = self.tmp / "collections" / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+        sp = str(p)
+        self.win._collections.append((sp, d))
+        self.win.coll_combo.addItem(d.get("name", p.stem), sp)
+        return sp
+
+    def _select(self, path):
+        win = self.win
+        for i in range(win.coll_combo.count()):
+            if win.coll_combo.itemData(i) == path:
+                win.coll_combo.setCurrentIndex(i)
+                return
+        self.fail(f"combo 缺少 {path}")
+
+    def test_right_layout_blank_left_of_combo(self):
+        from PySide6.QtWidgets import QHBoxLayout
+        win = self.win
+        lay = win.coll_combo.parentWidget().layout()
+        self.assertIsInstance(lay, QHBoxLayout)
+        self.assertIs(lay.itemAt(0).widget(), win.btn_blank)
+        self.assertIs(lay.itemAt(1).widget(), win.coll_combo)
+        self.assertEqual(lay.stretch(1), 1)
+
+    def test_mgmt_row_order_and_tags_label(self):
+        win = self.win
+        texts = [win.btn_save.text(), win.btn_saveas.text(), win.btn_restore.text(),
+                 win.btn_rename.text(), win.btn_delete.text(), win.btn_tags.text()]
+        self.assertEqual(texts, ["保存", "另存", "恢复", "改名", "删除", "标签"])
+
+    def test_rename_duplicate_blocked(self):
+        from unittest import mock
+        win = self.win
+        x = self._add("custom/RX.json", {"id": "rx", "name": "RX",
+                                         "category": "custom", "tags": [], "work_ids": []})
+        b = self._add("custom/R空白.json", {"id": "rb", "name": "R空白",
+                                            "category": "custom", "tags": [], "work_ids": []})
+        before = Path(x).read_text(encoding="utf-8")
+        boxes = []
+        old_box = win._wrap_box
+        win._wrap_box = lambda *a, **k: boxes.append(a) or None
+        self._select(b)
+        try:
+            with mock.patch("cbeta_publish.gui.main_window.QInputDialog.getText",
+                            return_value=("RX", True)):
+                win._rename_collection()
+        finally:
+            win._wrap_box = old_box
+        self.assertTrue(any("重名" in str(a) for a in boxes), boxes)
+        self.assertEqual(win._coll_dict(b)["name"], "R空白")  # 未改名
+        self.assertEqual(Path(x).read_text(encoding="utf-8"), before)  # 原文件未动
+
+    def test_rename_saves_immediately(self):
+        from unittest import mock
+        win = self.win
+        b = self._add("custom/R改.json", {"id": "rg", "name": "R改",
+                                          "category": "custom", "tags": [], "work_ids": []})
+        boxes = []
+        old_box = win._wrap_box
+        win._wrap_box = lambda *a, **k: boxes.append(a) or None
+        self._select(b)
+        try:
+            with mock.patch("cbeta_publish.gui.main_window.QInputDialog.getText",
+                            return_value=("R改好", True)):
+                win._rename_collection()
+        finally:
+            win._wrap_box = old_box
+        self.assertEqual(boxes, [])  # 无弹窗
+        on_disk = json.loads(Path(b).read_text(encoding="utf-8"))
+        self.assertEqual(on_disk["name"], "R改好")  # 已落盘
+        self.assertEqual(win._coll_dict(b)["name"], "R改好")
+        self.assertNotIn(b, win._changed_colls)  # 无星号残留
+        for i in range(win.coll_combo.count()):
+            if win.coll_combo.itemData(i) == b:
+                self.assertEqual(win.coll_combo.itemText(i), "R改好")
+
+
 if __name__ == "__main__":
     unittest.main()

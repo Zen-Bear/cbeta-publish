@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
     QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QCheckBox, QPushButton,
     QLabel, QFileDialog, QColorDialog, QMessageBox, QGroupBox,
     QTableWidget, QTableWidgetItem, QHeaderView, QApplication,
-    QListWidget, QListWidgetItem, QRadioButton, QButtonGroup, QToolButton,
+    QListWidget, QListWidgetItem, QRadioButton, QButtonGroup,
 )
 from PySide6.QtCore import Qt, QEvent
 from PySide6.QtGui import QColor
@@ -119,11 +119,11 @@ class SettingsDialog(QDialog):
 
         v = QVBoxLayout(self)
         tabs = QTabWidget()
-        tabs.addTab(self._tab_filters(), "目录过滤")
         tabs.addTab(self._tab_dirs(), "数据/输出")
-        tabs.addTab(self._tab_made(), "自制E书")
         tabs.addTab(self._tab_cover(), "封面/版式")
+        tabs.addTab(self._tab_made(), "自制E书")
         tabs.addTab(self._tab_cache(), "缓存")
+        tabs.addTab(self._tab_filters(), "目录过滤")
         tabs.addTab(self._tab_update(), "更新源")
         tabs.addTab(self._tab_appearance(), "外观")
         v.addWidget(tabs)
@@ -193,11 +193,6 @@ class SettingsDialog(QDialog):
         return {f: ed.text().strip() for f, ed in self.lib_override_edits.items()
                 if ed.text().strip()}
 
-    def _toggle_lib_body(self):
-        show = not self.lib_body.isVisible()
-        self.lib_body.setVisible(show)
-        self.btn_lib_collapse.setArrowType(Qt.DownArrow if show else Qt.RightArrow)
-
     def _refresh_lib_map(self, show_popup=False):
         # 解析映射并回填覆盖占位；show_popup 时弹窗说明结果
         notes = []
@@ -263,24 +258,11 @@ class SettingsDialog(QDialog):
                                                       df.get("xml"))
         def_form.addRow("官方 ZIP/导出默认", ro)
         def_form.addRow("自制 ZIP/导出默认", rx)
-        form.addRow(def_box)
+        # 以下三组改 tab 面板（顺序：分册模式 / E书默认来源和格式 / 官方电子书本地库）
+        # （addRow 改到末尾统一加页签，此处不再直接加行）
         # 官方电子书本地库（冻结快照；本地优先、缺失回退下载）
-        lib_head = QWidget()
-        _lhh = QHBoxLayout(lib_head)
-        _lhh.setContentsMargins(0, 0, 0, 0)
-        _lib_title = QLabel("<b>官方电子书本地库（本地优先）</b>")
-        _lhh.addWidget(_lib_title)
-        _lhh.addStretch()
-        self.btn_lib_collapse = QToolButton()
-        self.btn_lib_collapse.setArrowType(Qt.RightArrow)
-        self.btn_lib_collapse.setAutoRaise(True)
-        self.btn_lib_collapse.setToolTip("展开/收起")
-        _lhh.addWidget(self.btn_lib_collapse)
-        form.addRow(lib_head)
-        lib_body = QWidget()
-        self.lib_body = lib_body
-        lib_form = QFormLayout(lib_body)
-        lib_form.setContentsMargins(0, 0, 0, 0)
+        lib_box = QGroupBox("官方电子书本地库（本地优先）")
+        lib_form = QFormLayout(lib_box)
         self.ed_official_lib = QLineEdit((self._cfg.get("official_library") or {}).get("root", ""))
         self.ed_official_lib.setPlaceholderText("本地库根目录（空=关闭，仅网上下载），如 E:/CBETA/2026r2")
         self.ed_official_lib.editingFinished.connect(self._refresh_lib_map)
@@ -302,13 +284,11 @@ class SettingsDialog(QDialog):
             _ed.setToolTip(f"手动指定 { _f} 的子目录名；留空走自动探测")
             self.lib_override_edits[_f] = _ed
             lib_form.addRow(f"覆盖:{_f}", _ed)
-        form.addRow(lib_body)
-        self.btn_lib_collapse.clicked.connect(self._toggle_lib_body)
-        lib_body.setVisible(False)  # 默认收起
         self._refresh_lib_map()
         # 分册模式：合并时按此分组；「合并时选择」则每次点合并弹框
         mode_box = QGroupBox("分册模式（合并）")
         mv = QVBoxLayout(mode_box)
+        mv.setSpacing(2)   # 标签行/控件行贴紧，默认 6 太空
         self.merge_mode_group = QButtonGroup(mode_box)
         self.rb_merge_none = QRadioButton("不分册")
         self.rb_merge_volume = QRadioButton("按刊本册")
@@ -360,7 +340,12 @@ class SettingsDialog(QDialog):
         _seghint.setStyleSheet("color: gray;")
         _seghint.setWordWrap(True)
         mv.addWidget(_seghint)
-        form.addRow(mode_box)
+        dirs_tabs = QTabWidget()
+        self._dirs_tabs = dirs_tabs
+        dirs_tabs.addTab(mode_box, "分册模式")
+        dirs_tabs.addTab(def_box, "E书默认来源和格式")
+        dirs_tabs.addTab(lib_box, "官方电子书本地库")
+        form.addRow(dirs_tabs)
         self._set_merge_mode()
         # 分册阈值：0=不分册（默认）；暂隐藏，值仍随保存/载入
         self.split_box = QGroupBox("分册（0=不分册）")
@@ -541,10 +526,13 @@ class SettingsDialog(QDialog):
         form.addRow("整理者署名", self.ed_organizer)
         form.addRow("日期", self.ed_date)
         form.addRow("PDF 合并模式", self.cb_mode)
+        # 以下行组进 Tab 首项「封面/说明」：合并开关/编辑说明/说明页/部类行
+        _cpage = QWidget()
+        cform = QFormLayout(_cpage)
         self.chk_cover_enabled = QCheckBox("合并时加封面封底、说明（以下所有内容）")
-        self.chk_cover_enabled.setToolTip("关闭后直接拼接原文件，仅生成书签（原书书签降一级归入对应书下）")
+        self.chk_cover_enabled.setToolTip("关闭后直接拼接原文件，仅生成书签（原书签降一级归入对应书下）")
         self.chk_cover_enabled.setChecked(bool(cover.get("enabled", True)))
-        form.addRow(self.chk_cover_enabled)
+        cform.addRow(self.chk_cover_enabled)
         # 编辑说明（TXT 转排版，插在说明页之前、仅第一分册；默认关闭）：
         # 复选框＋浏览按钮＋输入框同一行（无单独标签行）
         _en = cover.setdefault("edit_note", {"file": "", "enabled": False})
@@ -562,7 +550,7 @@ class SettingsDialog(QDialog):
         _enh.addWidget(self.chk_editnote_enabled)
         _enh.addWidget(self.btn_editnote_file)
         _enh.addWidget(self.ed_editnote, 1)
-        form.addRow(_enrow)
+        cform.addRow(_enrow)
         # 说明页（部类统计 + 完整清单，自动从书单推导；仅封面模式生效）：
         # 标题标签＋输入框并到复选框同一行右侧
         intro = cover.setdefault("intro", {"enabled": True, "title": "说明", "note": "依 CBETA XML 自制", "list": True})
@@ -575,14 +563,14 @@ class SettingsDialog(QDialog):
         _inh.addWidget(self.chk_intro_enabled)
         _inh.addWidget(QLabel("说明页标题"))
         _inh.addWidget(self.ed_intro_title, 1)
-        form.addRow(_inrow)
+        cform.addRow(_inrow)
         self.ed_intro_note = QLineEdit(intro.get("note", "依 CBETA XML 自制"))
         self.ed_intro_note.setToolTip("说明页标题下一行（居中）；仅来源=自制时显示。留空则不显示。")
-        form.addRow("自制书说明", self.ed_intro_note)
+        cform.addRow("自制书说明", self.ed_intro_note)
         hint_intro = QLabel("部类统计与清单自动从丛书书单推导；仅在「合并时加封面封底、说明（以下所有内容）」开启时插入。")
         hint_intro.setStyleSheet("color: gray;")
         hint_intro.setWordWrap(True)
-        form.addRow(hint_intro)
+        cform.addRow(hint_intro)
         # 封面部类行（分册副标题显示形态；不分册无副标题）
         _bl = cover.setdefault("bulei", {"enabled": True, "depth": 0, "layout": "lines",
                                           "sep": "·", "show_num": False, "titles": "none"})
@@ -602,7 +590,7 @@ class SettingsDialog(QDialog):
         self.cb_bulei_titles.setToolTip("显示所有书名：一行一个，不跟部类行设置")
         _bh.addWidget(self.cb_bulei_titles)
         _bh.addStretch()
-        form.addRow(_brow)
+        cform.addRow(_brow)
         _brow2 = QWidget()
         _bh2 = QHBoxLayout(_brow2)
         _bh2.setContentsMargins(0, 0, 0, 0)
@@ -630,11 +618,12 @@ class SettingsDialog(QDialog):
         self.chk_bulei_num.setChecked(bool(_bl.get("show_num", False)))
         _bh2.addWidget(self.chk_bulei_num)
         _bh2.addStretch()
-        form.addRow(_brow2)
+        cform.addRow(_brow2)
         outer.addLayout(form)
-        # 版式子页签（按使用顺序）：封面/封底图、背景色 → 字体 → 基准字号 → 边距
+        # 版式子页签（按使用顺序）：封面/说明 → 封面/封底图、背景色 → 字体 → 基准字号 → 边距
         sub = QTabWidget()
         self._cover_subtabs = sub
+        sub.addTab(_cpage, "封面/说明")
         sub.addTab(self._cover_tab_images(cover), "封面/封底图、背景色")
         sub.addTab(self._cover_tab_fonts(cover), "字体")
         sub.addTab(self._cover_tab_sizes(cover), "基准字号")
