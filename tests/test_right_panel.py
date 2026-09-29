@@ -946,13 +946,14 @@ class MadeBooksInfoTest(unittest.TestCase):
             win.coll_list.clear()
             win._render_coll_rows(["T0099"])
             _ensure_app().processEvents()
-            row = win.coll_list.itemWidget(win.coll_list.item(0))
+            item = win._coll_book_items()[0]
+            row = win._coll_row(item)
             icons = {lb.fmt: lb for lb in row.findChildren(QLabel)
                      if getattr(lb, "fmt", None)}
             self.assertTrue(icons["pdf"].exists_flag)     # 已有 → 双击打开
             self.assertFalse(icons["epub"].exists_flag)   # 缺 → 未下载
             # 行级 tooltip 已移除（与图标提示冲突/闪烁）；图标提示由 eventFilter 悬停显示
-            self.assertEqual(win.coll_list.item(0).toolTip(), "")
+            self.assertEqual(item.toolTip(0), "")
         finally:
             win.config["default_source"] = "official"
 

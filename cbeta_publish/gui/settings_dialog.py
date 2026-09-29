@@ -295,15 +295,18 @@ class SettingsDialog(QDialog):
         self.rb_merge_none = QRadioButton("不分册")
         self.rb_merge_volume = QRadioButton("按刊本册")
         self.rb_merge_catalog = QRadioButton("按目录（部类）")
+        self.rb_merge_manual = QRadioButton("按手工分册（右栏）")
         self.rb_merge_ask = QRadioButton("合并时选择（每次弹框）")
         self.rb_merge_volume.setToolTip("按 mulu/vol.json 的刊本/册分组（一册一个文件）")
         self.rb_merge_catalog.setToolTip("按部类树路径分组（如 01 阿含部類 / 長阿含經）")
+        self.rb_merge_manual.setToolTip("按右栏「手工分册」的卷分组（未分组自成一组）")
         self.rb_merge_ask.setToolTip("每次点合并时弹框选择分册模式与深度")
         _mrow = QWidget()
         _mh = QHBoxLayout(_mrow)
         _mh.setContentsMargins(0, 0, 0, 0)
         for _i, _rb in enumerate((self.rb_merge_none, self.rb_merge_volume,
-                                  self.rb_merge_catalog, self.rb_merge_ask)):
+                                  self.rb_merge_catalog, self.rb_merge_manual,
+                                  self.rb_merge_ask)):
             _mh.addWidget(_rb)
             self.merge_mode_group.addButton(_rb, _i)
         _mh.addStretch()
@@ -376,15 +379,18 @@ class SettingsDialog(QDialog):
             return "volume"
         if self.rb_merge_catalog.isChecked():
             return "catalog"
+        if self.rb_merge_manual.isChecked():
+            return "manual"
         if self.rb_merge_ask.isChecked():
             return "ask"
         return "none"
 
     def _set_merge_mode(self):
         m = (self._cfg.get("merge", {}) or {}).get("mode")
-        if m not in ("none", "volume", "catalog", "ask"):
+        if m not in ("none", "volume", "catalog", "manual", "ask"):
             m = "volume" if (self._cfg.get("merge", {}) or {}).get("by_volume") else "none"
         ({"volume": self.rb_merge_volume, "catalog": self.rb_merge_catalog,
+          "manual": self.rb_merge_manual,
           "ask": self.rb_merge_ask}.get(m, self.rb_merge_none)).setChecked(True)
 
     def _sync_merge_defaults(self, c):

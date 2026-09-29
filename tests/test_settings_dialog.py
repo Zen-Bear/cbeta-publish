@@ -186,16 +186,18 @@ class SettingsDialogTest(unittest.TestCase):
         self.assertTrue(dlg._btn_original.toolTip())
 
     def test_merge_mode_radios_and_roundtrip(self):
-        # 分册模式四选一 + 深度 + 文件名模板 + 阈值；持久化 merge 全套
+        # 分册模式五选一 + 深度 + 文件名模板 + 阈值；持久化 merge 全套
         dlg = self._dlg()
         self.assertEqual([dlg.rb_merge_none.text(), dlg.rb_merge_volume.text(),
-                          dlg.rb_merge_catalog.text(), dlg.rb_merge_ask.text()],
-                         ["不分册", "按刊本册", "按目录（部类）", "合并时选择（每次弹框）"])
-        # 四个单选同一行
+                          dlg.rb_merge_catalog.text(), dlg.rb_merge_manual.text(),
+                          dlg.rb_merge_ask.text()],
+                         ["不分册", "按刊本册", "按目录（部类）", "按手工分册（右栏）",
+                          "合并时选择（每次弹框）"])
+        # 五个单选同一行
         _mrow = dlg.rb_merge_none.parent()
         _rkinds = [type(_mrow.layout().itemAt(i).widget()).__name__
                    for i in range(_mrow.layout().count())]
-        self.assertEqual(_rkinds.count("QRadioButton"), 4)
+        self.assertEqual(_rkinds.count("QRadioButton"), 5)
         dlg.rb_merge_catalog.setChecked(True)
         dlg.sp_merge_depth.setValue(3)
         dlg.ed_merge_name.setText("{coll}.{nn}.{seg}")

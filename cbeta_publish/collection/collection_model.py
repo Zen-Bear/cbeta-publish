@@ -25,6 +25,23 @@ def normalize_collection(d: dict) -> dict:
         d["work_sources"] = {canonical_work(k): v for k, v in d["work_sources"].items()}
     if isinstance(d.get("work_groups"), dict):
         d["work_groups"] = {canonical_work(k): v for k, v in d["work_groups"].items()}
+    if isinstance(d.get("manual_volumes"), list):
+        # 手工分册：每卷 {title, work_ids}；id 规范化、剔除不在 work_ids 的脏 id、
+        # 跨卷去重（先出现者保留）。空卷保留（可先建卷再移书）。
+        _valid = set(d.get("work_ids") or [])
+        _seen = set()
+        _vols = []
+        for v in d["manual_volumes"]:
+            if not isinstance(v, dict):
+                continue
+            _ids = []
+            for w in (v.get("work_ids") or []):
+                c = canonical_work(w)
+                if c and c in _valid and c not in _seen:
+                    _seen.add(c)
+                    _ids.append(c)
+            _vols.append({"title": str(v.get("title", "") or ""), "work_ids": _ids})
+        d["manual_volumes"] = _vols
     if isinstance(d.get("works"), list):
         norm = []
         for x in d["works"]:
@@ -71,7 +88,7 @@ def write_index(collections, index_path: Path) -> Path:
 
 
 class Collection:
-    def __init__(self, cid: str, name: str, category: str, tags=None, works=None, source: str="official", work_groups=None):
+    def __init__(self, cid: str, name: str, category: str, tags=None, works=None, source: str="official", work_groups=None, manual_volumes=None):
         self.id = cid
         self.name = name
         self.category = category
@@ -80,6 +97,11 @@ class Collection:
         self.source = source or "official"     # 集合级默认源: official|xml
         self.work_sources = {}                 # 单书级覆盖 {work_id: official|xml}
         self.work_groups = {canonical_work(k): v for k, v in (work_groups or {}).items()}  # {work_id: 册标签}（按册分册用）
+        self.manual_volumes = [                # 手工分册：[{title, work_ids}]，顺序=册序
+            {"title": str(v.get("title", "") or ""),
+             "work_ids": [canonical_work(w) for w in (v.get("work_ids") or []) if w]}
+            for v in (manual_volumes or []) if isinstance(v, dict)
+        ]
         self.xml_options = {}                  # 链路B选项 {page,font_lang,engine}
         self.created_at = datetime.utcnow().isoformat()+"Z"
         self.updated_at = self.created_at
@@ -94,6 +116,7 @@ class Collection:
             "works": [{"id": w} for w in self.work_ids],
             "source": self.source, "work_sources": self.work_sources,
             "work_groups": self.work_groups,
+            "manual_volumes": self.manual_volumes,
             "xml_options": self.xml_options,
             "created_at": self.created_at, "updated_at": self.updated_at,
             "last_publish_at": self.last_publish_at,
@@ -120,7 +143,7 @@ class Collection:
         target.write_text(json.dumps(self.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
         return target
 
-def create_collection(name: str, category: str, tags, work_ids: list[str], source: str="official", work_groups=None) -> Collection:
+def create_collection(name: str, category: str, tags, work_ids: list[str], source: str="official", work_groups=None, manual_volumes=None) -> Collection:
     cid = slugify(category, name)
-    c = Collection(cid, name, category, tags, work_ids, source=source, work_groups=work_groups)
+    c = Collection(cid, name, category, tags, work_ids, source=source, work_groups=work_groups, manual_volumes=manual_volumes)
     return c

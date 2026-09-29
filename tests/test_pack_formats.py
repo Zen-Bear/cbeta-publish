@@ -398,7 +398,7 @@ class PackMissingSkipTest(unittest.TestCase):
     def tearDownClass(cls):
         shutil.rmtree(cls.tmp, ignore_errors=True)
 
-    def _run(self, fn, answer, outdir):
+    def _run(self, fn, answer, outdir, dl=None):
         from PySide6.QtWidgets import QMessageBox
         win = self.win
         real_choose = win._choose_pack_fmts
@@ -407,13 +407,19 @@ class PackMissingSkipTest(unittest.TestCase):
         real_prompt = win._prompt_save_collection
         real_box = win._wrap_box
         real_q = QMessageBox.question
+        real_dl = win._download_missing
         boxes = []
         win._choose_pack_fmts = lambda *a, **k: ["pdf"]
         QFileDialog.getExistingDirectory = staticmethod(lambda *a, **k: str(outdir))
         win._make_progress = lambda title, total: (None, lambda *a, **k: True, {"finish": lambda *a, **k: None})
         win._prompt_save_collection = lambda *a, **k: None
         win._wrap_box = lambda *a, **k: boxes.append(a) or None
-        QMessageBox.question = staticmethod(lambda *a, **k: answer)
+        if dl is not None:
+            win._download_missing = dl
+        if callable(answer):
+            QMessageBox.question = staticmethod(lambda *a, **k: answer(*a))
+        else:
+            QMessageBox.question = staticmethod(lambda *a, **k: answer)
         try:
             fn()
         finally:
@@ -423,6 +429,7 @@ class PackMissingSkipTest(unittest.TestCase):
             win._prompt_save_collection = real_prompt
             win._wrap_box = real_box
             QMessageBox.question = real_q
+            win._download_missing = real_dl
         return boxes
 
     def test_zip_no_packs_present(self):
@@ -436,6 +443,42 @@ class PackMissingSkipTest(unittest.TestCase):
         stem1 = self.win._pack_display_stem("T0001")
         with zipfile.ZipFile(zpath) as z:
             self.assertEqual(z.namelist(), [f"{stem1}.pdf"])  # 缺的 T0002 不在包内
+
+    def test_zip_download_then_continue(self):
+        # 选「是」下载后仍缺 → 弹「是否继续」选「是」→ 照常打包
+        from PySide6.QtWidgets import QMessageBox
+        out = self.tmp / "zdlcont"
+        out.mkdir(exist_ok=True)
+        seen = []
+        def ans(*_a):
+            seen.append(1)
+            return QMessageBox.Yes   # 第一次=先下载，第二次=继续
+        boxes = self._run(self.win._zip, ans, out, dl=lambda *a, **k: None)
+        self.assertTrue((out / "跳测_pdf.zip").is_file())
+        self.assertFalse([a for a in boxes if "已取消打包" in str(a)], boxes)
+        self.assertEqual(len(seen), 2)   # 先下载 + 是否继续
+
+    def test_zip_download_then_decline(self):
+        # 下载后仍缺 → 继续问选「否」→ 取消打包
+        from PySide6.QtWidgets import QMessageBox
+        out = self.tmp / "zdldecline"
+        out.mkdir(exist_ok=True)
+        state = {"n": 0}
+        def ans(*_a):
+            state["n"] += 1
+            return QMessageBox.Yes if state["n"] == 1 else QMessageBox.No
+        boxes = self._run(self.win._zip, ans, out, dl=lambda *a, **k: None)
+        self.assertFalse((out / "跳测_pdf.zip").exists())
+        self.assertTrue([a for a in boxes if "已取消打包" in str(a)], boxes)
+
+    def test_export_download_then_continue(self):
+        from PySide6.QtWidgets import QMessageBox
+        target = self.tmp / "xdlcont"
+        target.mkdir(exist_ok=True)
+        self._run(self.win._export, lambda *a: QMessageBox.Yes, target,
+                  dl=lambda *a, **k: None)
+        stem1 = self.win._pack_display_stem("T0001")
+        self.assertTrue((target / f"{stem1}.pdf").is_file())
 
     def test_zip_cancel_aborts(self):
         from PySide6.QtWidgets import QMessageBox

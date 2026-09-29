@@ -246,7 +246,7 @@ class ThreePaneTest(unittest.TestCase):
         self.coll()["work_ids"] = ["T0001"]
         w._load_coll_works()
         self.pump(2)
-        w.coll_list.item(0).setSelected(True)
+        w._coll_book_items()[0].setSelected(True)
         w._list_drop(FakeDrop(w.coll_list, _md("T0001")))
         self.pump(4)
         self.assertEqual(self.coll()["work_ids"], [])
@@ -258,7 +258,7 @@ class ThreePaneTest(unittest.TestCase):
         self.coll()["work_ids"] = ["T0001"]
         w._load_coll_works()
         self.pump(2)
-        row = w.coll_list.itemWidget(w.coll_list.item(0))
+        row = w._coll_row(w._coll_book_items()[0])
         cb = row.findChildren(QCheckBox)[0]
         cb.setChecked(True)
         w._remove_from_coll()
