@@ -113,7 +113,7 @@ class TreeDragPayloadTest(unittest.TestCase):
                 break
         self.assertIsNotNone(vol_node)
         md = self.win.tree.mimeData([vol_node])
-        works, groups = self.win._mime_works_groups(md)
+        works, groups, _bulei = self.win._mime_works_groups(md)
         self.assertEqual(len(works), vol_node.childCount())
         # 册标签应等于该册节点记录的 vol_title
         data = vol_node.data(0, Qt.UserRole)

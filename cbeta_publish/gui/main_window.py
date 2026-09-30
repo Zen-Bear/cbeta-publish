@@ -307,6 +307,7 @@ class MainWindow(QMainWindow):
         self._last_coll_path=(config.get("ui",{}) or {}).get("last_collection") or None
         self._last_publish={}
         self._work_groups={}   # {work_id: 册标签}（从刊本树拖入时记录，供「按册分册」）
+        self._bulei_groups={}  # {work_id: [部类路径段]}（从部类树拖入时记录，供「按部类」归属）
         self._coll_view={}     # {coll_path: flat|volume|catalog|manual} 右栏显示方式（内存，不落盘）
         self._left_search_active=False   # 左栏当前是否显示「搜索结果」（导航树被暂存）
         self._nav_stash=None   # 搜索结果占用左栏时暂存的导航树顶层项（供搜索/恢复）
@@ -2304,10 +2305,11 @@ class MainWindow(QMainWindow):
             added=self._ws_add(works)
             self.detail.setText(f"已把丛书「{data.get('name','')}」{len(works)} 部追加到工作区（新增 {added} 部）")
 
-    def _add_to_collection(self, works, *, move_out=False):
+    def _add_to_collection(self, works, *, move_out=False, bulei_groups=None):
         """把作品加入当前丛书（按 work_ids 去重）；move_out=True 时同时从工作区移出。
 
         返回新增数量。右栏操作只动右栏与工作区，不触碰目录树/过滤器/搜索框。
+        bulei_groups: {work_id: [部类路径段]}（本次拖拽来源），落盘供「按部类」归属。
         """
         works=[w for w in (works or []) if self._is_work_id(w)]
         if not works:
@@ -2326,7 +2328,7 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 self.detail.setText(f"失败 {e}")
                 return 0
-        added=0; wg_touched=False
+        added=0; wg_touched=False; bg_touched=False
         for w in works:
             if w not in d["work_ids"]:
                 d["work_ids"].append(w)
@@ -2335,7 +2337,12 @@ class MainWindow(QMainWindow):
                 g=d.setdefault("work_groups",{})
                 if g.get(w)!=self._work_groups[w]:
                     g[w]=self._work_groups[w]; wg_touched=True
-        if added or wg_touched:
+            bp=self._bulei_groups.get(w) or (bulei_groups or {}).get(w)
+            if bp:
+                bg=d.setdefault("bulei_groups",{})
+                if bg.get(w)!=list(bp):
+                    bg[w]=list(bp); bg_touched=True
+        if added or wg_touched or bg_touched:
             d["updated_at"]=__import__("datetime").datetime.utcnow().isoformat()+"Z"
             self._mark_coll_changed(str(data))
             self._load_coll_works()
@@ -2625,61 +2632,80 @@ class MainWindow(QMainWindow):
                 return data["vol"]
         return ""
 
-    def _item_payload(self, it, group=""):
-        # 目录树节点 → [(work_id, 册标签)]；父节点展开其全部子孙
+    def _item_payload(self, it, group="", path=None):
+        # 目录树节点 → [(work_id, 册标签, 部类路径)]；父节点展开其全部子孙。
+        # path=自根到当前节点的部类树标题链（仅部类/三藏视图的 BuleiNode 计入；
+        # 三藏视图的「經/律/論藏」合成节点是 dict，自动跳过）。
+        path=path or []
         data=it.data(0, Qt.UserRole)
         g=self._item_group_label(data) or group
         if it.childCount():
+            npath=path
+            if hasattr(data, "title") and not isinstance(data, dict):
+                npath=path+[data.title]
             out=[]
             for i in range(it.childCount()):
-                out.extend(self._item_payload(it.child(i), g))
+                out.extend(self._item_payload(it.child(i), g, npath))
             return out
         if isinstance(data, dict):
             if data.get("work_ids"):
-                return [(w, g) for w in data["work_ids"] if w]
+                return [(w, g, list(path)) for w in data["work_ids"] if w]
             if data.get("children"):
-                return [(w, g) for w in self._data_work_ids(data)]
-            return [(data["key"], g)] if data.get("key") else []
+                return [(w, g, list(path)) for w in self._data_work_ids(data)]
+            return [(data["key"], g, list(path))] if data.get("key") else []
         if hasattr(data, "title"):
-            return [(w, g) for w in re.findall(r"[A-Z]+[0-9A-Za-z]+", data.title)]
+            return [(w, g, path+[data.title]) for w in re.findall(r"[A-Z]+[0-9A-Za-z]+", data.title)]
         return []
 
     def _tree_mimeData(self, items):
         # 自定义树拖拽数据：text/plain = 作品 id（每行一个，兼容外部）；
-        # application/x-cbeta-groups = JSON {work_id: 册标签}（按册分册用）
+        # application/x-cbeta-groups = JSON {work_id: 册标签}（按册分册用）；
+        # application/x-cbeta-bulei  = JSON {work_id: [部类路径]}（按部类归属用）
         from PySide6.QtCore import QMimeData
-        ids=[]; seen=set(); groups={}
+        ids=[]; seen=set(); groups={}; bulei={}
         for it in (items or []):
-            for wid, g in self._item_payload(it):
+            for wid, g, bp in self._item_payload(it):
                 if wid and wid not in seen:
                     seen.add(wid); ids.append(wid)
                     if g:
                         groups[wid]=g
+                    if bp:
+                        bulei[wid]=bp
         md=QMimeData()
         md.setText("\n".join(ids))
         if groups:
             md.setData("application/x-cbeta-groups",
                        json.dumps(groups, ensure_ascii=False).encode("utf-8"))
+        if bulei:
+            md.setData("application/x-cbeta-bulei",
+                       json.dumps(bulei, ensure_ascii=False).encode("utf-8"))
         return md
 
     def _mime_works_groups(self, md):
-        # 从拖拽数据解析 (works, groups)
+        # 从拖拽数据解析 (works, groups, bulei)
         works=re.findall(r"[A-Z]+[0-9A-Za-z]+", (md.text() or ""))
         groups={}
+        bulei={}
         try:
             raw=bytes(md.data("application/x-cbeta-groups"))
             if raw:
                 groups=json.loads(raw.decode("utf-8"))
         except Exception:
             groups={}
-        return works, groups
+        try:
+            raw=bytes(md.data("application/x-cbeta-bulei"))
+            if raw:
+                bulei=json.loads(raw.decode("utf-8"))
+        except Exception:
+            bulei={}
+        return works, groups, bulei
 
     def _tree_selected_works(self):
         # 从目录树选中项提取作品 id（统一走 _item_payload：父节点展开全部子孙；
         # 兼容部类/作者节点、刊本叶、丛书节点与二栏的选书区节点）
         out=[]; seen=set()
         for it in self.tree.selectedItems():
-            for w, _g in self._item_payload(it):
+            for w, _g, _bp in self._item_payload(it):
                 nw=self._normalize_work(w)
                 if w and nw not in seen and self._is_work_id(w):
                     seen.add(nw); out.append(w)
@@ -2736,12 +2762,14 @@ class MainWindow(QMainWindow):
             e.acceptProposedAction()
             return
         try:
-            works, groups=self._mime_works_groups(e.mimeData())
+            works, groups, bulei=self._mime_works_groups(e.mimeData())
             if not works:
                 works=self._tree_selected_works()
             for w in works:
                 if w not in self._work_groups and w in groups:
                     self._work_groups[w]=groups[w]
+                if w not in self._bulei_groups and w in bulei:
+                    self._bulei_groups[w]=bulei[w]
             if works:
                 added=self._ws_add(works)
                 self.detail.setText(f"拖入工作区 {added} 部，共 {len(self._workspace)} 部")
@@ -2822,6 +2850,7 @@ class MainWindow(QMainWindow):
         if not seen:
             return
         wg=d.get("work_groups") or {}
+        bg=d.get("bulei_groups") or {}
         ws=d.get("work_sources") or {}
         rm=[]; kept=[]
         for w in d["work_ids"]:
@@ -2830,6 +2859,9 @@ class MainWindow(QMainWindow):
                 g=wg.get(w)                    # 册标签搬回内存，再次加入后可恢复
                 if g:
                     self._work_groups[w]=g
+                b=bg.get(w)                    # 部类归属搬回内存，再次加入后可恢复
+                if b:
+                    self._bulei_groups[w]=b
             else:
                 kept.append(w)
         if not rm:
@@ -2840,6 +2872,10 @@ class MainWindow(QMainWindow):
             if self._normalize_work(k) in seen:
                 wg.pop(k, None)
         d["work_groups"]=wg
+        for k in list(bg):
+            if self._normalize_work(k) in seen:
+                bg.pop(k, None)
+        d["bulei_groups"]=bg
         for k in list(ws):
             if self._normalize_work(k) in seen:
                 ws.pop(k, None)
@@ -2905,7 +2941,7 @@ class MainWindow(QMainWindow):
         out=[]; seen=set()
         def walk(it):
             if _hit(it.text(0)):
-                for wid, _g in self._item_payload(it):
+                for wid, _g, _bp in self._item_payload(it):
                     if wid and wid not in seen and self._is_known_work(wid):
                         seen.add(wid); out.append(wid)
                 return
@@ -3928,7 +3964,7 @@ class MainWindow(QMainWindow):
             return
         try:
             # 外部拖拽（中栏/目录树/工作区）：提取书籍加入当前丛书
-            works, groups=self._mime_works_groups(e.mimeData())
+            works, groups, bulei=self._mime_works_groups(e.mimeData())
             if not works:
                 src=e.source()
                 if src is self.list:
@@ -3942,7 +3978,7 @@ class MainWindow(QMainWindow):
                     # 真实鼠标拖拽带的是内部 model mime（无 text/plain）：从选中项提作品+册标签
                     seen=set()
                     for it in src.selectedItems():
-                        for wid, g in self._item_payload(it):
+                        for wid, g, bp in self._item_payload(it):
                             if not wid or not self._is_work_id(wid):
                                 continue
                             nw=self._normalize_work(wid)
@@ -3952,16 +3988,21 @@ class MainWindow(QMainWindow):
                             works.append(wid)
                             if g:
                                 groups[wid]=g
+                            if bp:
+                                bulei[wid]=bp
                 else:
                     works=self._ws_selected()
             for w in works:
                 if w not in self._work_groups and w in groups:
                     self._work_groups[w]=groups[w]
+                if w not in self._bulei_groups and w in bulei:
+                    self._bulei_groups[w]=bulei[w]
             if works:
                 # 移动语义：来自工作区（中栏列表或左栏工作区树）的拖拽，加入后从工作区移出；
                 # 来自目录树的是拷贝（不动工作区）
                 added=self._add_to_collection(
-                    works, move_out=(e.source() is self.list or e.source() is getattr(self, "ws_tree", None)))
+                    works, move_out=(e.source() is self.list or e.source() is getattr(self, "ws_tree", None)),
+                    bulei_groups=bulei)
                 self.detail.setText(f"拖入 {added} 部")
                 e.acceptProposedAction()
                 return
@@ -4091,12 +4132,18 @@ class MainWindow(QMainWindow):
         self._manual_commit(d, "已删除分册")
 
     def _on_coll_context_menu(self, pos):
+        menu=self._build_coll_menu(pos)
+        if menu is not None and menu.actions():
+            menu.exec(self.coll_list.viewport().mapToGlobal(pos))
+
+    def _build_coll_menu(self, pos):
+        """构建右栏书单右键菜单（不弹出，便于测试）。无菜单返回 None。"""
         data=self.coll_combo.currentData()
         if self._is_coll_placeholder(data):
-            return
+            return None
         d=self._coll_dict(data)
         if d is None:
-            return
+            return None
         item=self.coll_list.itemAt(pos)
         menu=QMenu(self.coll_list)
         if self._coll_is_book(item):
@@ -4132,8 +4179,36 @@ class MainWindow(QMainWindow):
         else:
             menu.addAction("新建空分册").triggered.connect(
                 lambda: self._manual_new_volume(d, []))
-        if menu.actions():
-            menu.exec(self.coll_list.viewport().mapToGlobal(pos))
+        # 只读视图（按刊本册/按部类）：把当前自动分册拷贝（覆盖）到手工分册
+        if self._coll_display_mode() in ("volume", "catalog"):
+            if menu.actions():
+                menu.addSeparator()
+            if item is not None and not self._coll_is_book(item):
+                _lbl = item.text(0)
+                menu.addAction("拷贝此分册覆盖到手工分册").triggered.connect(
+                    lambda _c=False, lb=_lbl: self._copy_view_to_manual(d, only_label=lb))
+            menu.addAction("拷贝全部分册覆盖到手工分册").triggered.connect(
+                lambda: self._copy_view_to_manual(d))
+        return menu
+
+    def _copy_view_to_manual(self, d, only_label=None):
+        """把当前「按刊本册/按部类」的分组结果拷贝进 manual_volumes（覆盖），转手工分册。"""
+        mode=self._coll_display_mode()
+        works=[w for w in (d.get("work_ids") or []) if w]
+        titles=[self.sutra.title_of(w) for w in works]
+        groups=self._group_works(d, works, titles, works, mode=mode, depth=self._merge_depth())
+        vols=[]
+        for g in groups:
+            label=g.get("label")
+            if only_label is not None and label != only_label:
+                continue
+            vols.append({"title": "" if label is None else str(label),
+                         "work_ids":[self._normalize_work(w) for w in g["works"]]})
+        if not vols:
+            self.detail.setText("当前视图无可拷贝的分册")
+            return
+        d["manual_volumes"]=vols
+        self._manual_commit(d, f"已把 {len(vols)} 个分册拷贝到手工分册")
 
     def _coll_internal_drop(self, e):
         mode=self._coll_display_mode()
@@ -5323,11 +5398,11 @@ class MainWindow(QMainWindow):
         self._show_verify_results(imp, vdir, base)
 
     def _import_verified(self):
-        """手动导入：校验目录报告判通过 → 产物移入自制书目录。
+        """手动导入：选择校验目录 → 报告判通过 → 产物移入自制书目录。
 
-        - 当前丛书的 `verify_dir/<丛书>/` 有报告则直接导入；
-        - 否则弹目录选择（用于导入 xml2pdf 独立窗输出目录里已校验的书）。
-        托管校验目录内的未放行项由人工检验环节删除；外部目录只导入不删。
+        - 每次弹目录选择，默认指向当前丛书的托管校验目录（可改选独立窗输出目录，
+          不默认直接导入上一次的书籍）；
+        - 托管校验目录内的未放行项由人工检验环节删除；外部目录只导入不删。
         """
         from cbeta_publish.books import xml2pdf_bridge as _b
         got=self._verify_coll()
@@ -5335,22 +5410,26 @@ class MainWindow(QMainWindow):
             return
         _data, d, works=got
         slug=str(d.get("id") or d.get("name") or "")
-        vdir=_b.verify_coll_dir(self.config, slug)
-        reports=_b.verify_reports(vdir) if vdir.is_dir() else []
+        _managed=_b.verify_coll_dir(self.config, slug)
+        # 始终让用户确认/选择校验目录（默认本丛书托管校验目录或其上级）
+        from PySide6.QtWidgets import QFileDialog
+        if _managed.is_dir():
+            start=str(_managed)
+        else:
+            _root=_b.verify_dir(self.config)
+            start=str(_root if _root.is_dir() else _root.parent)
+        sel=QFileDialog.getExistingDirectory(
+            self, "选择要导入的校验目录（含 *_verify_report.txt 或 report.txt）", start)
+        if not sel:
+            self.detail.setText("已取消导入校验E书")
+            return
+        vdir=Path(sel)
+        reports=_b.verify_reports(vdir)
         if not reports:
-            # 独立窗产物：让用户指定其「输出目录」，在其中递归找 {stem}_verify_report.txt / report.txt
-            from PySide6.QtWidgets import QFileDialog
-            start=str(vdir if vdir.is_dir() else _b.verify_dir(self.config))
-            sel=QFileDialog.getExistingDirectory(self, "选择要导入的校验目录（含 *_verify_report.txt 或 report.txt）", start)
-            if not sel:
-                return
-            vdir=Path(sel)
-            reports=_b.verify_reports(vdir)
-            if not reports:
-                self._wrap_box(QMessageBox.Information, "暂无校验报告",
-                               f"该目录下未找到校验报告：\n{vdir}\n"
-                               f"（需要 `*_verify_report.txt` 或 `（验证）/report.txt`）")
-                return
+            self._wrap_box(QMessageBox.Information, "暂无校验报告",
+                           f"该目录下未找到校验报告：\n{vdir}\n"
+                           f"（需要 `*_verify_report.txt` 或 `（验证）/report.txt`）")
+            return
         base=_b.xml_books_dir(self.config)
         allow_delete=self._is_managed_verify_dir(vdir)
         dlg, update, pstate=self._make_progress("导入校验通过E书", max(1,len(reports)))
@@ -5565,6 +5644,7 @@ class MainWindow(QMainWindow):
                 out.append(self._manual_group("未分组", rest))
             return out
         manual = (d.get("work_groups") or {}) if mode == "volume" else {}
+        bulei_manual = (d.get("bulei_groups") or {}) if mode == "catalog" else {}
         volume_map = self._work_vol_map() if mode == "volume" else None
         bulei_map = self._catalog_bulei_map() if mode == "catalog" else None
         buckets = {}
@@ -5585,11 +5665,21 @@ class MainWindow(QMainWindow):
                     full_segs = list(r.get("full_segments") or segs)
                     sortkey = (1,) + tuple(r["order"])
             else:  # catalog（部类）
-                r = _cp.resolve(w, "bulei", depth, bulei_map=bulei_map)
-                key = ("c",) + tuple(r["segments"]); label = r["label"]; stem = r["stem"]
-                segs = list(r["segments"])
-                full_segs = list(r.get("full_segments") or segs)
-                sortkey = (1,) + tuple(r["order"])
+                mbp = bulei_manual.get(w) or bulei_manual.get(nw)
+                if mbp:
+                    # 人工归属（从部类树拖入时记录）：优先用它，避免同书多部类被首个命中抢走
+                    full_segs = [s for s in (_cp._clean_bulei_seg(x) for x in mbp) if s]
+                    segs = full_segs[:depth] or ["未歸類"]
+                    label = " / ".join(segs)
+                    stem = "_".join(_cp._safe_seg(s) for s in segs) or label
+                    key = ("b",) + tuple(segs)
+                    sortkey = (0, tuple(segs))
+                else:
+                    r = _cp.resolve(w, "bulei", depth, bulei_map=bulei_map)
+                    key = ("c",) + tuple(r["segments"]); label = r["label"]; stem = r["stem"]
+                    segs = list(r["segments"])
+                    full_segs = list(r.get("full_segments") or segs)
+                    sortkey = (1,) + tuple(r["order"])
             g = buckets.setdefault(key, {"label": label, "stem": stem, "segments": segs,
                                          "full_segments": full_segs,
                                          "ok": [], "titles": [], "works": [],
@@ -5749,7 +5839,7 @@ class MainWindow(QMainWindow):
         lay=QVBoxLayout(dlg)
         log=QTextBrowser(dlg)
         log.setReadOnly(True)
-        log.setLineWrapMode(QTextBrowser.NoWrap)
+        log.setLineWrapMode(QTextBrowser.WidgetWidth)   # 长行折行，不产生左右滚动条
         log.document().setMaximumBlockCount(5000)
         # file:// 链接必须自己处理：QTextBrowser 会把 file:// 当内部文档加载
         # （报 No document 且打不开），关掉自动跟随，走系统默认程序打开。
@@ -6375,8 +6465,23 @@ class MainWindow(QMainWindow):
             self._wrap_box(QMessageBox.Warning, "失败", "ZIP 失败:\n" + "\n".join(failed[:5]) + (f"\n... 共 {len(failed)} 项" if len(failed)>5 else ""))
 
     def _wrap_box(self, icon, title, text, buttons=QMessageBox.Ok):
-        # 折行无效（QMessageBox 宽度由最长行主导），回退为普通弹窗；文本在调用处已截断
-        return QMessageBox(icon, title, text, buttons, self).exec()
+        # QMessageBox 宽度受最长行主导 → 长路径/长句会撑宽甚至出横向滚动；
+        # 限宽 + 折行 + 在路径分隔符后插零宽空格，保证换行、无左右滚动条。
+        box=QMessageBox(icon, title, "", buttons, self)
+        box.setTextFormat(Qt.PlainText)
+        box.setText(self._soft_break(str(text)))
+        lbl=box.findChild(QLabel)
+        if lbl is not None:
+            lbl.setWordWrap(True)
+            lbl.setMaximumWidth(600)
+            lbl.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard)
+        return box.exec()
+
+    @staticmethod
+    def _soft_break(text):
+        # 在 `\` `/` 后插零宽空格：无空格长路径也能折行
+        import re as _re
+        return _re.sub(r"([\\/])", "\\1\u200b", text)
 
     def _export(self):
         fmts = self._choose_pack_fmts()
