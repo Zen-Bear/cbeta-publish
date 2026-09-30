@@ -114,8 +114,13 @@ def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=No
 **`collections/<cat>/<slug>.json`**（只读兼容，不参与决策）
 ```json
 { "source": "official", "work_sources": {...}, "xml_options": {...},
-  "manual_volumes": [ {"title": "法藏", "work_ids": ["T0001","T0002"]} ] }
+  "manual_volumes": [ {"title": "法藏", "work_ids": ["T0001","T0002"]} ],
+  "bulei_groups": { "T0001": ["16 淨土部類", "T0001 淨土經"] } }
 ```
+- `bulei_groups`：从部类树拖入时记录的来源部类**全路径**（`{work_id: [段...]}`）。
+  「按部类」分组/合并时按当前深度截断、`_clean_bulei_seg` 清洗后优先采用，
+  解决同书多部类被首个命中抢走的问题（如 16 淨土的书同时在 06/10）。
+  读入规范化：key 归一、剔除不在 `work_ids` 的项。无记录的书走自动解析（旧行为）。
 - `manual_volumes`：右栏「手工分册」的卷定义（顺序=册序；`work_ids` 仍是全书单真相，
   卷内顺序不独立存放）。读入规范化：id 归一、剔除不在 `work_ids` 的脏 id、跨卷去重（先出现者保留）、
   空卷保留。`merge.mode=manual` 时按此分册（无卷则回退不分册）。

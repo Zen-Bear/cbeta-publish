@@ -25,6 +25,15 @@ def normalize_collection(d: dict) -> dict:
         d["work_sources"] = {canonical_work(k): v for k, v in d["work_sources"].items()}
     if isinstance(d.get("work_groups"), dict):
         d["work_groups"] = {canonical_work(k): v for k, v in d["work_groups"].items()}
+    if isinstance(d.get("bulei_groups"), dict):
+        # 部类归属：{work_id: [路径段...]}（从部类树拖入时记录；按部类分组优先用它）
+        _valid = set(d.get("work_ids") or [])
+        _bg = {}
+        for k, v in d["bulei_groups"].items():
+            c = canonical_work(k)
+            if c and isinstance(v, list) and (not _valid or c in _valid):
+                _bg[c] = [str(x) for x in v]
+        d["bulei_groups"] = _bg
     if isinstance(d.get("manual_volumes"), list):
         # 手工分册：每卷 {title, work_ids}；id 规范化、剔除不在 work_ids 的脏 id、
         # 跨卷去重（先出现者保留）。空卷保留（可先建卷再移书）。

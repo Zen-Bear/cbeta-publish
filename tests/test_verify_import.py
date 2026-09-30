@@ -663,12 +663,16 @@ class VerifySendImportTest(unittest.TestCase):
         return vdir
 
     def test_import_pass_only(self):
+        from PySide6.QtWidgets import QFileDialog
         from cbeta_publish.books import xml2pdf_bridge as b
         vdir = self._mk_verify_tree()
+        real_dir = QFileDialog.getExistingDirectory
+        QFileDialog.getExistingDirectory = staticmethod(lambda *a, **k: str(vdir))
         boxes, restore = self._patch_common()
         try:
             self.win._import_verified()
         finally:
+            QFileDialog.getExistingDirectory = real_dir
             restore()
         base = Path(self.win.config["xml_to_ebooks_dir"])
         self.assertEqual((base / "pdf" / "T0001 大般若經.pdf").read_bytes(), b"PDF")    # 通过 move 入库（L2 带书名）

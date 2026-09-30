@@ -279,6 +279,165 @@ class MergeManualTest(unittest.TestCase):
         self.assertEqual(w._merge_mode(), "manual")
 
 
+class BuleiOriginTest(unittest.TestCase):
+    """同书多部类：从部类树拖入时记录来源部类路径，分组优先用它（不再首个命中抢走）。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.win, cls.tmp = _make_window(["T0001"])
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def _d(self):
+        return self.win._coll_dict(self.win.coll_combo.currentData())
+
+    def test_item_payload_carries_bulei_path(self):
+        from types import SimpleNamespace
+        from PySide6.QtWidgets import QTreeWidgetItem
+        w = self.win
+        top = QTreeWidgetItem(["16 淨土部類 T12,14 etc."])
+        top.setData(0, Qt.UserRole, SimpleNamespace(title="16 淨土部類 T12,14 etc."))
+        leaf = QTreeWidgetItem(["T0310 佛說無量壽經"])
+        leaf.setData(0, Qt.UserRole, SimpleNamespace(title="T0310 佛說無量壽經"))
+        top.addChild(leaf)
+        payload = w._item_payload(top)
+        self.assertEqual(payload[0][0], "T0310")
+        self.assertEqual(payload[0][2], ["16 淨土部類 T12,14 etc.", "T0310 佛說無量壽經"])
+
+    def test_mime_carries_bulei(self):
+        from types import SimpleNamespace
+        from PySide6.QtWidgets import QTreeWidgetItem
+        w = self.win
+        top = QTreeWidgetItem(["16 淨土部類"])
+        top.setData(0, Qt.UserRole, SimpleNamespace(title="16 淨土部類"))
+        leaf = QTreeWidgetItem(["T0310 佛說無量壽經"])
+        leaf.setData(0, Qt.UserRole, SimpleNamespace(title="T0310 佛說無量壽經"))
+        top.addChild(leaf)
+        md = w._tree_mimeData([top])
+        works, groups, bulei = w._mime_works_groups(md)
+        self.assertIn("T0310", works)
+        self.assertEqual(bulei["T0310"], ["16 淨土部類", "T0310 佛說無量壽經"])
+
+    def test_add_persists_bulei_groups(self):
+        w = self.win
+        d = self._d()
+        d["work_ids"] = []
+        d["bulei_groups"] = {}
+        w._add_to_collection(["T0001"], bulei_groups={"T0001": ["16 淨土部類", "T0001 淨土經"]})
+        self.assertEqual(d["bulei_groups"]["T0001"], ["16 淨土部類", "T0001 淨土經"])
+        self.assertIn(str(w.coll_combo.currentData()), w._changed_colls)
+
+    def test_group_works_prefers_origin(self):
+        w = self.win
+        d = {"bulei_groups": {"T0001": ["16 淨土部類", "T0001 淨土經"]}}
+        groups = w._group_works(d, ["T0001"], ["T0001"], ["T0001"],
+                                mode="catalog", depth=2)
+        self.assertEqual(groups[0]["label"], "16 淨土部類 / 淨土經")
+        # 无记录 → 走自动解析（首次命中），与人工归属不同
+        auto = w._group_works({}, ["T0001"], ["T0001"], ["T0001"],
+                              mode="catalog", depth=2)
+        self.assertNotEqual(auto[0]["label"], groups[0]["label"])
+
+    def test_remove_cleans_and_stashes(self):
+        w = self.win
+        d = self._d()
+        d["work_ids"] = ["T0001"]
+        d["bulei_groups"] = {"T0001": ["16 淨土部類"]}
+        w._load_coll_works()
+        w._remove_works_from_collection(["T0001"])
+        self.assertNotIn("T0001", d.get("bulei_groups") or {})
+        self.assertEqual(w._bulei_groups.get("T0001"), ["16 淨土部類"])
+
+    def test_normalize_canonicalizes(self):
+        d = {"work_ids": ["T0001"],
+             "bulei_groups": {"t0001": ["16 淨土部類"], "TX999": ["x"]}}
+        out = normalize_collection(d)
+        self.assertEqual(out["bulei_groups"], {"T0001": ["16 淨土部類"]})
+
+
+class CopyViewToManualTest(unittest.TestCase):
+    """只读视图（按刊本册/按部类）右键：把当前自动分册拷贝（覆盖）到手工分册。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.win, cls.tmp = _make_window(["T0001", "T0002"])
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def setUp(self):
+        w = self.win
+        w._coll_view.clear()
+        w._load_coll_works()
+        _ensure_app().processEvents()
+
+    def _d(self):
+        return self.win._coll_dict(self.win.coll_combo.currentData())
+
+    def test_copy_all_switches_to_manual(self):
+        w = self.win
+        d = self._d()
+        d["manual_volumes"] = []
+        path = str(w.coll_combo.currentData())
+        w._coll_view[path] = "catalog"
+        w._copy_view_to_manual(d)
+        self.assertEqual(w._coll_display_mode(), "manual")
+        self.assertTrue(d["manual_volumes"])
+        ids = [x for v in d["manual_volumes"] for x in v["work_ids"]]
+        self.assertSetEqual(set(ids), {"T0001", "T0002"})
+        self.assertIn(path, w._changed_colls)   # 标星号待保存
+
+    def test_copy_single_group(self):
+        w = self.win
+        d = self._d()
+        d["manual_volumes"] = []
+        path = str(w.coll_combo.currentData())
+        w._coll_view[path] = "catalog"
+        groups = w._group_works(d, d["work_ids"], d["work_ids"], d["work_ids"],
+                                mode="catalog", depth=w._merge_depth())
+        label = groups[0]["label"]
+        w._copy_view_to_manual(d, only_label=label)
+        self.assertEqual(len(d["manual_volumes"]), 1)
+        self.assertEqual(d["manual_volumes"][0]["title"], label)
+        self.assertEqual(d["manual_volumes"][0]["work_ids"], list(groups[0]["works"]))
+
+    def test_context_menu_has_copy_in_catalog(self):
+        w = self.win
+        w._coll_view[str(w.coll_combo.currentData())] = "catalog"
+        w._load_coll_works()
+        menu = w._build_coll_menu(w.coll_list.viewport().rect().center())
+        texts = [ac.text() for ac in menu.actions()]
+        self.assertIn("拷贝全部分册覆盖到手工分册", texts)
+
+
+class WrapProgressTest(unittest.TestCase):
+    """弹窗文字折行（不产生左右滚动条）：软换行 + 进度窗日志按窗口宽折行。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.win, cls.tmp = _make_window(["T0001"])
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def test_soft_break_inserts_zwsp(self):
+        self.assertEqual(MainWindow._soft_break("E:\\a/b"), "E:\\\u200ba/\u200bb")
+
+    def test_progress_log_wraps(self):
+        from PySide6.QtWidgets import QTextBrowser
+        dlg, update, pstate = self.win._make_progress("t", 1)
+        try:
+            tb = dlg.findChild(QTextBrowser)
+            self.assertIsNotNone(tb)
+            self.assertEqual(tb.lineWrapMode(), QTextBrowser.WidgetWidth)
+        finally:
+            dlg.deleteLater()
+
+
 class InternalDropTest(unittest.TestCase):
     """树内拖拽：书落卷头=入卷；落书=按位置插入。itemAt/落点指标打桩。"""
 
