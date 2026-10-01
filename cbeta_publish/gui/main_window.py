@@ -276,6 +276,33 @@ def work_sort_key(w):
     return (m.group(1).upper(), int(m.group(2)), "")
 
 
+class _CollTree(QTreeWidget):
+    """右栏书单树：真实重写拖放虚函数（实例属性覆写在部分 PySide6 版本
+    不能可靠拦截 Qt 默认内部移动——默认移动会丢 setItemWidget 的行控件，
+    表现为“拖动的书消失”）。全部转交 MainWindow 的自定义处理。"""
+
+    def __init__(self, owner):
+        super().__init__(owner)
+        self._owner = owner
+
+    def dragEnterEvent(self, e):
+        e.acceptProposedAction()
+
+    def dragMoveEvent(self, e):
+        # 直接调基类（不能用 _drop_move：它按 type(view) 反查会命中本覆写→递归）
+        try:
+            QTreeWidget.dragMoveEvent(self, e)   # 保留内部排序指示器
+        except Exception:
+            pass
+        try:
+            e.acceptProposedAction()             # 放行外部拖拽（Qt 默认会拒收）
+        except Exception:
+            pass
+
+    def dropEvent(self, e):
+        self._owner._coll_drop(e)
+
+
 class MainWindow(QMainWindow):
     def __init__(self, config):
         super().__init__()
@@ -541,7 +568,7 @@ class MainWindow(QMainWindow):
         mh.addWidget(self.btn_tags)
         mh.addStretch()
         rv.addWidget(mgmt)
-        self.coll_list=QTreeWidget()
+        self.coll_list=_CollTree(self)
         self.coll_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.coll_list.setMinimumWidth(300)
         self.coll_list.setHeaderHidden(True)
@@ -831,9 +858,6 @@ class MainWindow(QMainWindow):
         try:
             self.coll_list.model().rowsMoved.connect(self._on_coll_reordered)
         except: pass
-        self.coll_list.dragEnterEvent = lambda e: self._coll_drag_enter(e)
-        self.coll_list.dragMoveEvent = lambda e: self._drop_move(e, self.coll_list)
-        self.coll_list.dropEvent = lambda e: self._coll_drop(e)
         self.coll_list.viewport().installEventFilter(self)
         self.coll_list.viewport().setMouseTracking(True)   # 图标 tooltip 需移动事件
         self.chk_pdf.stateChanged.connect(self._load_coll_works)
@@ -4260,7 +4284,36 @@ class MainWindow(QMainWindow):
             self._coll_view[str(data)]="manual"
         self._mark_coll_changed(str(data))
         self._load_coll_works()
-        e.acceptProposedAction()
+        # 拖后显形（平铺/手工均适用）：被拖的书可能落入折叠卷中或滚出视野，
+        # 展开其所在卷、选中并滚到首本，避免“拖动后书不见了”。
+        moved=set(ids)
+        first=None
+        for h in self._coll_group_headers():
+            kids=[h.child(k) for k in range(h.childCount())
+                  if self._coll_is_book(h.child(k))
+                  and h.child(k).data(0,Qt.UserRole) in moved]
+            if kids:
+                h.setExpanded(True)
+                if first is None:
+                    first=kids[0]
+        if first is None:
+            for it in self._coll_book_items():
+                if it.data(0,Qt.UserRole) in moved:
+                    first=it
+                    break
+        if first is not None:
+            first.setSelected(True)
+            self.coll_list.setCurrentItem(first, 0)
+            self.coll_list.scrollToItem(first, QAbstractItemView.PositionAtCenter)
+        # 关键：不接受 MoveAction。QAbstractItemView::startDrag 在本视图内部拖放结束时，
+        # 若 drag->exec() 返回 MoveAction 就调 clearOrRemove() 移除被拖行（只动视图模型、
+        # 不写回 d["work_ids"]）→ 书“消失”，切视图重渲染才又出现。我们已自行重排并
+        # 重渲染，把结果标成 IgnoreAction 即可阻止那次清理。
+        try:
+            e.setDropAction(Qt.IgnoreAction)
+            e.accept()
+        except Exception:
+            e.ignore()
 
     def _on_icon_clicked(self, work, fmt):
         # 双击格式图标：只打开该格式；该格式不存在则无反应
@@ -4441,6 +4494,7 @@ class MainWindow(QMainWindow):
             d["work_ids"]=new_order
             d["updated_at"]=__import__("datetime").datetime.utcnow().isoformat()+"Z"
             self._mark_coll_changed(str(data))
+            self._load_coll_works()   # 重建行控件（Qt 原生移动会丢 setItemWidget，行会变空）
             self.detail.setText("已重新排序")
 
     def _coll_select_all(self):
