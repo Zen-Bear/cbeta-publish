@@ -48,7 +48,8 @@ def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=No
 
 **辅助函数**（同在 `xml2pdf_bridge.py`）：
 `write_run_wrapper` / `remove_temp_preset`（临时 run.json 生成与删除）/
-`_x2p_root` / `_abs`（目录统一绝对，相对按工程根）/
+`_x2p_root` / `_abs`（目录统一绝对；相对按 `cbeta_publish/paths.app_root()`——
+源码=仓库根、打包=exe 同级目录）/
 `presets_dir`（= `<仓库>/presets`，由 xml2pdf 决定，publish 不另配）/
 `list_presets` / `resolve_preset` / `load_preset_dict` / `save_preset`
 （预设读写；优先走上游公开 API，不可用时回退本地）/
@@ -103,6 +104,8 @@ def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=No
 }
 ```
 - 目录一律绝对路径；显示与落盘用本地分隔符（Windows 反斜杠）。
+  （可为相对路径，按 `paths.app_root()` 解析；打包脚本会把 dev 绝对路径改写为
+  便携相对路径，见 `packaging/README.md`。）
 - `ui.last_collection`：上次工作的丛书 JSON 路径，切换右栏丛书即 `_save_config` 落盘，
   下次启动按其选中（缺失则回退空白/首项）。
 - 预设目录固定在 xml2pdf 仓库 `presets/`（上游 `user_presets_dir`），
@@ -159,6 +162,8 @@ def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=No
   ZIP 按 `部/相对路径` 写入 `{丛书名}_{fmt}.zip`，导出整树拷贝到 `{target}/{work}/`。
   纯 txt 端点（`text/{id}.txt.zip`，不含校注）放 publish 自有 `_EXTRA_DOWNLOADS`，
   vendor 共享层不动。
+- **缺书确认（官方源；合并/ZIP/导出一致）**：是=先下载（下完仍缺再问
+  「是否继续（仅打已有）」）、否=跳过缺书继续（缺的记失败）、取消=不打。
 - 自制格式勾选（右栏）：pdf/epub/**docx**（docx 默认勾选）；**合并只取 pdf/epub**，
   docx 走 ZIP/导出/校验/打开。`ensure_one`/`find_built`/`xml_dest` 格式通用，无需特判。
 - 校验（进程内「自制/重制」＋自动/手动导入）：设置「制作书籍」=`校验`
@@ -200,10 +205,10 @@ def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=No
    未放行项在**托管校验目录**内删除（外部目录只导入不删）。
    worker 异常（含上游 argparse 的 `SystemExit`）也必发 `finished_all`
    （否则嵌套事件循环挂死）；线程跑完断开信号＋`deleteLater`（野指针防护）。
-   临时预设未保存时拒绝执行。手动导入（菜单「导入校验通过E书…」）优先读当前丛书的
-  `verify_dir/<丛书>/`；无报告时**弹目录选择**，可指向独立窗输出目录（同样兼容两种报告名），
-  便于把独立窗已校验的产物入库（菜单「制作书籍 → 运行 xml2pdf 制作书籍…」
-  会把当前丛书直接带过去）。独立窗保留为手动工作台。
+   临时预设未保存时拒绝执行。手动导入（菜单「导入校验通过E书…」）**每次都弹目录选择**
+  （默认指向当前丛书 `verify_dir/<丛书>/`，可改选独立窗输出目录，同样兼容两种报告名），
+   便于把独立窗已校验的产物入库（菜单「制作书籍 → 运行 xml2pdf 制作书籍…」
+   会把当前丛书直接带过去）。独立窗保留为手动工作台。
 
 ## 6. 实施清单
 
@@ -225,6 +230,9 @@ def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=No
 - [x] `publish`：预设读写改用公开 API（`list_config_presets`/`load_config_preset`/
   `save_config_preset`；`[调整…]` 用 `get_preset`），不再碰私有名或自写盘
 - [x] 文档：本契约 + 《UI设计.md》
+- [x] `publish`：Windows 打包（`build_exe.ps1` + `packaging/cbeta_publish.spec`：onedir、
+  便携数据根 `paths.app_root()`、打进 pycbeta、可选 Chromium/代码签名；见 §4 相对路径）
+- [x] `publish`：GPL-3.0 许可（`LICENSE`，Zen Bear）、`README.md`、示例输出 `demo/`；发布 GitHub
 
 ## 7. 备注
 
@@ -317,6 +325,6 @@ publish 的「自制/重制（校验）」产物目录天然符合本规范；�
 
 ### 9.3 入口与目录优先级
 
-1. 「导入校验通过E书…」优先读当前丛书 `verify_dir/<slug>/`；
-   无报告则**弹目录选择**，可指向独立窗输出目录（或其任意上层，递归扫描）。
+1. 「导入校验通过E书…」**每次都弹目录选择**（默认当前丛书 `verify_dir/<slug>/`，
+   可改选独立窗输出目录或其任意上层，递归扫描）。
 2. 右栏「自制/重制（设置=校验）」跑完走同一规则（`_do_import_verified`）自动导入。
