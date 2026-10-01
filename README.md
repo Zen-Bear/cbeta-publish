@@ -94,3 +94,9 @@ powershell -ExecutionPolicy Bypass -File build_exe.ps1
 ```bat
 python -m unittest discover -s tests
 ```
+
+## 许可证
+
+GNU General Public License v3.0（GPL-3.0）。见 `LICENSE`。
+
+Copyright (C) 2026 Zen Bear。
