@@ -1,6 +1,6 @@
 ﻿# -*- coding: utf-8 -*-
 from PySide6.QtWidgets import QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QTreeWidget, QTreeWidgetItem, QListWidget, QListWidgetItem, QSplitter, QSplitterHandle, QLabel, QPushButton, QToolButton, QLineEdit, QComboBox, QInputDialog, QMessageBox, QApplication, QTabWidget, QTextBrowser, QSizePolicy, QProgressDialog, QScrollArea, QGroupBox, QRadioButton, QButtonGroup, QAbstractItemView, QMenu
-from PySide6.QtCore import Qt, QEvent, QTimer, Signal
+from PySide6.QtCore import Qt, QEvent, QTimer, Signal, QObject
 from PySide6.QtGui import QShortcut, QKeySequence
 from pathlib import Path
 import json, os, re
@@ -1551,6 +1551,12 @@ class MainWindow(QMainWindow):
                         title=m.get("name") or wid
                 item.addChild(self._work_item(wid, f"{title}"))
         self._expand_tree()
+
+    def _refresh_coll_tree_if_visible(self):
+        # 左栏当前为「丛书」视图时重建（保持分类/标签过滤），同步改名/改名/删除等
+        if self.nav_combo.currentText()=="丛书":
+            self._refresh_coll_tree(filter_cat=self.coll_filter.currentData(),
+                                    filter_tag=self.coll_tag_filter.currentData())
 
     def _load_collections(self):
         cdir=Path(self.config["collections_dir"])
@@ -3326,6 +3332,17 @@ class MainWindow(QMainWindow):
                     cat_combo.setCurrentIndex(i)
                     break
         form.addRow("分类", cat_combo)
+        # 名称框回车：打开分类下拉让用户先选分类，而不是直接接受弹窗
+        # （否则默认项是「＋ 新建分类…」，一回车就跳进新建分类）
+        class _EnterToCategory(QObject):
+            def eventFilter(self, obj, ev):
+                if ev.type()==QEvent.KeyPress and ev.key() in (Qt.Key_Return, Qt.Key_Enter):
+                    cat_combo.setFocus()
+                    cat_combo.showPopup()
+                    return True
+                return False
+        _flt=_EnterToCategory(dlg)
+        name_edit.installEventFilter(_flt)
         btns=QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         btns.accepted.connect(dlg.accept)
         btns.rejected.connect(dlg.reject)
@@ -3418,6 +3435,8 @@ class MainWindow(QMainWindow):
         if not self._changed_colls:
             self._coll_changed=False
         self._sync_combo(select_path=str(target))
+        self._write_index()
+        self._refresh_coll_tree_if_visible()   # 左栏「丛书」视图同步（改名+分类）
         self.detail.setText(f"已另存为「{name}」（分类 {self._cat_name(cat)}）")
 
     def _save_collections(self):
@@ -3447,6 +3466,7 @@ class MainWindow(QMainWindow):
         self._coll_changed=False
         self._update_coll_marks()
         self._write_index()
+        self._refresh_coll_tree_if_visible()   # 左栏「丛书」视图同步（空白丛书改名/归类等）
         self.detail.setText(f"已保存 {saved} 部丛书")
 
     def _finalize_blank_save(self, p, d):
@@ -3569,6 +3589,8 @@ class MainWindow(QMainWindow):
         self._changed_colls.discard(str(data))
         if not self._changed_colls:
             self._coll_changed=False
+        self._write_index()
+        self._refresh_coll_tree_if_visible()   # 左栏「丛书」视图同步改名
         self.detail.setText(f"已改名：{newname}")
 
     def _delete_collection(self):
@@ -3603,6 +3625,7 @@ class MainWindow(QMainWindow):
         self._sync_combo()          # 不选中任何丛书，留空
         self._load_coll_works()
         self._write_index()
+        self._refresh_coll_tree_if_visible()   # 左栏「丛书」视图同步移除
         self.detail.setText("已删除丛书")
 
     def _remove_from_coll(self):
@@ -4780,6 +4803,7 @@ class MainWindow(QMainWindow):
             self._coll_changed=False
         self._update_coll_marks()
         self._write_index()
+        self._refresh_coll_tree_if_visible()   # 左栏「丛书」视图同步（空白丛书改名/归类等）
         self.detail.setText(f"已保存「{d.get('name',Path(path).stem)}」")
         return True
 
