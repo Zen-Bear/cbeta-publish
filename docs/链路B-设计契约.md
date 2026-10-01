@@ -106,8 +106,9 @@ def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=No
 - 目录一律绝对路径；显示与落盘用本地分隔符（Windows 反斜杠）。
   （可为相对路径，按 `paths.app_root()` 解析；打包脚本会把 dev 绝对路径改写为
   便携相对路径，见 `packaging/README.md`。）
-- `ui.last_collection`：上次工作的丛书 JSON 路径，切换右栏丛书即 `_save_config` 落盘，
-  下次启动按其选中（缺失则回退空白/首项）。
+- `config/ui_state.json`：上次工作的丛书路径（`last_collection`），切换右栏丛书即写此文件
+  （与 `app.json` 同级、**gitignored，不进版本库**），下次启动按其选中（缺失则回退空白/首项）。
+  旧配置里的 `ui.last_collection` 仅在迁移时读到即移除，不再回写 `app.json`。
 - 预设目录固定在 xml2pdf 仓库 `presets/`（上游 `user_presets_dir`），
   publish 不再单独配置目录；`xml2pdf.preset` 存**预设名（stem）**。
 - 已删除：`book_dir`、`local_xml_root`（XML 源归 xml2pdf）、

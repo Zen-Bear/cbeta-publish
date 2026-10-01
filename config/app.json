@@ -17,8 +17,7 @@
     "layout": "two",
     "app_font": "SimSun",
     "app_font_size": 10,
-    "supplement_ttf": "E:\\dev\\cbeta\\xml2pdf\\cbeta\\CBETA 補充字型\\CBETASupplement.ttf",
-    "last_collection": "E:\\dev\\cbeta\\publish\\collections\\ceshi\\霞鹜文楷.json"
+    "supplement_ttf": "E:\\dev\\cbeta\\xml2pdf\\cbeta\\CBETA 補充字型\\CBETASupplement.ttf"
   },
   "default_source": "xml",
   "default_formats": {

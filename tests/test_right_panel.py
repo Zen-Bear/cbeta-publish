@@ -959,7 +959,8 @@ class MadeBooksInfoTest(unittest.TestCase):
 
 
 class LastCollectionTest(unittest.TestCase):
-    """上次工作的丛书：启动按 ui.last_collection 选中；切换即持久化到 config。"""
+    """上次工作的丛书：兼容旧 ui.last_collection 启动选中；切换写入本地状态文件
+    （config/ui_state.json，不进 git），不再写回 config/app.json。"""
 
     def _win(self, last=None):
         _ensure_app()
@@ -994,8 +995,12 @@ class LastCollectionTest(unittest.TestCase):
                     win.coll_combo.setCurrentIndex(i)
                     break
             _ensure_app().processEvents()
-            disk = json.loads((tmp / "app.json").read_text(encoding="utf-8"))
-            self.assertEqual(disk["ui"]["last_collection"], str(c / "甲.json"))
+            state = json.loads((tmp / "ui_state.json").read_text(encoding="utf-8"))
+            self.assertEqual(state["last_collection"], str(c / "甲.json"))
+            # config/app.json 不再写 last_collection（不进版本库）
+            if (tmp / "app.json").exists():
+                disk = json.loads((tmp / "app.json").read_text(encoding="utf-8"))
+                self.assertNotIn("last_collection", (disk.get("ui") or {}))
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
