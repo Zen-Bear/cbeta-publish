@@ -452,11 +452,16 @@ class InternalDropTest(unittest.TestCase):
     class _Ev:
         def __init__(self):
             self.accepted = False
+            self.drop_action = None
         def source(self):
             return self.win.coll_list
         def position(self):
             from PySide6.QtCore import QPointF
             return QPointF(1, 1)
+        def setDropAction(self, a):
+            self.drop_action = a
+        def accept(self):
+            self.accepted = True
         def acceptProposedAction(self):
             self.accepted = True
         def ignore(self):
@@ -489,6 +494,103 @@ class InternalDropTest(unittest.TestCase):
         self.assertTrue(ev.accepted)
         self.assertEqual(self._d()["manual_volumes"][0]["work_ids"], ["T0001", "T0002"])
         self.assertEqual(self._d()["manual_volumes"][1]["work_ids"], [])
+
+    def test_drop_onto_collapsed_header_expands(self):
+        # 拖进折叠卷：卷自动展开，被拖的书可见（不再“消失”）
+        from PySide6.QtWidgets import QAbstractItemView
+        w = self.win
+        w._manual_new_volume(self._d(), ["T0001"])
+        hdr = w._coll_group_headers()[0]
+        hdr.setExpanded(False)
+        # 真实拖拽中被拖的书处于选中态：先选中 T0003
+        for it in w._coll_book_items():
+            if it.data(0, Qt.UserRole) == "T0003":
+                it.setSelected(True)
+        ev = InternalDropTest._Ev()
+        ev.win = w
+        with mock.patch.object(w.coll_list, "itemAt", return_value=hdr), \
+             mock.patch.object(w.coll_list, "dropIndicatorPosition",
+                               return_value=QAbstractItemView.OnItem), \
+             mock.patch.object(w, "_coll_dragged_works", return_value=["T0003"]):
+            w._coll_internal_drop(ev)
+        self.assertTrue(ev.accepted)
+        self.assertEqual(self._d()["manual_volumes"][0]["work_ids"], ["T0001", "T0003"])
+        heads = w._coll_group_headers()
+        self.assertTrue(heads[0].isExpanded())   # 目的地展开
+        books = [it.data(0, Qt.UserRole) for it in w._coll_book_items()]
+        self.assertIn("T0003", books)
+        self.assertTrue(w._coll_book_items()[books.index("T0003")].isSelected())
+
+    def test_flat_reorder_keeps_dragged_visible(self):
+        # 平铺拖拽排序：重排后仍可见/选中（不再“消失”）
+        from PySide6.QtWidgets import QAbstractItemView
+        w = self.win
+        w._coll_view[str(w.coll_combo.currentData())] = "flat"
+        w._load_coll_works()
+        tgt = next(it for it in w._coll_book_items()
+                   if it.data(0, Qt.UserRole) == "T0001")
+        ev = InternalDropTest._Ev()
+        ev.win = w
+        with mock.patch.object(w.coll_list, "itemAt", return_value=tgt), \
+             mock.patch.object(w.coll_list, "dropIndicatorPosition",
+                               return_value=QAbstractItemView.AboveItem), \
+             mock.patch.object(w, "_coll_dragged_works", return_value=["T0003"]):
+            w._coll_internal_drop(ev)
+        self.assertTrue(ev.accepted)
+        self.assertEqual(ev.drop_action, Qt.IgnoreAction)   # 拒绝 MoveAction，阻止 Qt 清理被拖行
+        self.assertEqual(self._d()["work_ids"][0], "T0003")   # 排到最前
+        items = {it.data(0, Qt.UserRole): it for it in w._coll_book_items()}
+        self.assertIn("T0003", items)
+        self.assertTrue(items["T0003"].isSelected())
+
+
+    def test_coll_tree_routes_drop_to_owner(self):
+        # 书单树用真子类重写拖放虚函数 → 必转交 MainWindow，杜绝 Qt 默认内部移动
+        # （默认移动会丢 setItemWidget 的行控件，表现为“拖动的书消失”）
+        from cbeta_publish.gui.main_window import _CollTree
+        w = self.win
+        self.assertIsInstance(w.coll_list, _CollTree)
+        self.assertNotIn("dropEvent", w.coll_list.__dict__)   # 不再是实例属性覆写
+        calls = []
+        real = w._coll_drop
+        w._coll_drop = lambda e: calls.append(e)
+        try:
+            w.coll_list.dropEvent(object())
+        finally:
+            w._coll_drop = real
+        self.assertEqual(len(calls), 1)
+
+
+    def test_real_drop_route_keeps_row_widgets(self):
+        # 经真实虚函数 dropEvent 走一遍：重排后每行仍有行控件（未因 Qt 原生移动变空/消失）
+        from PySide6.QtWidgets import QAbstractItemView
+        w = self.win
+        w._coll_view[str(w.coll_combo.currentData())] = "flat"
+        w._load_coll_works()
+        tgt = next(it for it in w._coll_book_items()
+                   if it.data(0, Qt.UserRole) == "T0001")
+
+        class _Ev:
+            def source(self): return w.coll_list
+            def position(self):
+                from PySide6.QtCore import QPointF
+                return QPointF(0, 0)
+            def mimeData(self): return None
+            def setDropAction(self, a): pass
+            def accept(self): pass
+            def acceptProposedAction(self): pass
+            def ignore(self): pass
+
+        with mock.patch.object(w.coll_list, "itemAt", return_value=tgt), \
+             mock.patch.object(w.coll_list, "dropIndicatorPosition",
+                               return_value=QAbstractItemView.AboveItem), \
+             mock.patch.object(w, "_coll_dragged_works", return_value=["T0003"]):
+            w.coll_list.dropEvent(_Ev())
+        items = w._coll_book_items()
+        self.assertTrue(items)
+        for it in items:
+            self.assertIsNotNone(w.coll_list.itemWidget(it, 0))
+        self.assertIn("T0003", [it.data(0, Qt.UserRole) for it in items])
 
 
 if __name__ == "__main__":
