@@ -1,12 +1,8 @@
-# CBETA 發佈管理器（publish 侧）
+# CBETA 電子書匯編、發佈管理器（非官方）
 
-把 CBETA 官方电子书/自制 XML 电子书**按丛书整理、合并、打包、校验**的桌面工具
-（PySide6）。路径「浏览 → 勾选 → 工作区 → 右栏丛书 → 发布」。
-
-- 单一来源的应用名/短名/版本见 `cbeta_publish/__init__.py`
-  （`APP_NAME` / `APP_ID="cbeta-publish"` / `__version__`）。
-- 跨仓调用契约见 `docs/链路B-设计契约.md`；UI 设计见 `docs/UI设计.md`；
-  总方案见 `docs/设计总案.md`；待办见 `TODO.md`。
+把 CBETA 官方电子书/自制 XML 电子书**按丛书整理、合并、打包、校验**的桌面工具（PySide6）。
+提供**部类 / 三藏 / 刊本 / 朝代 / 作者 / 丛书**等多种目录浏览视图，搜索勾选后**自动下载官方电子书**，
+按**部类、刊本或自选集册**分组，并合并为 **PDF / EPUB**。
 
 ## 界面预览
 
@@ -108,6 +104,13 @@ powershell -ExecutionPolicy Bypass -File build_exe.ps1
 ```bat
 python -m unittest discover -s tests
 ```
+
+## 开发与文档
+
+- 应用名/短名/版本**单一来源**：`cbeta_publish/__init__.py`
+  （`APP_NAME` / `APP_ID="cbeta-publish"` / `__version__`）。
+- 跨仓调用契约见 `docs/链路B-设计契约.md`；UI 设计见 `docs/UI设计.md`；
+  总方案见 `docs/设计总案.md`；待办见 `TODO.md`。
 
 ## 许可证
 
