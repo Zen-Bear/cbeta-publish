@@ -70,6 +70,7 @@ signtool verify /pa /v cbeta-publish.exe
   `SutraList.json`、`sutra_mapping.txt`、`all-creators-with-alias.json`、
   `creators-by-strokes-with-works.json`、`backup/`；排除 `cache/`）
 - `assets/images/`：`B01.jpg`、`B02.jpg`、`1.tif`、`2.tif`（＋备用 `A01/A02.jpg`）
+- `assets/fonts/`：封面标题字体（`朝華標題B.ttf`，LFS；config 相对引用）
 - `xml2pdf/`：从 xml2pdf 仓库拷贝的 `presets/` ＋ `run.json`（供制书选预设）
 - `collections/`：**演示丛书**（作者/主题/经/自定义示例 ＋ `categories.json`/`tags.json`），随包分发
 - 运行期自建：`collections_books/`、`cbeta_ebooks/`、

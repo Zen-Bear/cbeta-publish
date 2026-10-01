@@ -80,6 +80,7 @@ config/app.json         配置（可写）
 mulu/                   目录数据（可写；backup/ 存配置副本）
 collections/            演示/用户丛书 JSON（可写）
 assets/images/          封面图（B01/B02、1.*/2.* 回退）
+assets/fonts/           封面标题字体（朝華標題B.ttf）
 cbeta_ebooks/           官方电子书缓存
 cbeta_xml_ebooks/       自制书输出
 cbeta_verify/           校验工作目录

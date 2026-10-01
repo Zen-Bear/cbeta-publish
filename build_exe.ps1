@@ -116,6 +116,12 @@ foreach ($img in @("B01.jpg", "B02.jpg", "1.tif", "2.tif", "A01.jpg", "A02.jpg")
     if (Test-Path $src) { Copy-Item $src (Join-Path $Dist "assets\images\$img") -Force }
 }
 
+# 封面标题字体（assets/fonts/*，config 里 cover.styles.title.font 相对引用）
+New-Item -ItemType Directory -Force -Path (Join-Path $Dist "assets\fonts") | Out-Null
+if (Test-Path (Join-Path $Repo "assets\fonts")) {
+    robocopy (Join-Path $Repo "assets\fonts") (Join-Path $Dist "assets\fonts") /E /NFL /NDL /NJH /NJS /NP | Out-Null
+}
+
 # ---------- 4. 拷贝制书预设（xml2pdf/presets + run.json）----------
 $X2PDist = Join-Path $Dist "xml2pdf"
 New-Item -ItemType Directory -Force -Path $X2PDist | Out-Null

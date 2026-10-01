@@ -29,18 +29,6 @@
       "name": "其他",
       "preset": true,
       "description": "未分类或个人随选，兜底分组"
-    },
-    {
-      "id": "Bear",
-      "name": "自制丛书",
-      "description": "自个制的丛书",
-      "preset": false
-    },
-    {
-      "id": "ceshi",
-      "name": "测试",
-      "description": "test",
-      "preset": false
     }
   ]
 }
