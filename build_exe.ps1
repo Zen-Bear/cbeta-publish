@@ -170,7 +170,10 @@ if ($null -ne $cfg.xml2pdf) {
 }
 if ($null -ne $cfg.ui) {
     Set-Prop $cfg.ui "supplement_ttf" ""
-    Set-Prop $cfg.ui "last_collection" ""
+    # last_collection 改存本地 config/ui_state.json（不进版本库），不写进 config
+    if ($null -ne $cfg.ui.PSObject.Properties["last_collection"]) {
+        $cfg.ui.PSObject.Properties.Remove("last_collection")
+    }
 }
 if ($null -ne $cfg.cover -and $null -ne $cfg.cover.images) {
     if ($null -ne $cfg.cover.images.buddha) { Set-Prop $cfg.cover.images.buddha "file" "assets/images/B01.jpg" }

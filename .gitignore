@@ -21,6 +21,9 @@ _export/
 
 # 说明：assets/（含高分辨率扫描件与字体）、mulu/backup/ 已按需纳入版本控制。
 
+# ---- 本地 UI 状态（不进版本库）----
+config/ui_state.json
+
 # ---- 派生缓存 ----
 collections/index.json
 

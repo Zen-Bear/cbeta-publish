@@ -332,7 +332,7 @@ class MainWindow(QMainWindow):
         self._coll_changed=False
         self._coll_originals={}
         self._changed_colls=set()
-        self._last_coll_path=(config.get("ui",{}) or {}).get("last_collection") or None
+        self._last_coll_path=self._load_last_collection(config)
         self._last_publish={}
         self._work_groups={}   # {work_id: 册标签}（从刊本树拖入时记录，供「按册分册」）
         self._bulei_groups={}  # {work_id: [部类路径段]}（从部类树拖入时记录，供「按部类」归属）
@@ -2155,14 +2155,42 @@ class MainWindow(QMainWindow):
             self.cb_preset.setCurrentIndex(i)
         self.detail.setText(f"预设已保存：{path.name}")
 
-    def _persist_last_collection(self, path):
-        # 记住上次工作的丛书，下次启动直接打开（写整份内存配置，避免与磁盘合并半途状态）
+    def _ui_state_path(self):
+        # 本地 UI 状态（不进 git）：与 config 同级；测试用 _config_path 指向临时目录时随之隔离
+        return Path(self._config_path).parent / "ui_state.json"
+
+    def _load_last_collection(self, config):
+        # 上次工作的丛书：优先读本地状态文件；兼容旧配置里的 ui.last_collection
+        # （读到即从 config 移除，避免 _save_config 又写回、进 git）。
         try:
-            ui=self.config.setdefault("ui", {})
-            if ui.get("last_collection")==path:
+            sp=self._ui_state_path()
+            if sp.exists():
+                d=json.loads(sp.read_text(encoding="utf-8-sig")) or {}
+                (config.get("ui",{}) or {}).pop("last_collection", None)
+                v=d.get("last_collection")
+                if v:
+                    return v
+        except Exception as e:
+            print("load last collection fail", e)
+        return (config.get("ui",{}) or {}).pop("last_collection", None) or None
+
+    def _persist_last_collection(self, path):
+        # 记住上次工作的丛书，下次启动直接打开。写**本地状态文件**（config/ui_state.json，
+        # gitignored），不再写进 config/app.json，保证不进版本库。
+        try:
+            (self.config.get("ui",{}) or {}).pop("last_collection", None)
+            sp=self._ui_state_path()
+            cur={}
+            if sp.exists():
+                try:
+                    cur=json.loads(sp.read_text(encoding="utf-8-sig")) or {}
+                except Exception:
+                    cur={}
+            if cur.get("last_collection")==path:
                 return
-            ui["last_collection"]=path
-            self._save_config()
+            cur["last_collection"]=path
+            sp.parent.mkdir(parents=True, exist_ok=True)
+            sp.write_text(json.dumps(cur, ensure_ascii=False, indent=2), encoding="utf-8")
         except Exception as e:
             print("persist last collection fail", e)
 
