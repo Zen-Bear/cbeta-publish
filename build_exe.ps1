@@ -11,7 +11,8 @@
     - collections\ collections_books\ cbeta_ebooks\ cbeta_xml_ebooks\ cbeta_verify\  运行期自建
 
 .PARAMETER X2P
-  xml2pdf 仓库路径（收集 pycbeta 与预设）。默认 E:\dev\cbeta\xml2pdf。
+  cbeta-xml2pdf 仓库路径（https://github.com/Zen-Bear/cbeta-xml2pdf；收集 pycbeta 与预设）。
+  默认 E:\dev\cbeta\xml2pdf。
 
 .PARAMETER Python
   构建用 Python 解释器。默认 python。
@@ -70,7 +71,7 @@ if (-not (Test-Path (Join-Path $Repo "cbeta_publish\app.py"))) {
     throw "未找到 cbeta_publish\app.py，请在仓库根运行。"
 }
 if (-not (Test-Path (Join-Path $X2P "pycbeta"))) {
-    Warn "未找到 xml2pdf 仓库: $X2P（pycbeta 将无法打包，制书功能不可用）"
+    Warn "未找到 cbeta-xml2pdf 仓库: $X2P（pycbeta 将无法打包，制书功能不可用）"
 }
 
 # ---------- 2. PyInstaller 打包（onedir）----------

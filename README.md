@@ -8,6 +8,10 @@
 - 跨仓调用契约见 `docs/链路B-设计契约.md`；UI 设计见 `docs/UI设计.md`；
   总方案见 `docs/设计总案.md`；待办见 `TODO.md`。
 
+## 界面预览
+
+![主界面](docs/images/主界面.png)
+
 ## 示例输出（`demo/`）
 
 `demo/` 放了几份**真实产物**，方便直接查看效果：
@@ -21,7 +25,7 @@
 
 - Windows 10/11
 - Python 3.11–3.13（3.14 视 PyInstaller 支持而定）
-- 制书功能另需：xml2pdf 仓库（`pycbeta`）与其依赖（见下）+ Chromium
+- 制书功能另需：xml2pdf 仓库 [cbeta-xml2pdf](https://github.com/Zen-Bear/cbeta-xml2pdf)（`pycbeta`）与其依赖。
 
 ## 安装
 
@@ -31,11 +35,10 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-制书（链路 B）另需：
+制书（链路 B）另需 xml2pdf 仓库 [cbeta-xml2pdf](https://github.com/Zen-Bear/cbeta-xml2pdf)（`pycbeta`）与其依赖：
 
 ```bat
-REM 让 publish 能 import pycbeta：安装 xml2pdf 或把仓库放到 config 的 xml2pdf.path
-python -m playwright install chromium
+REM 让 publish 能 import pycbeta：安装/克隆 cbeta-xml2pdf 或把仓库放到 config 的 xml2pdf.path
 ```
 
 ## 运行
@@ -61,7 +64,7 @@ python cbeta_publish\app.py
   （官方缓存）、`xml_to_ebooks_dir`（自制书）、`verify_dir`（校验）、`output_dir`
   （丛书输出）。绝对路径或相对工程根。
 - 来源/格式：`default_source`（official/xml）、`default_formats.{merge,official,xml}`。
-- 制书：`xml2pdf.path`（xml2pdf 仓库）、`xml2pdf.cbeta_ebook`（CBETA XML 目录，
+- 制书：`xml2pdf.path`（cbeta-xml2pdf 仓库）、`xml2pdf.cbeta_ebook`（CBETA XML 目录，
   `--cbeta-ebook`）、`xml2pdf.preset`、`xml2pdf.verify_build`。
 - 分册：`merge.mode`（none/volume/catalog/manual/ask）、`merge.depth`、
   `merge.name_template`、`merge.ask_last`。
@@ -95,7 +98,6 @@ packaging/ build_exe.ps1  打包脚本与说明
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File build_exe.ps1
-# 连 Chromium 一起：-WithBrowsers
 ```
 
 产物 `dist\cbeta-publish\`（整目录可拷贝到任意机器运行）；默认同时生成交付包

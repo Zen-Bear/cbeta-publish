@@ -96,7 +96,7 @@ def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=No
   },
   "xml_to_ebooks_dir": "E:/dev/cbeta/publish/cbeta_xml_ebooks",   // 自制书输出根（可配，绝对路径）
   "xml2pdf": {
-    "path": "E:/dev/cbeta/xml2pdf",                    // 自制程序仓库（预设目录=其 presets/）
+    "path": "E:/dev/cbeta/xml2pdf",                    // cbeta-xml2pdf 仓库（预设目录=其 presets/）
     "cbeta_ebook": "E:/dev/cbeta/publish/cbeta_xml",   // CBETA XML 目录（--cbeta-ebook；不可空，空则用默认）
     "preset": "",                                    // 默认预设名（presets/ 下 stem）；空=对面默认
     "verify_build": false                            // 制作书籍：true=自制/重制后校验并仅导入通过项
@@ -109,7 +109,7 @@ def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=No
 - `config/ui_state.json`：上次工作的丛书路径（`last_collection`），切换右栏丛书即写此文件
   （与 `app.json` 同级、**gitignored，不进版本库**），下次启动按其选中（缺失则回退空白/首项）。
   旧配置里的 `ui.last_collection` 仅在迁移时读到即移除，不再回写 `app.json`。
-- 预设目录固定在 xml2pdf 仓库 `presets/`（上游 `user_presets_dir`），
+- 预设目录固定在 xml2pdf 仓库 [cbeta-xml2pdf](https://github.com/Zen-Bear/cbeta-xml2pdf) `presets/`（上游 `user_presets_dir`），
   publish 不再单独配置目录；`xml2pdf.preset` 存**预设名（stem）**。
 - 已删除：`book_dir`、`local_xml_root`（XML 源归 xml2pdf）、
   `xml2pdf.{page,font_lang,engine,vertical}`（preset 为准）、`xml2pdf.preset_dir`、
