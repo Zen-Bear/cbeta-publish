@@ -44,7 +44,8 @@ DEFAULT_CONFIG = {
     "merge": {"mode": "none", "depth": 2, "by_volume": False, "name_template": "{coll}.{nn}.{seg}"},
     "xml2pdf": {"path": "E:/dev/cbeta/xml2pdf",
                 "cbeta_ebook": str(PROJECT_ROOT / "cbeta_xml"),
-                "preset": "", "verify_build": False},
+                "preset": "", "verify_build": False,
+                "verify_max_diff": 5, "verify_diff_lines": 5},
     "catalog": {"filters": {"tripitaka": {"hidden": []}, "dynasty": {"hidden": []}, "vol": {"hidden": []}}},
     "cover": {
         "organizer": "CBETA 整理",
@@ -459,6 +460,19 @@ class SettingsDialog(QDialog):
         (self.rb_build_verify if (self._cfg.get("xml2pdf", {}) or {}).get("verify_build")
          else self.rb_build_noverify).setChecked(True)
         form.addRow("制作书籍", self.build_verify_box)
+        _x2p = self._cfg.get("xml2pdf", {}) or {}
+        self.sp_verify_maxdiff = self._no_wheel_until_focused(QSpinBox())
+        self.sp_verify_maxdiff.setRange(0, 50)
+        self.sp_verify_maxdiff.setValue(int(_x2p.get("verify_max_diff", 5) or 5))
+        self.sp_verify_maxdiff.setToolTip(
+            "校验阈值：报告里 缺失+多余 行数 ≤ 此值判为通过（默认 5；透传上游 --verify-max-diff）")
+        form.addRow("校验阈值（缺+多）", self.sp_verify_maxdiff)
+        self.sp_verify_difflines = self._no_wheel_until_focused(QSpinBox())
+        self.sp_verify_difflines.setRange(0, 50)
+        self.sp_verify_difflines.setValue(int(_x2p.get("verify_diff_lines", 5) or 5))
+        self.sp_verify_difflines.setToolTip(
+            "失败时报告里列出的上下文对比行数（默认 5；透传上游 --verify-diff-lines）")
+        form.addRow("报告失败上下文行数", self.sp_verify_difflines)
         form.addRow("自制程序路径", self._dir_row(self.ed_x2p))
         form.addRow("CBETA XML 目录", self._dir_row(self.ed_x2p_ebook))
         form.addRow("自制电子书", self._dir_row(self.ed_xmlbooks))
@@ -866,6 +880,8 @@ class SettingsDialog(QDialog):
             x2p.get("cbeta_ebook") or str(PROJECT_ROOT / "cbeta_xml")))
         self._reload_preset_combo(keep=x2p.get("preset", ""))
         (self.rb_build_verify if x2p.get("verify_build") else self.rb_build_noverify).setChecked(True)
+        self.sp_verify_maxdiff.setValue(max(0, min(50, int(x2p.get("verify_max_diff", 5) or 5))))
+        self.sp_verify_difflines.setValue(max(0, min(50, int(x2p.get("verify_diff_lines", 5) or 5))))
         cover = c.setdefault("cover", {})
         self._migrate_series_imprint(cover)
         self.ed_organizer.setText(cover.get("organizer", "CBETA 整理"))
@@ -1515,6 +1531,8 @@ class SettingsDialog(QDialog):
             or str(PROJECT_ROOT / "cbeta_xml"),
             "preset": self.cb_preset.currentData() or "",
             "verify_build": self.rb_build_verify.isChecked(),
+            "verify_max_diff": self.sp_verify_maxdiff.value(),
+            "verify_diff_lines": self.sp_verify_difflines.value(),
         })
         # 封面/版式
         cover = c.setdefault("cover", {})

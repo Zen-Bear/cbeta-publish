@@ -380,6 +380,35 @@ class BridgeVerifyWorkTest(unittest.TestCase):
         self.assertIn("--verify", a)
         self.assertEqual(a[a.index("--cbeta-ebook") + 1], str(b.xml_work_dir(self.cfg)))
         self.assertNotIn("--config", a)   # 出厂默认不传
+        # 校验阈值：缺省透传 5/5
+        self.assertEqual(a[a.index("--verify-max-diff") + 1], "5")
+        self.assertEqual(a[a.index("--verify-diff-lines") + 1], "5")
+
+    def test_argv_verify_thresholds(self):
+        import cbeta_publish.books.xml2pdf_bridge as b
+        self.cfg["xml2pdf"]["verify_max_diff"] = 3
+        self.cfg["xml2pdf"]["verify_diff_lines"] = 7
+        calls, restore = self._patch()
+        try:
+            b.verify_work("T0001", ["pdf"], self.dir / "vt", self.cfg)
+        finally:
+            restore()
+        a = calls[0]
+        self.assertEqual(a[a.index("--verify-max-diff") + 1], "3")
+        self.assertEqual(a[a.index("--verify-diff-lines") + 1], "7")
+
+    def test_argv_verify_thresholds_clamped(self):
+        import cbeta_publish.books.xml2pdf_bridge as b
+        self.cfg["xml2pdf"]["verify_max_diff"] = 999
+        self.cfg["xml2pdf"]["verify_diff_lines"] = -3
+        calls, restore = self._patch()
+        try:
+            b.verify_work("T0001", ["pdf"], self.dir / "vc", self.cfg)
+        finally:
+            restore()
+        a = calls[0]
+        self.assertEqual(a[a.index("--verify-max-diff") + 1], "50")
+        self.assertEqual(a[a.index("--verify-diff-lines") + 1], "0")
 
     def test_no_report_returns_none(self):
         import cbeta_publish.books.xml2pdf_bridge as b

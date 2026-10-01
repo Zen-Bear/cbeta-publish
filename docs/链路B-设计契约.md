@@ -172,7 +172,10 @@ def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=No
   自制书目录里**缺少**的书，`[重制]` 整批全部重做；触发 `VerifyWorker` 逐本调
   `bridge.verify_work` → 库调用
   `pycbeta.cli.main(["-i", work, "-f", <勾选>, "-o", <vdir>, [--config wrap],
-  "--cbeta-ebook", <工作根>, "--verify"])`（上游 `cli.py` 修 work id 校验 `2a10d12`；
+  "--cbeta-ebook", <工作根>, "--verify",
+  "--verify-max-diff", N, "--verify-diff-lines", M])`
+  （阈值取全局 `xml2pdf.verify_max_diff`（默认 5）与 `verify_diff_lines`（默认 5），钳制 0–50；
+  上游预设 `verify` 段无此二项、仅 CLI 支持，故 publish 始终透传。上游 `cli.py` 修 work id 校验 `2a10d12`；
   官方基线源目录 `src` 亦按 work id 修正 `16df9cf`：文件→其目录 / 目录→该目录 /
   編號→已材料化 XML 的 work 目录，否则 `find_official`/`auto_fetch` 定位不到）；
   预设经临时 run.json 保主题。**比对档由上游 `generate_formal` 生成**（`verify` 段覆盖

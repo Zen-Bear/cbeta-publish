@@ -478,7 +478,20 @@ def verify_work(work: str, fmts, out_dir, config: dict, preset=None, stop=None) 
     except Exception as e:
         print("seed baselines fail", e)
     run_wrap = write_run_wrapper(config, preset) if preset else None
-    argv = ["-i", str(work), "-f", fmt_arg, "-o", str(out_dir), "--verify"]
+    # 校验阈值（全局配置）：缺+多 ≤ verify_max_diff 判 OK；verify_diff_lines 为失败报告上下文行数。
+    # 上游仅 CLI 支持（预设 verify 段无此二项），故始终透传；钳制 0–50。
+    try:
+        _maxd = int(_cfg(config).get("verify_max_diff", 5))
+    except Exception:
+        _maxd = 5
+    try:
+        _dl = int(_cfg(config).get("verify_diff_lines", 5))
+    except Exception:
+        _dl = 5
+    _maxd = max(0, min(50, _maxd))
+    _dl = max(0, min(50, _dl))
+    argv = ["-i", str(work), "-f", fmt_arg, "-o", str(out_dir), "--verify",
+            "--verify-max-diff", str(_maxd), "--verify-diff-lines", str(_dl)]
     if run_wrap is not None:
         argv += ["--config", str(run_wrap)]
     elif preset:

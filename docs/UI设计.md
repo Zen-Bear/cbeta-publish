@@ -200,7 +200,9 @@
   - 分册文件名模板（`merge.name_template`，缺省 `{coll}.{nn}.{seg}`，见 §7 命名）。
     模式/深度/模板/阈值均落盘（`merge.*`＋`pdf.split_pages`/`epub.split_items`）。
 - **自制E书**：**制作书籍：○校验 ○无校验**（`xml2pdf.verify_build`）——选校验后，
-  右栏 `[自制]/[重制]` 生成后逐本校验、仅通过项导入；另含 自制程序路径 /
+  右栏 `[自制]/[重制]` 生成后逐本校验、仅通过项导入；校验阈值（缺+多，`verify_max_diff`，
+  默认 5）与报告失败上下文行数（`verify_diff_lines`，默认 5）均为 0–50 的数值输入
+  （透传上游 `--verify-max-diff`/`--verify-diff-lines`）；另含 自制程序路径 /
   CBETA XML 目录（传 `--cbeta-ebook`，不可为空）/ 自制电子书目录（默认 `cbeta_xml_ebooks`）/
   校验工作目录（默认 `cbeta_verify`）/ 默认预设。均带浏览按钮。
 - **封面/版式**：左上角系列名/整理者署名/日期（`{date}`=今天，可写任意文字，留空不绘制；
