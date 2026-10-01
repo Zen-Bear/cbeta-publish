@@ -35,3 +35,10 @@ dist/
 build/
 *.spec.bak
 
+# ---- 示例输出 demo/（反向放行，覆盖上面的产物忽略规则） ----
+!demo/
+!demo/cbeta_xml_ebooks/
+!demo/cbeta_xml_ebooks/**
+!demo/collections_books/
+!demo/collections_books/**
+

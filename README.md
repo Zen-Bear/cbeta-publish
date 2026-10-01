@@ -8,6 +8,15 @@
 - 跨仓调用契约见 `docs/链路B-设计契约.md`；UI 设计见 `docs/UI设计.md`；
   总方案见 `docs/设计总案.md`；待办见 `TODO.md`。
 
+## 示例输出（`demo/`）
+
+`demo/` 放了几份**真实产物**，方便直接查看效果：
+
+- `demo/cbeta_xml_ebooks/`：自制书输出（`{id 书名}.docx` / `.pdf`，如 `CC0003…`、`T1711…`）。
+- `demo/collections_books/`：丛书合并产物（`.epub`，如《大乘起信论》解题、圓測法師著作集 等）。
+
+输入侧的演示丛书在 `collections/`（作者/主题/经/自定义示例）。
+
 ## 环境要求
 
 - Windows 10/11

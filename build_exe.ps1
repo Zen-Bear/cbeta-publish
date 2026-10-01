@@ -129,8 +129,14 @@ if (Test-Path (Join-Path $X2P "presets")) {
     Warn "未找到 $X2P\presets，制书将无预设可选"
 }
 
-# ---------- 5. 运行期自建目录 ----------
-foreach ($d in @("collections", "collections_books", "cbeta_ebooks",
+# ---------- 5. 演示丛书 + 运行期自建目录 ----------
+# 演示用丛书（collections/，含作者/主题/经/自定义示例）随包分发
+if (Test-Path (Join-Path $Repo "collections")) {
+    robocopy (Join-Path $Repo "collections") (Join-Path $Dist "collections") /E /NFL /NDL /NJH /NJS /NP | Out-Null
+} else {
+    New-Item -ItemType Directory -Force -Path (Join-Path $Dist "collections") | Out-Null
+}
+foreach ($d in @("collections_books", "cbeta_ebooks",
                  "cbeta_xml_ebooks", "cbeta_verify", "mulu\cache")) {
     New-Item -ItemType Directory -Force -Path (Join-Path $Dist $d) | Out-Null
 }

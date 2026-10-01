@@ -71,7 +71,8 @@ signtool verify /pa /v cbeta-publish.exe
   `creators-by-strokes-with-works.json`、`backup/`；排除 `cache/`）
 - `assets/images/`：`B01.jpg`、`B02.jpg`、`1.tif`、`2.tif`（＋备用 `A01/A02.jpg`）
 - `xml2pdf/`：从 xml2pdf 仓库拷贝的 `presets/` ＋ `run.json`（供制书选预设）
-- 运行期自建：`collections/`、`collections_books/`、`cbeta_ebooks/`、
+- `collections/`：**演示丛书**（作者/主题/经/自定义示例 ＋ `categories.json`/`tags.json`），随包分发
+- 运行期自建：`collections_books/`、`cbeta_ebooks/`、
   `cbeta_xml_ebooks/`、`cbeta_verify/`、`mulu/cache/`
 
 ### 未打入（可在目标机/构建机另行准备）
