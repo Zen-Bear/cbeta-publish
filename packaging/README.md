@@ -80,6 +80,7 @@ signtool verify /pa /v cbeta-publish.exe
   或用 `-WithBrowsers` 把 `%LOCALAPPDATA%\ms-playwright` 拷到 `exe\ms-playwright`；
   程序冻结时会自动把该目录设为 `PLAYWRIGHT_BROWSERS_PATH`。
 - CBETA XML 目录：在「设置」里填（`config` 的 `xml2pdf.cbeta_ebook`）。
+- `demo/`：仅仓库展示用的示例产物，**不打包进 exe**。（打包会含 `collections/` 演示丛书。）
 
 ## 关键机制
 
