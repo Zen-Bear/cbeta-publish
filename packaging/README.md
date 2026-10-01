@@ -12,8 +12,8 @@ powershell -ExecutionPolicy Bypass -File build_exe.ps1 -WithBrowsers
 # 只重做数据拷贝/配置改写，不重新 PyInstaller
 powershell -ExecutionPolicy Bypass -File build_exe.ps1 -SkipBuild
 
-# 指定 xml2pdf 仓库 / Python
-powershell -ExecutionPolicy Bypass -File build_exe.ps1 -X2P D:\xml2pdf -Python py -3
+# 指定 cbeta-xml2pdf 仓库 / Python
+powershell -ExecutionPolicy Bypass -File build_exe.ps1 -X2P D:\cbeta-xml2pdf -Python py -3
 
 # 代码签名（减少 SmartScreen 拦截）
 powershell -ExecutionPolicy Bypass -File build_exe.ps1 -CertThumbprint 1A2B3C4D...
@@ -61,7 +61,7 @@ signtool verify /pa /v cbeta-publish.exe
 - `cbeta_publish/` 全包（源码运行入口 `cbeta_publish/app.py`）
 - 第三方：PySide6、pypinyin、pymupdf(`fitz`)、EbookLib、reportlab、opencc、
   lxml、tinycss2、fontTools、playwright
-- `pycbeta`（从 `-X2P` 指定的 xml2pdf 仓库收集：子模块 + `styles/`、`assets/`、`data/`）
+- `pycbeta`（从 `-X2P` 指定的 xml2pdf 仓库 [cbeta-xml2pdf](https://github.com/Zen-Bear/cbeta-xml2pdf) 收集：子模块 + `styles/`、`assets/`、`data/`）
 - 包内只读资源：`cbeta_publish/gui/theme/tokens.json` 与 `icons/*.png`
 
 ### 可写数据（exe 同级，便携）
@@ -71,7 +71,7 @@ signtool verify /pa /v cbeta-publish.exe
   `creators-by-strokes-with-works.json`、`backup/`；排除 `cache/`）
 - `assets/images/`：`B01.jpg`、`B02.jpg`、`1.tif`、`2.tif`（＋备用 `A01/A02.jpg`）
 - `assets/fonts/`：封面标题字体（`朝華標題B.ttf`，LFS；config 相对引用）
-- `xml2pdf/`：从 xml2pdf 仓库拷贝的 `presets/` ＋ `run.json`（供制书选预设）
+- `xml2pdf/`：从 cbeta-xml2pdf 仓库拷贝的 `presets/` ＋ `run.json`（供制书选预设）
 - `collections/`：**演示丛书**（作者/主题/经/自定义示例 ＋ `categories.json`/`tags.json`），随包分发
 - 运行期自建：`collections_books/`、`cbeta_ebooks/`、
   `cbeta_xml_ebooks/`、`cbeta_verify/`、`mulu/cache/`
