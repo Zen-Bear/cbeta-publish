@@ -1,6 +1,21 @@
-PySide6>=6.6
-pypinyin
-pymupdf
-EbookLib
-reportlab
-opencc-python-reimplemented
+# CBETA 發佈管理器 — 运行依赖（固定版本）
+# 安装：pip install -r requirements.txt
+
+# 界面
+PySide6==6.11.2
+
+# 拼音排序 / 繁简
+pypinyin==0.55.0
+opencc-python-reimplemented==0.1.7
+
+# 合并 / 导出
+PyMuPDF==1.28.2
+EbookLib==0.20
+reportlab==5.0.0
+
+# 自制书（链路 B，pycbeta）依赖：随 xml2pdf 仓库的 requirements.txt 亦需满足
+lxml==6.1.1
+tinycss2==1.5.1
+fontTools==4.63.0
+playwright==1.61.0
+# PDF 引擎需 Chromium：python -m playwright install chromium

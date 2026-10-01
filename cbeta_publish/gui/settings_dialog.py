@@ -12,7 +12,9 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QEvent
 from PySide6.QtGui import QColor
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+from cbeta_publish.paths import app_root
+
+PROJECT_ROOT = app_root()
 CONFIG_PATH = PROJECT_ROOT / "config" / "app.json"
 BACKUP_DIR = PROJECT_ROOT / "mulu" / "backup"
 IMAGES_DIR = PROJECT_ROOT / "assets" / "images"

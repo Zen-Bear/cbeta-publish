@@ -9,8 +9,9 @@ import re
 from pathlib import Path
 
 from cbeta_publish._vendor import cbeta_fetch as cf
+from cbeta_publish.paths import app_root
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = app_root()
 
 # 文件名形态（`T01n0001`）：共享层只认作品编号，不认这种
 _BASENAME_RE = re.compile(r"[A-Za-z]{1,2}[0-9]{2}[nN][0-9]{4,6}[A-Za-z]?")

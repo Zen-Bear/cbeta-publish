@@ -16,10 +16,11 @@ from cbeta_publish.utils import text_util
 from cbeta_publish.books import official_ebook_source
 from cbeta_publish.catalog import work_id
 from cbeta_publish.collection.collection_model import normalize_collection, write_index
+from cbeta_publish.paths import app_root
 from cbeta_publish import APP_NAME, __version__
 
 WORK_RE = re.compile(r"[A-Z]+[0-9A-Za-z]+")
-CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "app.json"
+CONFIG_PATH = app_root() / "config" / "app.json"
 
 #: 独立窗输出 → publish 导入的简明规则（「制作书籍 → 导入说明…」弹窗；
 #: 完整规范见 docs/链路B-设计契约.md §9）
@@ -1927,7 +1928,7 @@ class MainWindow(QMainWindow):
         # 布局（三栏/二栏）落盘，下次启动沿用
         try:
             p=Path(self._config_path)
-            cfg=json.loads(p.read_text(encoding="utf-8")) if p.exists() else self.config
+            cfg=json.loads(p.read_text(encoding="utf-8-sig")) if p.exists() else self.config
             cfg.setdefault("ui", {})["layout"]=self._layout_mode()
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")

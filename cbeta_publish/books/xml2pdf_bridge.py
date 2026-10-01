@@ -15,7 +15,9 @@ import io
 import sys
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+from cbeta_publish.paths import app_root
+
+PROJECT_ROOT = app_root()
 X2P_DEFAULT_DIR = "E:/dev/cbeta/xml2pdf"
 XML_BOOKS_DEFAULT_DIR = str(PROJECT_ROOT / "cbeta_xml_ebooks")
 XML_WORK_DEFAULT_DIR = str(PROJECT_ROOT / "cbeta_xml")   # CBETA XML 目录（默认工作根，不可空）
