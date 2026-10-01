@@ -633,6 +633,80 @@ class RenameCollectionTest(unittest.TestCase):
             if win.coll_combo.itemData(i) == b:
                 self.assertEqual(win.coll_combo.itemText(i), "R改好")
 
+    def test_name_enter_opens_category_popup(self):
+        # 「保存空白丛书」弹窗：名称框回车应打开分类下拉，而不是直接接受弹窗
+        # （默认项是「＋ 新建分类…」，直接接受会跳进新建分类）
+        from PySide6.QtWidgets import QApplication, QLineEdit, QComboBox
+        from PySide6.QtCore import QTimer, QEvent, Qt
+        from PySide6.QtGui import QKeyEvent
+        win = self.win
+        seen = {}
+
+        def act():
+            dlg = QApplication.activeModalWidget()
+            seen["dlg"] = dlg
+            le = dlg.findChild(QLineEdit)
+            cb = dlg.findChild(QComboBox)
+            seen["cb"] = cb
+            le.setFocus()
+            QApplication.sendEvent(le, QKeyEvent(QEvent.KeyPress, Qt.Key_Return,
+                                                 Qt.NoModifier))
+            _ensure_app().processEvents()
+            seen["popup"] = cb.view().isVisible()   # 分类下拉已弹出
+            seen["still_open"] = dlg.isVisible()     # 未被回车直接接受
+            dlg.reject()
+
+        QTimer.singleShot(0, act)
+        win._ask_name_category("保存空白丛书", "空白")
+        self.assertTrue(seen.get("still_open"))     # 未因回车而关闭
+        self.assertTrue(seen.get("popup"))           # 回车打开了分类下拉
+
+    def test_delete_refreshes_left_coll_tree(self):
+        # 左栏当前为「丛书」视图：右栏删除丛书后，左栏同步去掉该丛书
+        from PySide6.QtCore import Qt
+        win = self.win
+        b = self._add("custom/R删.json", {"id": "rd", "name": "R删",
+                                          "category": "custom", "tags": [], "work_ids": []})
+        win.nav_combo.setCurrentText("丛书")
+        win._refresh_coll_tree()   # 确保左栏含刚加入的丛书
+        _ensure_app().processEvents()
+
+        def _tree_names():
+            return [win.tree.topLevelItem(i).data(0, Qt.UserRole).get("name")
+                    for i in range(win.tree.topLevelItemCount())]
+
+        self.assertIn("R删", _tree_names())
+        self._select(b)
+        win._delete_collection()   # 本会话新建且为空 → 不弹确认
+        _ensure_app().processEvents()
+        self.assertNotIn("R删", _tree_names())
+        self.assertFalse(Path(b).exists())
+
+    def test_rename_refreshes_left_coll_tree(self):
+        # 左栏当前为「丛书」视图：右栏改名后，左栏同步显示新名
+        from unittest import mock
+        from PySide6.QtCore import Qt
+        win = self.win
+        b = self._add("custom/R名.json", {"id": "rn", "name": "R名",
+                                          "category": "custom", "tags": [], "work_ids": []})
+        win.nav_combo.setCurrentText("丛书")
+        win._refresh_coll_tree()   # 确保左栏含刚加入的丛书（nav 可能已是「丛书」不触发刷新）
+        _ensure_app().processEvents()
+
+        def _tree_names():
+            return [win.tree.topLevelItem(i).data(0, Qt.UserRole).get("name")
+                    for i in range(win.tree.topLevelItemCount())]
+
+        self.assertIn("R名", _tree_names())
+        self._select(b)
+        with mock.patch("cbeta_publish.gui.main_window.QInputDialog.getText",
+                        return_value=("R名好", True)):
+            win._rename_collection()
+        _ensure_app().processEvents()
+        names = _tree_names()
+        self.assertIn("R名好", names)
+        self.assertNotIn("R名", names)
+
 
 if __name__ == "__main__":
     unittest.main()
