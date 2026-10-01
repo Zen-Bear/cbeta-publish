@@ -75,15 +75,17 @@ python cbeta_publish\app.py
 ## 目录结构（要点）
 
 ```
-cbeta_publish/          源码（app.py 入口；gui/ books/ catalog/ collection/ creators/）
+cbeta_publish/          源码（app.py 入口；paths.py；gui/ books/ catalog/ collection/ creators/）
 config/app.json         配置（可写）
 mulu/                   目录数据（可写；backup/ 存配置副本）
-collections/            丛书 JSON（可写）
+collections/            演示/用户丛书 JSON（可写）
 assets/images/          封面图（B01/B02、1.*/2.* 回退）
 cbeta_ebooks/           官方电子书缓存
 cbeta_xml_ebooks/       自制书输出
 cbeta_verify/           校验工作目录
 collections_books/      丛书合并/打包输出
+demo/                   示例产物（自制 docx/pdf、合并 epub）
+packaging/ build_exe.ps1  打包脚本与说明
 ```
 
 ## 打包为独立 exe

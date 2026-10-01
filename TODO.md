@@ -31,8 +31,9 @@
 - **软件名/版本**：单一来源 `cbeta_publish/__init__.py`（`APP_NAME`/`APP_ID`/`__version__`），
   窗口标题与 `QApplication` 元数据取此处。
 - **分册模式**：`catalog/catalog_path.py`（部类/刊本路径+序+`_` 命名）；`_group_works(mode, depth)`；
-  `gui/merge_dialog.py`（「合并时选择」每次弹框，记忆 `merge.ask_last`）；设置页四选一 + 深度；
-  单测 `tests/test_by_catalog.py`。右栏不做分组。
+  `gui/merge_dialog.py`（「合并时选择」每次弹框，记忆 `merge.ask_last`）；设置页五选一 + 深度
+  （含「按手工分册」）；右栏书单支持分组（平铺/按刊本册/按部类/手工分册，`_CollTree`）；
+  单测 `tests/test_by_catalog.py`、`tests/test_manual_volumes.py`。
 
 ## 待办
 
