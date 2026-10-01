@@ -50,9 +50,10 @@
 - ZIP/导出 也按分册模式（当前仅合并）；「合并时选择」与 ZIP/导出共用弹框；
   作者/朝代维度；三藏不单列。
 
-### P2 — 校验可配置阈值
-- 校验的 `maxDiff`/`diffLines` 目前取上游 CLI 默认（10/5），未接预设 `verify` 配置；
-  如需按丛书调阈值，评估经 `bridge.verify_work` 透传。
+### P2 — 校验可配置阈值（已完成）
+- [x] 全局配置 `xml2pdf.verify_max_diff`（默认 5）与 `verify_diff_lines`（默认 5）；
+  设置页「自制E书」以 0–50 数值输入，`bridge.verify_work` 始终透传上游
+  `--verify-max-diff`/`--verify-diff-lines`（钳制 0–50）。上游预设 `verify` 段无此二项，仅 CLI 支持。
 
 ### P3 — 外观/语言（待定）
 - 深色/浅色/繁简：`ThemeManager`/`i18n` 现为桩；先用 OpenCC 全文案转 zh-Hant，`en` 后置。

@@ -290,6 +290,25 @@ class SettingsDialogTest(unittest.TestCase):
         d2 = SettingsDialog(cfg, None)
         self.assertTrue(d2.rb_build_verify.isChecked())
 
+    def test_verify_thresholds_default_and_roundtrip(self):
+        # 校验阈值/上下文行数：0–50，默认 5；落盘回读
+        dlg = self._dlg()
+        for sp in (dlg.sp_verify_maxdiff, dlg.sp_verify_difflines):
+            self.assertEqual(sp.minimum(), 0)
+            self.assertEqual(sp.maximum(), 50)
+            self.assertEqual(sp.value(), 5)
+        dlg.sp_verify_maxdiff.setValue(3)
+        dlg.sp_verify_difflines.setValue(7)
+        out = dlg._collect()["xml2pdf"]
+        self.assertEqual(out["verify_max_diff"], 3)
+        self.assertEqual(out["verify_diff_lines"], 7)
+        cfg = copy.deepcopy(DEFAULT_CONFIG)
+        cfg["xml2pdf"]["verify_max_diff"] = 2
+        cfg["xml2pdf"]["verify_diff_lines"] = 9
+        d2 = SettingsDialog(cfg, None)
+        self.assertEqual(d2.sp_verify_maxdiff.value(), 2)
+        self.assertEqual(d2.sp_verify_difflines.value(), 9)
+
     def test_cover_date_row_order_and_roundtrip(self):
         # 行序：左上角系列名 → 整理者署名 → 日期；date_text 落盘回读
         from PySide6.QtWidgets import QFormLayout
