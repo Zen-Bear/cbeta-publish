@@ -3,6 +3,8 @@ from pathlib import Path
 import datetime
 import re
 
+from cbeta_publish.paths import app_root
+
 # 繁体字形覆盖率检查样本（CBETA 内容以繁体为主）
 _CJK_SAMPLE = "緣類毘經藏録（）說明本會嚴"
 # 候补全字库（配置字体缺字形时替换；宋体放最后）
@@ -106,11 +108,11 @@ def _detect_paper(w, h):
 def _font_path(p):
     pp = Path(p)
     if not pp.is_absolute():
-        pp = Path(__file__).resolve().parents[2] / pp
+        pp = app_root() / pp
     return pp
 
 
-_REPO_ROOT = Path(__file__).resolve().parents[2]
+_REPO_ROOT = app_root()
 IMAGES_DIR = _REPO_ROOT / "assets" / "images"
 
 #: 封面图后缀（"不用管后缀名"；同号多文件并存时排序取第一个）

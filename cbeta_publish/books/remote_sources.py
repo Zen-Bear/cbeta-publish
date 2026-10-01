@@ -8,8 +8,9 @@ mulu/backup/last/。
 from pathlib import Path
 
 from cbeta_publish._vendor import cbeta_fetch as cf
+from cbeta_publish.paths import app_root
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = app_root()
 
 # (key, 分类, 本地相对路径, REMOTE_URLS 键)
 # 分类用于备份/展示：部类 / 作者 / 经录 / 朝代 / 刊本

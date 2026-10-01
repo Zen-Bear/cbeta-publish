@@ -2,7 +2,7 @@
 
 > 设计文档：`docs/设计总案.md`（总方案）、`docs/UI设计.md`（UI）、
 > `docs/链路B-设计契约.md`（与 xml2pdf 的跨仓调用契约）。
-> 测试：`python -m unittest discover tests`（当前 292 项通过）。
+> 测试：`python -m unittest discover tests`（当前 489 项通过）。
 
 ## 已完成（里程碑）
 
@@ -56,12 +56,15 @@
 ### P3 — 外观/语言（待定）
 - 深色/浅色/繁简：`ThemeManager`/`i18n` 现为桩；先用 OpenCC 全文案转 zh-Hant，`en` 后置。
 
-### P3 — 打包 / 文档（待定）
-- 软件名/版本**单一来源**：`cbeta_publish/__init__.py` 的 `APP_NAME`（显示名）、
-  `APP_ID="cbeta-publish"`（包/可执行短名）、`__version__`（语义化 `MAJOR.MINOR.PATCH`，
-  当前 `0.1.0`）。窗口标题、`QApplication` 元数据取此处；发布时手动升版本并打 `vX.Y.Z` tag。
-- Windows 启动器/打包（PyInstaller 或快捷方式，用 `APP_ID` 命名）、`requirements.txt` 固定版本。
-- README（安装/运行/配置说明）。
+### P3 — 打包 / 文档（已完成）
+- [x] 软件名/版本**单一来源**：`cbeta_publish/__init__.py` 的 `APP_NAME`（显示名）、
+  `APP_ID="cbeta-publish"`（包/可执行短名）、`__version__`；窗口标题、`QApplication`
+  元数据、**打包产物名**均取此处；发布时手动升版本并打 `vX.Y.Z` tag。
+- [x] Windows 打包：`build_exe.ps1` + `packaging/cbeta_publish.spec`（PyInstaller onedir，
+  用 `APP_ID` 命名）；`cbeta_publish/paths.py`（冻结时数据根=exe 同级，便携）；
+  打进 pycbeta；`-WithBrowsers` 可选连 Chromium。
+- [x] `requirements.txt` 固定版本。
+- [x] `README.md`（安装/运行/配置/打包/测试）＋ `packaging/README.md`（含/不含清单）。
 
 ### P4 — 低优先可选
 - **丛书导航改树结构**（方案二）：「分类 → 丛书」两级（分类节点双击仅展开，丛书节点双击载入中栏）；
