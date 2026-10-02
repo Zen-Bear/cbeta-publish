@@ -297,21 +297,30 @@ class SettingsDialog(QDialog):
         self.rb_merge_volume = QRadioButton("按刊本册")
         self.rb_merge_catalog = QRadioButton("按目录（部类）")
         self.rb_merge_manual = QRadioButton("按手工分册（右栏）")
+        self.rb_merge_author = QRadioButton("按作者")
+        self.rb_merge_dynasty = QRadioButton("按朝代")
         self.rb_merge_ask = QRadioButton("合并时选择（每次弹框）")
         self.rb_merge_volume.setToolTip("按 mulu/vol.json 的刊本/册分组（一册一个文件）")
         self.rb_merge_catalog.setToolTip("按部类树路径分组（如 01 阿含部類 / 長阿含經）")
         self.rb_merge_manual.setToolTip("按右栏「手工分册」的卷分组（未分组自成一组）")
+        self.rb_merge_author.setToolTip("按作者（译/撰者）分组；多作者作品归首位，未署名置末")
+        self.rb_merge_dynasty.setToolTip("按朝代分组（朝代序；未詳置末）")
         self.rb_merge_ask.setToolTip("每次点合并时弹框选择分册模式与深度")
-        _mrow = QWidget()
-        _mh = QHBoxLayout(_mrow)
-        _mh.setContentsMargins(0, 0, 0, 0)
-        for _i, _rb in enumerate((self.rb_merge_none, self.rb_merge_volume,
-                                  self.rb_merge_catalog, self.rb_merge_manual,
-                                  self.rb_merge_ask)):
-            _mh.addWidget(_rb)
-            self.merge_mode_group.addButton(_rb, _i)
-        _mh.addStretch()
-        mv.addWidget(_mrow)
+        self._rb_merge_rows = (
+            (self.rb_merge_none, self.rb_merge_volume, self.rb_merge_catalog, self.rb_merge_manual),
+            (self.rb_merge_author, self.rb_merge_dynasty, self.rb_merge_ask),
+        )
+        _i = 0
+        for _row in self._rb_merge_rows:
+            _mrow = QWidget()
+            _mh = QHBoxLayout(_mrow)
+            _mh.setContentsMargins(0, 0, 0, 0)
+            for _rb in _row:
+                _mh.addWidget(_rb)
+                self.merge_mode_group.addButton(_rb, _i)
+                _i += 1
+            _mh.addStretch()
+            mv.addWidget(_mrow)
         _drow = QWidget()
         _dh = QHBoxLayout(_drow)
         _dh.setContentsMargins(0, 0, 0, 0)
@@ -382,16 +391,21 @@ class SettingsDialog(QDialog):
             return "catalog"
         if self.rb_merge_manual.isChecked():
             return "manual"
+        if self.rb_merge_author.isChecked():
+            return "author"
+        if self.rb_merge_dynasty.isChecked():
+            return "dynasty"
         if self.rb_merge_ask.isChecked():
             return "ask"
         return "none"
 
     def _set_merge_mode(self):
         m = (self._cfg.get("merge", {}) or {}).get("mode")
-        if m not in ("none", "volume", "catalog", "manual", "ask"):
+        if m not in ("none", "volume", "catalog", "manual", "author", "dynasty", "ask"):
             m = "volume" if (self._cfg.get("merge", {}) or {}).get("by_volume") else "none"
         ({"volume": self.rb_merge_volume, "catalog": self.rb_merge_catalog,
-          "manual": self.rb_merge_manual,
+          "manual": self.rb_merge_manual, "author": self.rb_merge_author,
+          "dynasty": self.rb_merge_dynasty,
           "ask": self.rb_merge_ask}.get(m, self.rb_merge_none)).setChecked(True)
 
     def _sync_merge_defaults(self, c):
@@ -1307,6 +1321,9 @@ class SettingsDialog(QDialog):
         sfh.addWidget(QLabel("字号"))
         sfh.addWidget(self.sp_app_font_size)
         self.ed_supplement = QLineEdit(self._native_path(ui.get("supplement_ttf", "")))
+        self.ed_supplement.setToolTip(
+            "仅用于程序界面：注册给整个应用，让界面控件能显示系统默认字体缺的\n"
+            "罕用/异体 CJK 字形。不影响自制书正文或封面（那两处各有独立字体设置）。")
         sbtn = QPushButton("浏览…")
         sbtn.clicked.connect(lambda: self._pick_supplement())
         sup = QWidget()
@@ -1316,15 +1333,16 @@ class SettingsDialog(QDialog):
         suph.addWidget(sbtn)
         form.addRow("导航树展开", self.cb_tree_expand)
         form.addRow("应用字体", srow)
-        form.addRow("经文补充字型", sup)
-        hint = QLabel("应用字体/字号与补充字型在下次启动生效。")
+        form.addRow("界面补充字型", sup)
+        hint = QLabel("应用字体/字号与界面补充字型保存后即时生效；只影响程序界面显示，"
+                      "不影响自制书正文/封面字体。")
         hint.setStyleSheet("color: gray;")
         hint.setWordWrap(True)
         form.addRow(hint)
         return w
 
     def _pick_supplement(self):
-        f, _ = QFileDialog.getOpenFileName(self, "选择补充字型", "C:/Windows/Fonts",
+        f, _ = QFileDialog.getOpenFileName(self, "选择界面补充字型", "C:/Windows/Fonts",
                                            "字体 (*.ttf *.ttc *.otf)")
         if f:
             self.ed_supplement.setText(f)

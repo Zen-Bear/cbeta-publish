@@ -353,7 +353,7 @@ class WorkspaceTest(unittest.TestCase):
         _ensure_app().processEvents()
         self.assertEqual(w._workspace, [])
 
-    # ---------- 分隔条收起/恢复按钮 ----------
+    # ---------- 分隔条 ◀/▶ 箭头（成对，按状态自适应） ----------
     def _mid_handle(self):
         # 取「中间栏右侧」的分隔条（其左侧栏索引 == 1）
         sp = self.win._splitter
@@ -363,8 +363,62 @@ class WorkspaceTest(unittest.TestCase):
                 return h
         return None
 
-    def test_splitter_handle_collapse_restore_repeatable(self):
-        # 收起/恢复必须可反复：判定一次后缓存，第 2 次收起也要生效
+    def _last_handle(self):
+        sp = self.win._splitter
+        return sp.handle(sp.count() - 1)
+
+    def test_arrow_buttons_are_one_left_and_one_right(self):
+        # 每组只有 ◀ / ▶ 两个按钮
+        h = self._last_handle()
+        btns = [h.layout().itemAt(i).widget() for i in range(h.layout().count())]
+        texts = [b.text() for b in btns if b is not None and hasattr(b, "clicked")]
+        self.assertEqual(texts, ["◀", "▶"])
+
+    def test_arrows_follow_state(self):
+        # 同一分隔条：◀收左邻、▶收右邻；左邻收后 ▶恢复左邻；右邻收后 ◀恢复右邻
+        w = self.win
+        w._apply_layout("three")
+        sp = w._splitter
+        sp.setSizes([400, 360, 360])
+        _ensure_app().processEvents()
+        h = self._mid_handle()               # 左邻=中栏(1)、右邻=右栏(2)
+        self.assertIsNotNone(h)
+        h._on_left()                         # 正常 → 收左邻
+        self.assertEqual(sp.sizes()[1], 0)
+        h._on_right()                        # 左邻已收 → 恢复左邻
+        self.assertGreater(sp.sizes()[1], 0)
+        h._on_right()                        # 正常 → 收右邻
+        self.assertEqual(sp.sizes()[2], 0)
+        h._on_left()                         # 右邻已收 → 恢复右邻
+        self.assertGreater(sp.sizes()[2], 0)
+
+    def test_leftmost_handle_collapses_left_panel(self):
+        # 第一条真实分隔条的左邻是左栏
+        w = self.win
+        w._apply_layout("three")
+        sp = w._splitter
+        sp.setSizes([400, 360, 360])
+        _ensure_app().processEvents()
+        h = next(h for h in (sp.handle(i) for i in range(sp.count()))
+                 if h is not None and h._left_index() == 0)
+        h._on_left()
+        self.assertEqual(sp.sizes()[0], 0)
+        h._on_right()                        # 左栏已收 → 恢复
+        self.assertGreater(sp.sizes()[0], 0)
+
+    def test_switch_to_three_gives_mid_width(self):
+        # 二栏切三栏：中栏必须有宽度（启动即二栏时不得被挤为 0）
+        w = self.win
+        w.__dict__.pop("_three_sizes", None)
+        w.__dict__.pop("_three_width", None)
+        w._apply_layout("two")
+        _ensure_app().processEvents()
+        w._apply_layout("three")
+        _ensure_app().processEvents()
+        self.assertGreater(w._splitter.sizes()[1], 0)
+
+    def test_mid_panel_collapse_restore_repeatable(self):
+        # 三栏中栏右侧分隔条：◀收中栏、▶恢复中栏；可反复
         w = self.win
         w._apply_layout("three")
         sp = w._splitter
@@ -372,16 +426,28 @@ class WorkspaceTest(unittest.TestCase):
         _ensure_app().processEvents()
         h = self._mid_handle()
         self.assertIsNotNone(h)
-        h._collapse()
-        self.assertEqual(sp.sizes()[1], 0)
-        h._restore()
-        self.assertGreater(sp.sizes()[1], 0)
-        h._collapse()                      # 第二次收起（旧实现在这里失效）
-        self.assertEqual(sp.sizes()[1], 0)
-        h._restore()
-        self.assertGreater(sp.sizes()[1], 0)
+        for _ in range(2):
+            h._on_left()
+            self.assertEqual(sp.sizes()[1], 0)
+            h._on_right()
+            self.assertGreater(sp.sizes()[1], 0)
 
-    def test_splitter_handle_index_cached(self):
+    def test_right_panel_collapse_restore(self):
+        # 最右分隔条：▶收右栏、◀恢复右栏；可反复
+        w = self.win
+        w._apply_layout("three")
+        sp = w._splitter
+        sp.setSizes([400, 360, 360])
+        _ensure_app().processEvents()
+        h = self._last_handle()
+        self.assertIsNotNone(h)
+        for _ in range(2):
+            h._on_right()
+            self.assertEqual(sp.sizes()[2], 0)
+            h._on_left()
+            self.assertGreater(sp.sizes()[2], 0)
+
+    def test_handle_index_cached(self):
         w = self.win
         w._apply_layout("three")
         w._splitter.setSizes([400, 360, 360])
@@ -389,11 +455,14 @@ class WorkspaceTest(unittest.TestCase):
         h = self._mid_handle()
         idx = h._left_index()
         self.assertEqual(h._panel(), idx)
-        h._collapse()
+        h._on_left()
         # 折叠后几何变了，但缓存索引不变（否则会指错栏）
         self.assertEqual(h._panel(), idx)
-        h._restore()
+        h._on_right()
         self.assertEqual(h._panel(), idx)
+
+    def test_handle_width_is_thin(self):
+        self.assertEqual(self.win._splitter.handleWidth(), 12)
 
 
 if __name__ == "__main__":

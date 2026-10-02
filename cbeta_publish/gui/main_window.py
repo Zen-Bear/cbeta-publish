@@ -40,11 +40,15 @@ VERIFY_IMPORT_RULES_HTML = """\
 
 
 class _PanelHandle(QSplitterHandle):
-    # 分隔条上的收起/恢复按钮（操作其左侧的那一栏）
+    # 分隔条上仅一组左右箭头（按状态自适应）：
+    #   左右相邻栏都展开：◀ 收起左邻栏，▶ 收起右邻栏；
+    #   左邻栏已收起：▶ 恢复左邻栏；
+    #   右邻栏已收起：◀ 恢复右邻栏。
     def __init__(self, orientation, parent):
         super().__init__(orientation, parent)
-        self._saved = None
-        self._pidx = None      # 缓存本分隔条左侧栏索引（判定一次后固定）
+        self._collapsed = None       # 由按钮收起的栏索引（None=无）
+        self._collapsed_side = None  # 该栏是本次的左邻("L")还是右邻("R")
+        self._saved = {}             # 栏索引 -> 收起前整组 sizes（原样恢复用）
         v = QVBoxLayout(self)
         v.setContentsMargins(0, 0, 0, 0)
         v.setSpacing(0)
@@ -53,13 +57,19 @@ class _PanelHandle(QSplitterHandle):
             b.setText(text)
             b.setToolTip(tip)
             b.setAutoRaise(True)
-            b.setFixedSize(16, 18)
+            b.setFixedSize(12, 14)
             b.setCursor(Qt.PointingHandCursor)
+            try:
+                f = b.font()
+                f.setPointSize(7)
+                b.setFont(f)
+            except Exception:
+                pass
             b.clicked.connect(slot)
             return b
         v.addStretch()
-        v.addWidget(mk("◀", "收起左侧栏", self._collapse))
-        v.addWidget(mk("▶", "恢复左侧栏", self._restore))
+        v.addWidget(mk("◀", "收起左栏（左栏已收起时：恢复右栏）", self._on_left))
+        v.addWidget(mk("▶", "收起右栏（右栏已收起时：恢复左栏）", self._on_right))
         v.addStretch()
 
     def _left_index(self):
@@ -69,8 +79,7 @@ class _PanelHandle(QSplitterHandle):
         if sp is None or sp.count() == 0:
             return 0
         horiz = sp.orientation() == Qt.Horizontal
-        h = self.geometry()
-        h_lo = h.left() if horiz else h.top()
+        h_lo = self.geometry().left() if horiz else self.geometry().top()
         best, best_gap = 0, None
         for i in range(sp.count()):
             g = sp.widget(i).geometry()
@@ -80,43 +89,100 @@ class _PanelHandle(QSplitterHandle):
                 best, best_gap = i, gap
         return best
 
-    def _panel(self):
-        # 只判定一次并缓存：栏被折叠成 0 宽后几何判定可能指错栏，导致
-        # 「收起→恢复→再收起」第二次收起作用在别的栏（表现为按钮失效）。
-        if self._pidx is None:
-            self._pidx = self._left_index()
-        return self._pidx
+    def _neighbor_index(self):
+        # 本分隔条右侧相邻的那一栏：可见栏中「左边缘」距分隔条「右边缘」最近者
+        sp = self.splitter()
+        if sp is None or sp.count() == 0:
+            return 0
+        horiz = sp.orientation() == Qt.Horizontal
+        h = self.geometry()
+        h_hi = (h.left() + h.width()) if horiz else (h.top() + h.height())
+        left = self._left_index()
+        best, best_gap = None, None
+        for i in range(sp.count()):
+            if i == left:
+                continue
+            g = sp.widget(i).geometry()
+            g_lo = g.left() if horiz else g.top()
+            gap = abs(g_lo - h_hi)
+            if best_gap is None or gap < best_gap:
+                best, best_gap = i, gap
+        return best if best is not None else left
 
-    def _collapse(self):
+    def _collapsed_index(self):
+        # 由本分隔条「按钮」收起、且仍为 0 宽的那一栏（拖动折叠不记）
+        sp = self.splitter()
+        k = getattr(self, "_collapsed", None)
+        if sp is None or k is None:
+            return None
+        sizes = sp.sizes()
+        return k if 0 <= k < len(sizes) and sizes[k] <= 0 else None
+
+    def _panel(self):
+        # 左邻栏：按钮收起的那栏优先（几何在折叠后会移位），否则动态判定
+        k = self._collapsed_index()
+        if k is not None and getattr(self, "_collapsed_side", None) == "L":
+            return k
+        return self._left_index()
+
+    def _panel_next(self):
+        # 右邻栏：按钮收起的那栏优先，否则动态判定
+        k = self._collapsed_index()
+        if k is not None and getattr(self, "_collapsed_side", None) == "R":
+            return k
+        return self._neighbor_index()
+
+    def _collapse_panel(self, k, side):
         sp = self.splitter()
         if sp is None:
             return
-        k = self._panel()
         sizes = sp.sizes()
-        if k >= len(sizes) or sizes[k] <= 0:
+        if k < 0 or k >= len(sizes) or sizes[k] <= 0:
             return
-        # 存整组宽度，恢复时原样写回（保证各栏回到收起前的位置）
-        self._saved = list(sizes)
+        self._saved[k] = list(sizes)   # 存整组宽度，恢复时原样写回
+        self._collapsed = k
+        self._collapsed_side = side
         sizes[k] = 0
         sp.setSizes(sizes)
 
-    def _restore(self):
+    def _restore_panel(self, k):
         sp = self.splitter()
         if sp is None:
             return
-        k = self._panel()
         sizes = sp.sizes()
-        if k >= len(sizes) or sizes[k] > 0:
+        if k < 0 or k >= len(sizes) or sizes[k] > 0:
             return
-        if getattr(self, "_saved", None) and len(self._saved) == sp.count():
-            # 原样恢复收起前的整组宽度（不受最小宽度重分配干扰）
-            sp.setSizes(list(self._saved))
+        saved = self._saved.get(k)
+        if saved and len(saved) == sp.count():
+            sp.setSizes(list(saved))
+        else:
+            want = 300
+            donor = k - 1 if k > 0 else k + 1
+            if 0 <= donor < len(sizes):
+                sizes[donor] = max(120, sizes[donor] - want)
+            sizes[k] = want
+            sp.setSizes(sizes)
+        if k == getattr(self, "_collapsed", None):
+            self._collapsed = None
+            self._collapsed_side = None
+
+    def _on_left(self):
+        # ◀：已收起的右邻 → 恢复；否则收起左邻
+        k = self._collapsed_index()
+        if k is not None:
+            if getattr(self, "_collapsed_side", None) == "R":
+                self._restore_panel(k)
             return
-        want = 300
-        donor = k + 1 if k + 1 < sp.count() else k - 1
-        sizes[donor] = max(120, sizes[donor] - want)
-        sizes[k] = want
-        sp.setSizes(sizes)
+        self._collapse_panel(self._left_index(), "L")
+
+    def _on_right(self):
+        # ▶：已收起的左邻 → 恢复；否则收起右邻
+        k = self._collapsed_index()
+        if k is not None:
+            if getattr(self, "_collapsed_side", None) == "L":
+                self._restore_panel(k)
+            return
+        self._collapse_panel(self._neighbor_index(), "R")
 
 
 class _Splitter(QSplitter):
@@ -608,8 +674,10 @@ class MainWindow(QMainWindow):
         self.coll_view_combo.addItem("平铺", "flat")
         self.coll_view_combo.addItem("按刊本册", "volume")
         self.coll_view_combo.addItem("按部类", "catalog")
+        self.coll_view_combo.addItem("按作者", "author")
+        self.coll_view_combo.addItem("按朝代", "dynasty")
         self.coll_view_combo.addItem("手工分册", "manual")
-        self.coll_view_combo.setToolTip("书单显示方式：平铺／按刊本册／按部类（只读视图）／手工分册（可编辑）")
+        self.coll_view_combo.setToolTip("书单显示方式：平铺／按刊本册／按部类／按作者／按朝代（只读视图）／手工分册（可编辑）")
         self.coll_view_combo.setMinimumWidth(150)
         hb.addWidget(self.coll_view_combo)
         hb.addWidget(self.btn_remove)
@@ -774,7 +842,7 @@ class MainWindow(QMainWindow):
         rv.addWidget(self.tab_bottom)
         splitter.addWidget(right)
         splitter.setSizes([400,360,360])
-        splitter.setHandleWidth(18)
+        splitter.setHandleWidth(12)
         for _i in range(3):
             splitter.setCollapsible(_i, True)
         # 窗口变宽时各栏等比扩大（不固定某栏吸收）
@@ -1005,13 +1073,23 @@ class MainWindow(QMainWindow):
         if layout=="two":
             if self.mid.isVisible():
                 self._three_sizes=list(sp.sizes())
+                self._three_width=self.width()
             self.mid.setVisible(False)
             self.btn_workspace.setVisible(True)
         else:
-            want=getattr(self, "_three_sizes", None) if not self.mid.isVisible() else None
+            was_two=not self.mid.isVisible()
             self.mid.setVisible(True)
+            if was_two:
+                # 二栏→三栏：窗口不够宽时相应放大，保证中栏有位置
+                # （记住离开三栏时的宽度；启动即二栏则用默认三栏宽）
+                target=max(self.width(), getattr(self, "_three_width", None) or 1240)
+                if self.width()<target:
+                    self.resize(target, self.height())
+            want=getattr(self, "_three_sizes", None) if was_two else None
             if want and len(want)==sp.count() and want[1]>0:
                 sp.setSizes(list(want))
+            elif was_two:
+                sp.setSizes([400,360,360])
             # 三栏没有左栏工作区按钮：强制回到目录面板
             if self.btn_workspace.isChecked():
                 self.btn_workspace.setChecked(False)
@@ -1346,6 +1424,40 @@ class MainWindow(QMainWindow):
         self._work_dyn=dmap
         self._dyn_order=order
         return dmap, order
+
+    @staticmethod
+    def _dynasty_name(title):
+        # 朝代标题（如「後秦 384 CE ~ 417 CE」）→ 朝代名「後秦」（去年代区间）
+        t = (title or "").strip()
+        if not t:
+            return t
+        return re.split(r"\s+\d", t, 1)[0].strip() or t
+
+    def _work_author_map(self):
+        # work → 作者本名（去僧姓前缀、同名归并；来源 creators-by-strokes-with-works.json）
+        if getattr(self, "_work_author_cache", None) is not None:
+            return self._work_author_cache
+        out={}
+        try:
+            data=self.creator.strokes
+            if data and len(data)==1 and len(data[0].get("children",[]))>=20:
+                strokes=data[0].get("children",[])
+            else:
+                strokes=data
+            flat=[a for s in (strokes or []) for su in s.get("children",[])
+                  for a in su.get("children",[])]
+            for _home, merged in merge_author_nodes(flat):
+                name=author_canonical_name(merged.get("title","")) or merged.get("title","")
+                if not name:
+                    continue
+                for c in (merged.get("children") or []):
+                    k=c.get("key") if isinstance(c, dict) else None
+                    if k and self._is_work_id(k):
+                        out.setdefault(k, name)
+        except Exception as e:
+            print("author map fail", e)
+        self._work_author_cache=out
+        return out
 
     @staticmethod
     def _stroke_label(title):
@@ -3872,7 +3984,7 @@ class MainWindow(QMainWindow):
         mode=self._coll_display_mode()
         if mode=="flat":
             return [(None, list(works), None)]
-        if mode in ("volume","catalog"):
+        if mode in ("volume","catalog","author","dynasty"):
             try:
                 titles=[self.sutra.title_of(w) for w in works]
                 groups=self._group_works(d or {}, list(works), titles, list(works),
@@ -4139,7 +4251,7 @@ class MainWindow(QMainWindow):
 
     def _apply_coll_drag_mode(self):
         mode=self._coll_display_mode()
-        read_only = mode in ("volume","catalog")
+        read_only = mode in ("volume","catalog","author","dynasty")
         self.coll_list.setRootIsDecorated(mode!="flat")
         if read_only:
             self.coll_list.setDragEnabled(False)
@@ -4289,8 +4401,8 @@ class MainWindow(QMainWindow):
         else:
             menu.addAction("新建空分册").triggered.connect(
                 lambda: self._manual_new_volume(d, []))
-        # 只读视图（按刊本册/按部类）：把当前自动分册拷贝（覆盖）到手工分册
-        if self._coll_display_mode() in ("volume", "catalog"):
+        # 只读视图（按刊本册/按部类/按作者/按朝代）：把当前自动分册拷贝（覆盖）到手工分册
+        if self._coll_display_mode() in ("volume", "catalog", "author", "dynasty"):
             if menu.actions():
                 menu.addSeparator()
             if item is not None and not self._coll_is_book(item):
@@ -4322,7 +4434,7 @@ class MainWindow(QMainWindow):
 
     def _coll_internal_drop(self, e):
         mode=self._coll_display_mode()
-        if mode in ("volume","catalog"):
+        if mode in ("volume","catalog","author","dynasty"):
             e.ignore(); return
         data=self.coll_combo.currentData()
         d=self._coll_dict(data)
@@ -4611,7 +4723,7 @@ class MainWindow(QMainWindow):
         if self._is_coll_placeholder(data):
             self.detail.setText("请选择一个丛书再排序")
             return
-        if self._coll_display_mode() in ("volume","catalog"):
+        if self._coll_display_mode() in ("volume","catalog","author","dynasty"):
             self.detail.setText("该分组视图只读，切到平铺/手工分册再排序")
             return
         d=self._coll_dict(data)
@@ -5661,9 +5773,10 @@ class MainWindow(QMainWindow):
         return bool((self.config.get("merge", {}) or {}).get("by_volume", False))
 
     def _merge_mode(self):
-        """none=不分册｜volume=按刊本册｜catalog=按目录(部类)｜manual=按手工分册｜ask=合并时选择。"""
+        """none=不分册｜volume=按刊本册｜catalog=按目录(部类)｜manual=按手工分册｜
+        author=按作者｜dynasty=按朝代｜ask=合并时选择。"""
         m = (self.config.get("merge", {}) or {}).get("mode")
-        if m in ("none", "volume", "catalog", "manual", "ask"):
+        if m in ("none", "volume", "catalog", "manual", "author", "dynasty", "ask"):
             return m
         return "volume" if self._by_volume() else "none"
 
@@ -5676,7 +5789,7 @@ class MainWindow(QMainWindow):
 
     def _merge_ask_last(self):
         v = (self.config.get("merge", {}) or {}).get("ask_last") or {}
-        mode = v.get("mode") if v.get("mode") in ("none", "volume", "catalog", "manual") else "none"
+        mode = v.get("mode") if v.get("mode") in ("none", "volume", "catalog", "manual", "author", "dynasty") else "none"
         try:
             depth = int(v.get("depth", 2))
         except Exception:
@@ -5784,6 +5897,38 @@ class MainWindow(QMainWindow):
             if rest or not out:
                 out.append(self._manual_group("未分组", rest))
             return out
+        if mode in ("author", "dynasty"):
+            # 按作者/朝代分册：work → 名称（单一维度，不分层；depth 忽略）
+            if mode == "dynasty":
+                _raw, _order = self._dynasty_index()
+                wmap = {k: self._dynasty_name(v) for k, v in _raw.items()}
+                order = [self._dynasty_name(t) for t in _order]
+                unknown = "未詳"
+                def _sk(lab, _o=order):
+                    if lab == unknown:
+                        return (9, 0, "")
+                    try:
+                        return (0, _o.index(lab), lab)
+                    except ValueError:
+                        return (1, 0, lab)
+            else:
+                wmap = self._work_author_map()
+                unknown = "未署名"
+                def _sk(lab):
+                    if lab == unknown:
+                        return (9, 0, "")
+                    return (1, self._pinyin_key(lab), "")
+            buckets = {}
+            for f, t, w in zip(ok, ok_titles, ok_works):
+                nw = self._normalize_work(w)
+                lab = wmap.get(w) or wmap.get(nw) or unknown
+                g = buckets.setdefault(lab, {"label": lab,
+                                             "stem": self._safe_name(lab, fallback=unknown),
+                                             "segments": [lab], "full_segments": [lab],
+                                             "ok": [], "titles": [], "works": [],
+                                             "sortkey": _sk(lab)})
+                g["ok"].append(f); g["titles"].append(t); g["works"].append(w)
+            return sorted(buckets.values(), key=lambda g: g["sortkey"])
         manual = (d.get("work_groups") or {}) if mode == "volume" else {}
         bulei_manual = (d.get("bulei_groups") or {}) if mode == "catalog" else {}
         volume_map = self._work_vol_map() if mode == "volume" else None

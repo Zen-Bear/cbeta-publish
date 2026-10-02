@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QRadioButton,
                                QDialogButtonBox, QWidget, QLineEdit)
 
 MODE_NONE, MODE_VOLUME, MODE_CATALOG, MODE_MANUAL = "none", "volume", "catalog", "manual"
+MODE_AUTHOR, MODE_DYNASTY = "author", "dynasty"
 
 
 class MergeDialog(QDialog):
@@ -26,22 +27,31 @@ class MergeDialog(QDialog):
 
         # 模式
         v.addWidget(QLabel("分册模式："))
-        row = QWidget()
-        h = QHBoxLayout(row)
-        h.setContentsMargins(0, 0, 0, 0)
-        self.group = QButtonGroup(row)
+        self.group = QButtonGroup(self)
         self.rb_none = QRadioButton("不分册")
         self.rb_volume = QRadioButton("按刊本册")
         self.rb_catalog = QRadioButton("按目录（部类）")
         self.rb_manual = QRadioButton("按手工分册")
+        self.rb_author = QRadioButton("按作者")
+        self.rb_dynasty = QRadioButton("按朝代")
         self.rb_volume.setToolTip("按 mulu/vol.json 的刊本/册分组")
         self.rb_catalog.setToolTip("按部类树路径分组（如 01 阿含部類 / 長阿含經）")
         self.rb_manual.setToolTip("按右栏「手工分册」的卷分组（未分组自成一组）")
-        for i, b in enumerate((self.rb_none, self.rb_volume, self.rb_catalog, self.rb_manual)):
-            h.addWidget(b)
-            self.group.addButton(b, i)
-        h.addStretch()
-        v.addWidget(row)
+        self.rb_author.setToolTip("按作者（译/撰者）分组；未署名置末")
+        self.rb_dynasty.setToolTip("按朝代分组（朝代序；未詳置末）")
+        self._rows = ((self.rb_none, self.rb_volume, self.rb_catalog, self.rb_manual),
+                      (self.rb_author, self.rb_dynasty))
+        _i = 0
+        for _row in self._rows:
+            rw = QWidget()
+            rh = QHBoxLayout(rw)
+            rh.setContentsMargins(0, 0, 0, 0)
+            for b in _row:
+                rh.addWidget(b)
+                self.group.addButton(b, _i)
+                _i += 1
+            rh.addStretch()
+            v.addWidget(rw)
 
         # 深度 + 文件名模板
         drow = QWidget()
@@ -73,27 +83,31 @@ class MergeDialog(QDialog):
         v.addWidget(btns)
 
         self._select(default_mode)
-        self.rb_none.toggled.connect(self._refresh)
-        self.rb_volume.toggled.connect(self._refresh)
-        self.rb_catalog.toggled.connect(self._refresh)
-        self.rb_manual.toggled.connect(self._refresh)
+        for _rb in (self.rb_none, self.rb_volume, self.rb_catalog, self.rb_manual,
+                    self.rb_author, self.rb_dynasty):
+            _rb.toggled.connect(self._refresh)
         self.sp_depth.valueChanged.connect(self._refresh)
         self.ed_template.textChanged.connect(self._refresh)
         self._refresh()
 
     def _select(self, mode):
         rb = {MODE_VOLUME: self.rb_volume, MODE_CATALOG: self.rb_catalog,
-              MODE_MANUAL: self.rb_manual}.get(mode)
+              MODE_MANUAL: self.rb_manual, MODE_AUTHOR: self.rb_author,
+              MODE_DYNASTY: self.rb_dynasty}.get(mode)
         (rb or self.rb_none).setChecked(True)
 
     def chosen(self):
-        """返回 (mode, depth)：none/volume/catalog/manual。"""
+        """返回 (mode, depth)：none/volume/catalog/manual/author/dynasty。"""
         if self.rb_volume.isChecked():
             mode = MODE_VOLUME
         elif self.rb_catalog.isChecked():
             mode = MODE_CATALOG
         elif self.rb_manual.isChecked():
             mode = MODE_MANUAL
+        elif self.rb_author.isChecked():
+            mode = MODE_AUTHOR
+        elif self.rb_dynasty.isChecked():
+            mode = MODE_DYNASTY
         else:
             mode = MODE_NONE
         return mode, int(self.sp_depth.value())

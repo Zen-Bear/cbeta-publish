@@ -27,6 +27,9 @@ def main():
     app.setOrganizationName("CBETA")
     app.setDesktopFileName(APP_ID)
     apply_ui_fonts(ui)
+    # 恢复外观改版前的观感：应用级浅色样式表（分隔条画成细线而非原生宽抓手）
+    app.setStyleSheet("QMainWindow{background:#fff;color:#222}"
+                      " QTreeView{border:1px solid #ccc}")
     w=MainWindow(cfg)
     w.show()
     sys.exit(app.exec())
