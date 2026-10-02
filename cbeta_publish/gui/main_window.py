@@ -367,6 +367,7 @@ class MainWindow(QMainWindow):
         self.coll_filter=QComboBox()
         self.coll_filter.addItem("分类：全部", None)
         lv.addWidget(self.coll_filter)
+        # 标签筛选（丛书视图；分类已由树分组，分类下拉隐藏）
         self.coll_tag_filter=QComboBox()
         self.coll_tag_filter.addItem("标签：全部", None)
         lv.addWidget(self.coll_tag_filter)
@@ -1327,7 +1328,8 @@ class MainWindow(QMainWindow):
 
     def _on_coll_filter(self, idx):
         cat=self.coll_filter.currentData()
-        QTimer.singleShot(0, lambda c=cat: self._refresh_coll_tree(filter_cat=c))
+        QTimer.singleShot(0, lambda c=cat: self._refresh_coll_tree(
+            filter_cat=c, filter_tag=self.coll_tag_filter.currentData()))
 
     # ---------- 作者树 ----------
     def _dynasty_index(self):
@@ -1535,14 +1537,19 @@ class MainWindow(QMainWindow):
                 if self.coll_tag_filter.itemData(i)==cur_tag:
                     self.coll_tag_filter.setCurrentIndex(i); break
         self.coll_tag_filter.blockSignals(False)
-        for p,d in self._collections:
-            if filter_cat and d.get("category")!=filter_cat:
-                continue
-            if filter_tag and filter_tag not in (d.get("tags",[]) or []):
-                continue
+        rows=list(self._collections)
+        if filter_cat:
+            rows=[(p,d) for p,d in rows if d.get("category")==filter_cat]
+        if filter_tag:
+            rows=[(p,d) for p,d in rows if filter_tag in (d.get("tags",[]) or [])]
+
+        def _add_coll(parent, d):
             item=QTreeWidgetItem([f"{d.get('name')} [{self._cat_name(d.get('category',''))}] {len(d.get('work_ids',[]))}部"])
             item.setData(0, Qt.UserRole, d)
-            self.tree.addTopLevelItem(item)
+            if parent is None:
+                self.tree.addTopLevelItem(item)
+            else:
+                parent.addChild(item)
             # 列出经书名字（原来只有丛书名）
             for wid in (d.get("work_ids", []) or []):
                 title=self.sutra.title_of(wid)
@@ -1551,7 +1558,34 @@ class MainWindow(QMainWindow):
                     if m:
                         title=m.get("name") or wid
                 item.addChild(self._work_item(wid, f"{title}"))
+            return item
+
+        # 分类 → 丛书（→ 书籍）；分类按 categories.json 顺序，空分类也显示
+        try:
+            cm=CategoryManager(Path(self.config["collections_dir"])/"categories.json")
+            cats=[dict(c) for c in cm.all()]
+        except Exception:
+            cats=[]
+        known={c["id"] for c in cats}
+        for cid in dict.fromkeys(d.get("category") for _p,d in rows):
+            if cid and cid not in known:
+                cats.append({"id": cid, "name": self._cat_name(cid)})
+                known.add(cid)
+        if filter_cat:
+            cats=[c for c in cats if c["id"]==filter_cat]   # 分类筛选：只显示所选分类
+        for c in cats:
+            cid=c["id"]
+            members=sorted([(p,d) for p,d in rows if d.get("category")==cid],
+                           key=lambda x: (x[1].get("name","") or ""))
+            cat_item=QTreeWidgetItem([f"{c.get('name',cid)} [{len(members)}部]"])
+            cat_item.setData(0, Qt.UserRole, {"category": cid, "is_cat": True})
+            self.tree.addTopLevelItem(cat_item)
+            for p,d in members:
+                _add_coll(cat_item, d)
         self._expand_tree()
+        # 分类节点默认展开（集合节点不展开）
+        for i in range(self.tree.topLevelItemCount()):
+            self.tree.topLevelItem(i).setExpanded(True)
 
     def _refresh_coll_tree_if_visible(self):
         # 左栏当前为「丛书」视图时重建（保持分类/标签过滤），同步改名/改名/删除等
@@ -2269,7 +2303,7 @@ class MainWindow(QMainWindow):
         self.vol_filter.setVisible(mode=="刊本")
         self.author_filter.setVisible(mode=="作者")
         self.author_sort_row.setVisible(mode=="作者")
-        self.coll_filter.setVisible(mode=="丛书")
+        self.coll_filter.setVisible(mode=="丛书")     # 分类筛选
         self.coll_tag_filter.setVisible(mode=="丛书")
         # 左栏状态栏：操作提示（按模式）
         if mode=="部类":

@@ -704,7 +704,9 @@ class RightPanelTest(unittest.TestCase):
         win = self.win
         self._nav("丛书")
         self.assertGreater(win.tree.topLevelItemCount(), 0)
-        node = win.tree.topLevelItem(0)
+        cat = win.tree.topLevelItem(0)          # 分类节点
+        self.assertGreater(cat.childCount(), 0, "分类下无丛书")
+        node = cat.child(0)                     # 丛书节点
         self.assertGreater(node.childCount(), 0, "丛书树未列出经书")
         for i in range(node.childCount()):
             txt = node.child(i).text(0)
