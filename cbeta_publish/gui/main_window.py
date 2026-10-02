@@ -6456,6 +6456,45 @@ class MainWindow(QMainWindow):
             counts[fmt] += 1
         return [f"{f} 缺 {counts[f]} 部" for f in order]
 
+    def _pack_split_params(self, d, works):
+        """ZIP/导出 的分册参数：返回 (mode, depth) 或 None（取消）。
+        mode=ask 时弹「打包/导出设置（分册）」，与合并共享 merge.ask_last / name_template。"""
+        mode=self._merge_mode()
+        depth=self._merge_depth()
+        if mode=="ask":
+            from PySide6.QtWidgets import QDialog as _QD
+            from cbeta_publish.gui.merge_dialog import MergeDialog
+            last=self._merge_ask_last()
+            dlg=MergeDialog(self, default_mode=last["mode"], default_depth=last["depth"],
+                            default_template=self._merge_name_template(), preview=None)
+            dlg.setWindowTitle("打包/导出设置（分册）")
+            dlg._preview = lambda m, dep: self._merge_preview(
+                works, m, dep, coll=d.get("name",""), name_template=dlg.template(), d=d)
+            dlg._refresh()
+            if dlg.exec()!=_QD.Accepted:
+                return None
+            mode, depth = dlg.chosen()
+            _tpl=dlg.template()
+            if _tpl:
+                self.config.setdefault("merge", {})["name_template"]=_tpl
+            self._set_merge_ask_last(mode, depth)
+        return mode, depth
+
+    def _pack_group_works(self, d, avail_works, fmt, mode, depth):
+        """某格式「可用 works」→ 分册组（[(g, gidx, base)...]）；none 返回单组。
+        base=组产物基名（none 用 d['name']，分册用 _merge_basename）。"""
+        if mode=="none":
+            g={"label": None, "stem": d.get("name",""), "segments": [],
+               "works": list(avail_works)}
+            return [(g, None, d.get("name","") or "未命名")]
+        titles=[self.sutra.title_of(w) for w in avail_works]
+        groups=self._group_works(d, avail_works, titles, avail_works, mode=mode, depth=depth)
+        out=[]
+        for gidx, g in enumerate(groups, 1):
+            base=self._merge_basename(d, g, gidx, total=len(groups))
+            out.append((g, gidx, base))
+        return out
+
     def _zip(self):
         fmts = self._choose_pack_fmts()
         if fmts is None:
@@ -6530,19 +6569,25 @@ class MainWindow(QMainWindow):
         out_dir=Path(sel)
         if not out_dir.exists():
             return
+        params=self._pack_split_params(d, works)
+        if params is None:
+            self.detail.setText("已取消打包（未选择分册模式）")
+            return
+        mode, depth = params
         success=[]
         failed=[]
         cancelled=False
         total=max(1, len(works)*len(fmts)*2)   # 收集文件 + 写入压缩 各占一半
         done=0
         dlg, update, pstate = self._make_progress("ZIP 打包", total)
-        used_names=set()   # 包内重名 guard（显示名维度）
+        used_zips=set()   # 分册：zip 文件名去重 guard
         for fmt in fmts:
-            files=[]
+            # 收集本格式可用文件（保持 works 顺序）
+            avail=[]
             for w in works:
                 f=src_map.get(fmt, {}).get(w)
                 if f is not None and Path(f).exists():
-                    files.append((w, Path(f)))
+                    avail.append(w)
                 else:
                     failed.append(f"{w}.{fmt} 缺失")
                 done+=1
@@ -6551,36 +6596,46 @@ class MainWindow(QMainWindow):
                     break
             if cancelled:
                 break
-            if not files:
+            if not avail:
                 failed.append(f"{fmt} 无文件")
                 continue
-            zpath=out_dir/f"{d['name']}_{fmt}.zip"
-            try:
-                with zipfile.ZipFile(zpath,"w", zipfile.ZIP_DEFLATED) as z:
-                    for i,(w,f) in enumerate(files):
-                        if f.is_dir():
-                            # 目录型（html/docx/odt/txt/txt_notes 解压后）：顶层段改显示名，
-                            # 内部相对路径不变
-                            _disp=self._pack_unique_name(used_names, self._pack_display_stem(w))
-                            for sub in sorted(p for p in f.rglob("*") if p.is_file()):
-                                z.write(sub, arcname=f"{_disp}/{sub.relative_to(f).as_posix()}")
-                        else:
-                            _disp=self._pack_unique_name(
-                                used_names, f"{self._pack_display_stem(w)}.{fmt}")
-                            z.write(f, arcname=_disp)
-                        done+=1
-                        if not update(done, f"[{fmt}] 压缩 {_disp}"):
-                            cancelled=True
-                            break
-                if cancelled:
-                    try:
-                        zpath.unlink(missing_ok=True)
-                    except Exception:
-                        pass
-                    break
-                success.append(str(zpath.resolve()))
-            except Exception as e:
-                failed.append(f"{fmt} ZIP 失败: {e}")
+            for g, gidx, base in self._pack_group_works(d, avail, fmt, mode, depth):
+                gworks=list(g.get("works") or [])
+                if not gworks:
+                    continue
+                if mode=="none":
+                    zpath=out_dir/f"{base}_{fmt}.zip"     # 不分册：保持原名
+                else:
+                    zpath=out_dir/self._pack_unique_name(used_zips, f"{base}_{fmt}.zip")
+                pkg_used=set()   # 包内重名 guard（每 zip 独立）
+                try:
+                    with zipfile.ZipFile(zpath,"w", zipfile.ZIP_DEFLATED) as z:
+                        for w in gworks:
+                            f=Path(src_map[fmt][w])
+                            if f.is_dir():
+                                # 目录型：顶层段改显示名，内部相对路径不变
+                                _disp=self._pack_unique_name(pkg_used, self._pack_display_stem(w))
+                                for sub in sorted(p for p in f.rglob("*") if p.is_file()):
+                                    z.write(sub, arcname=f"{_disp}/{sub.relative_to(f).as_posix()}")
+                            else:
+                                _disp=self._pack_unique_name(
+                                    pkg_used, f"{self._pack_display_stem(w)}.{fmt}")
+                                z.write(f, arcname=_disp)
+                            done+=1
+                            if not update(done, f"[{fmt}] 压缩 {_disp}"):
+                                cancelled=True
+                                break
+                    if cancelled:
+                        try:
+                            zpath.unlink(missing_ok=True)
+                        except Exception:
+                            pass
+                        break
+                    success.append(str(zpath.resolve()))
+                except Exception as e:
+                    failed.append(f"{fmt} ZIP 失败: {e}")
+            if cancelled:
+                break
         try:
             dlg.close()
         except Exception:
@@ -6695,36 +6750,89 @@ class MainWindow(QMainWindow):
         target=QFileDialog.getExistingDirectory(self, "选择导出目录")
         if not target:
             return
+        params=self._pack_split_params(d, works)
+        if params is None:
+            self.detail.setText("已取消导出（未选择分册模式）")
+            return
+        mode, depth = params
         success=[]
         failed=[]
         cancelled=False
-        total=max(1, len(works)*len(fmts))
         done=0
+        total=max(1, len(works)*len(fmts)*(2 if mode!="none" else 1))
         dlg, update, pstate = self._make_progress("导出", total)
-        used_names=set()   # 目标内重名 guard（显示名维度）
+        used_dirs=set()   # 分册：子目录名去重 guard
         for fmt in fmts:
+            if mode=="none":
+                # 不分册：现状——平铺拷贝到目标目录
+                for w in works:
+                    src=src_map.get(fmt, {}).get(w)
+                    src=Path(src) if src is not None else None
+                    if src is not None and src.exists():
+                        try:
+                            if src.is_dir():
+                                dest = Path(target)/self._pack_unique_name(
+                                    used_dirs, self._pack_display_stem(w))
+                                shutil.copytree(src, dest, dirs_exist_ok=True)
+                                success.append(str(dest))
+                            else:
+                                dest = Path(target)/self._pack_unique_name(
+                                    used_dirs, f"{self._pack_display_stem(w)}.{fmt}")
+                                shutil.copy(src, dest)
+                                success.append(str(dest))
+                        except Exception as e:
+                            failed.append(f"{w}.{fmt} 拷贝失败: {e}")
+                    else:
+                        failed.append(f"{w}.{fmt} 缺失")
+                    done+=1
+                    if not update(done, f"[{fmt}] {w}"):
+                        cancelled=True
+                        break
+                if cancelled:
+                    break
+                continue
+            # 分册：按可用 works 分组 → 每组每格式一个目录
+            avail=[]
             for w in works:
                 src=src_map.get(fmt, {}).get(w)
-                src=Path(src) if src is not None else None
-                if src is not None and src.exists():
-                    try:
-                        if src.is_dir():
-                            dest = Path(target)/self._pack_unique_name(
-                                used_names, self._pack_display_stem(w))
-                            shutil.copytree(src, dest, dirs_exist_ok=True)
-                            success.append(str(dest))
-                        else:
-                            dest = Path(target)/self._pack_unique_name(
-                                used_names, f"{self._pack_display_stem(w)}.{fmt}")
-                            shutil.copy(src, dest)
-                            success.append(str(dest))
-                    except Exception as e:
-                        failed.append(f"{w}.{fmt} 拷贝失败: {e}")
+                if src is not None and Path(src).exists():
+                    avail.append(w)
                 else:
                     failed.append(f"{w}.{fmt} 缺失")
                 done+=1
                 if not update(done, f"[{fmt}] {w}"):
                     cancelled=True
+                    break
+            if cancelled:
+                break
+            if not avail:
+                failed.append(f"{fmt} 无文件")
+                continue
+            for g, gidx, base in self._pack_group_works(d, avail, fmt, mode, depth):
+                gworks=list(g.get("works") or [])
+                if not gworks:
+                    continue
+                gdir=Path(target)/self._pack_unique_name(used_dirs, f"{base}_{fmt}")
+                gdir.mkdir(parents=True, exist_ok=True)
+                inner=set()
+                for w in gworks:
+                    src=Path(src_map[fmt][w])
+                    try:
+                        if src.is_dir():
+                            dest=gdir/self._pack_unique_name(inner, self._pack_display_stem(w))
+                            shutil.copytree(src, dest, dirs_exist_ok=True)
+                        else:
+                            dest=gdir/self._pack_unique_name(
+                                inner, f"{self._pack_display_stem(w)}.{fmt}")
+                            shutil.copy(src, dest)
+                        success.append(str(dest))
+                    except Exception as e:
+                        failed.append(f"{w}.{fmt} 拷贝失败: {e}")
+                    done+=1
+                    if not update(done, f"[{fmt}] {w}"):
+                        cancelled=True
+                        break
+                if cancelled:
                     break
             if cancelled:
                 break

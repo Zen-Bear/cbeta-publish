@@ -3,11 +3,6 @@
   "official_ebooks_dir": "E:/dev/cbeta/publish/cbeta_ebooks",
   "mulu_dir": "E:/dev/cbeta/publish/mulu",
   "collections_dir": "E:/dev/cbeta/publish/collections",
-  "theme": {
-    "mode": "system",
-    "accent": "#8B4513"
-  },
-  "language": "zh-Hans",
   "update_interval": "weekly",
   "local_xml_root": "E:/CBETA/CBReader2X/Bookcase/CBETA/XML",
   "output_dir": "my_books",

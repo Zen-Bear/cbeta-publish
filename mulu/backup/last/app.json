@@ -3,11 +3,6 @@
   "verify_dir": "E:\\dev\\cbeta\\publish\\cbeta_verify",
   "mulu_dir": "E:\\dev\\cbeta\\publish\\mulu",
   "collections_dir": "E:\\dev\\cbeta\\publish\\collections",
-  "theme": {
-    "mode": "system",
-    "accent": "#8B4513"
-  },
-  "language": "zh-Hant",
   "update_interval": "manual",
   "output_dir": "E:\\dev\\cbeta\\publish\\collections_books",
   "ui": {

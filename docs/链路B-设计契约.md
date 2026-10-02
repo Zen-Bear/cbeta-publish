@@ -163,6 +163,10 @@ def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=No
   ZIP 按 `部/相对路径` 写入 `{丛书名}_{fmt}.zip`，导出整树拷贝到 `{target}/{work}/`。
   纯 txt 端点（`text/{id}.txt.zip`，不含校注）放 publish 自有 `_EXTRA_DOWNLOADS`，
   vendor 共享层不动。
+- **ZIP/导出 按分册**：读全局 `merge.mode`（`ask` 弹合并设置框，共享 `ask_last`/模板）；
+  `none` 保持单 zip／平铺；分册模式按**可用书**分组，每组每格式 ZIP
+  `{基名}_{fmt}.zip`、导出 `{target}/{基名}_{fmt}/`（`基名=_merge_basename`，同合并命名），
+  组名重名自动 `_2` 去重；空组/缺书跳过记失败。
 - **缺书确认（官方源；合并/ZIP/导出一致）**：是=先下载（下完仍缺再问
   「是否继续（仅打已有）」）、否=跳过缺书继续（缺的记失败）、取消=不打。
 - 自制格式勾选（右栏）：pdf/epub/**docx**（docx 默认勾选）；**合并只取 pdf/epub**，

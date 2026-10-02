@@ -2,7 +2,7 @@
 
 > 设计文档：`docs/设计总案.md`（总方案）、`docs/UI设计.md`（UI）、
 > `docs/链路B-设计契约.md`（与 xml2pdf 的跨仓调用契约）。
-> 测试：`python -m unittest discover tests`（当前 489 项通过）。
+> 测试：`python -m unittest discover tests`（当前 500 项通过）。
 
 ## 已完成（里程碑）
 
@@ -46,17 +46,15 @@
 - 最后出成功/失败报告（逐丛书：成功文件清单 / 失败原因），可点开。
 - 注意：长任务需进度＋取消；中途失败不影响其余丛书；报告落盘可选。
 
-### 后续可扩展（分册）
-- ZIP/导出 也按分册模式（当前仅合并）；「合并时选择」与 ZIP/导出共用弹框；
-  作者/朝代维度；三藏不单列。
+### 分册扩展
+- [x] ZIP/导出 也按分册模式（`none` 保持单 zip／平铺；其余按可用书分组，命名同合并模板）；
+  「合并时选择」与 ZIP/导出共用弹框（共享 `ask_last`/模板）。`tests/test_pack_split.py`。
+- [ ] 作者/朝代 维度分册（三藏不单列）。
 
 ### P2 — 校验可配置阈值（已完成）
 - [x] 全局配置 `xml2pdf.verify_max_diff`（默认 5）与 `verify_diff_lines`（默认 5）；
   设置页「自制E书」以 0–50 数值输入，`bridge.verify_work` 始终透传上游
   `--verify-max-diff`/`--verify-diff-lines`（钳制 0–50）。上游预设 `verify` 段无此二项，仅 CLI 支持。
-
-### P3 — 外观/语言（待定）
-- 深色/浅色/繁简：`ThemeManager`/`i18n` 现为桩；先用 OpenCC 全文案转 zh-Hant，`en` 后置。
 
 ### P3 — 打包 / 文档（已完成）
 - [x] 软件名/版本**单一来源**：`cbeta_publish/__init__.py` 的 `APP_NAME`（显示名）、
