@@ -672,8 +672,17 @@ class RenameCollectionTest(unittest.TestCase):
         _ensure_app().processEvents()
 
         def _tree_names():
-            return [win.tree.topLevelItem(i).data(0, Qt.UserRole).get("name")
-                    for i in range(win.tree.topLevelItemCount())]
+            # 丛书视图为树（分类→丛书→书籍）：递归收集丛书名
+            out = []
+            def walk(it):
+                d = it.data(0, Qt.UserRole)
+                if isinstance(d, dict) and d.get("work_ids") is not None:
+                    out.append(d.get("name"))
+                for k in range(it.childCount()):
+                    walk(it.child(k))
+            for i in range(win.tree.topLevelItemCount()):
+                walk(win.tree.topLevelItem(i))
+            return out
 
         self.assertIn("R删", _tree_names())
         self._select(b)
@@ -694,8 +703,16 @@ class RenameCollectionTest(unittest.TestCase):
         _ensure_app().processEvents()
 
         def _tree_names():
-            return [win.tree.topLevelItem(i).data(0, Qt.UserRole).get("name")
-                    for i in range(win.tree.topLevelItemCount())]
+            out = []
+            def walk(it):
+                d = it.data(0, Qt.UserRole)
+                if isinstance(d, dict) and d.get("work_ids") is not None:
+                    out.append(d.get("name"))
+                for k in range(it.childCount()):
+                    walk(it.child(k))
+            for i in range(win.tree.topLevelItemCount()):
+                walk(win.tree.topLevelItem(i))
+            return out
 
         self.assertIn("R名", _tree_names())
         self._select(b)
@@ -706,6 +723,83 @@ class RenameCollectionTest(unittest.TestCase):
         names = _tree_names()
         self.assertIn("R名好", names)
         self.assertNotIn("R名", names)
+
+
+class CollTreeTest(unittest.TestCase):
+    """丛书左栏固定为树（分类→丛书→书籍）；分类下拉隐藏。"""
+
+    @classmethod
+    def setUpClass(cls):
+        _ensure_app()
+        cls.tmp = Path(tempfile.mkdtemp())
+        cdir = cls.tmp / "collections"
+        (cdir / "custom").mkdir(parents=True)
+        (cdir / "sutra").mkdir(parents=True)
+        (cdir / "categories.json").write_text(json.dumps({"categories": [
+            {"id": "sutra", "name": "经论", "preset": True},
+            {"id": "custom", "name": "其他", "preset": True},
+        ]}, ensure_ascii=False), encoding="utf-8")
+        (cdir / "tags.json").write_text('{"tags": []}', encoding="utf-8")
+        for cat, name in (("sutra", "金刚经"), ("custom", "测试集")):
+            (cdir / cat / f"{name}.json").write_text(json.dumps(
+                {"id": name, "name": name, "category": cat, "tags": [],
+                 "work_ids": ["T0001"]}, ensure_ascii=False), encoding="utf-8")
+        cfg = json.loads((ROOT / "config" / "app.json").read_text(encoding="utf-8"))
+        cfg["mulu_dir"] = str(ROOT / "mulu")
+        cfg["collections_dir"] = str(cdir)
+        cfg["update_interval"] = "manual"
+        cfg["_config_path"] = str(cls.tmp / "app.json")
+        cls.win = MainWindow(cfg)
+        _ensure_app().processEvents()
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def setUp(self):
+        w = self.win
+        w.nav_combo.setCurrentText("丛书")
+        w._refresh_coll_tree()
+        w._workspace = []
+        w._selected = set()
+        w._refresh_ws_views()
+        _ensure_app().processEvents()
+
+    def _tops(self):
+        return [self.win.tree.topLevelItem(i) for i in range(self.win.tree.topLevelItemCount())]
+
+    def test_grouping_and_filter_visible(self):
+        from PySide6.QtCore import Qt
+        w = self.win
+        self.assertFalse(w.coll_filter.isHidden())       # 分类筛选下拉保留
+        labels = {t.text(0): t for t in self._tops()}
+        self.assertIn("经论 [1部]", labels)
+        self.assertIn("其他 [2部]", labels)              # 测试集 + 空白丛书
+        for t in self._tops():
+            self.assertTrue(t.data(0, Qt.UserRole).get("is_cat"))
+            self.assertTrue(t.isExpanded())              # 分类节点默认展开
+        self.assertEqual(labels["经论 [1部]"].child(0).data(0, Qt.UserRole).get("work_ids"),
+                         ["T0001"])
+
+    def test_category_filter_shows_only_that_category(self):
+        w = self.win
+        idx = next(i for i in range(w.coll_filter.count())
+                   if w.coll_filter.itemData(i) == "sutra")
+        w.coll_filter.setCurrentIndex(idx)
+        # _on_coll_filter 走 singleShot；直接显式刷新以确定性断言
+        w._refresh_coll_tree(filter_cat="sutra", filter_tag=None)
+        self.assertEqual([t.text(0) for t in self._tops()], ["经论 [1部]"])
+
+    def test_double_click_category_noop_collection_appends(self):
+        w = self.win
+        cat = self._tops()[0]
+        col = cat.child(0)
+        # 双击分类节点：仅展开/折叠，不加入工作区
+        w._on_tree_double_click(cat, 0)
+        self.assertEqual(w._workspace, [])
+        # 双击丛书节点：书目加入工作区
+        w._on_tree_double_click(col, 0)
+        self.assertEqual(w._workspace, ["T0001"])
 
 
 if __name__ == "__main__":
