@@ -429,26 +429,6 @@ class SettingsDialogTest(unittest.TestCase):
         self.assertEqual(out["cover"]["styles"]["intro_summary"]["font"],
                          "C:/Windows/Fonts/simfang.ttf")
 
-    def test_theme_language_are_radio(self):
-        # 外观：主题（浅色/深色/跟随系统）与语言（简体/繁体/English）单选
-        dlg = self._dlg()
-        self.assertEqual([r.text() for r in dlg.theme_radios.values()],
-                         ["浅色", "深色", "跟随系统"])
-        self.assertEqual([r.text() for r in dlg.lang_radios.values()],
-                         ["简体", "繁体", "English"])
-        self.assertTrue(dlg.theme_radios["system"].isChecked())
-        dlg.theme_radios["dark"].setChecked(True)
-        dlg.lang_radios["zh-Hant"].setChecked(True)
-        out = dlg._collect()
-        self.assertEqual(out["theme"]["mode"], "dark")
-        self.assertEqual(out["language"], "zh-Hant")
-        cfg = copy.deepcopy(DEFAULT_CONFIG)
-        cfg["theme"]["mode"] = "light"
-        cfg["language"] = "en"
-        d2 = SettingsDialog(cfg, None)
-        self.assertTrue(d2.theme_radios["light"].isChecked())
-        self.assertTrue(d2.lang_radios["en"].isChecked())
-
     def test_preset_rows_and_collect(self):
         import shutil
         import tempfile

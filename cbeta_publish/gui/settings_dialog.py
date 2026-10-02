@@ -26,8 +26,6 @@ DEFAULT_CONFIG = {
     "verify_dir": str(PROJECT_ROOT / "cbeta_verify"),
     "mulu_dir": str(PROJECT_ROOT / "mulu"),
     "collections_dir": str(PROJECT_ROOT / "collections"),
-    "theme": {"mode": "system", "accent": "#8B4513"},
-    "language": "zh-Hans",
     "update_interval": "weekly",
     "output_dir": str(PROJECT_ROOT / "collections_books"),
     "ui": {"tree_expand": {"mode": "depth", "depth": 2}, "layout": "three",
@@ -953,10 +951,6 @@ class SettingsDialog(QDialog):
             cur = styles.get(key, {}).get("font", "") or _font_defaults.get(key, "")
             ed.setText(self._native_path(cur))
             self._check_font_row(key, ed)
-        theme = c.setdefault("theme", {"mode": "system", "accent": "#8B4513"})
-        self._set_radio(self.theme_radios, theme.get("mode", "system"), "system")
-        self.ed_accent.setText(theme.get("accent", "#8B4513"))
-        self._set_radio(self.lang_radios, c.get("language", "zh-Hans"), "zh-Hans")
         te = c.get("ui", {}).get("tree_expand", {}) or {}
         mode = te.get("mode", "depth")
         try:
@@ -1299,14 +1293,6 @@ class SettingsDialog(QDialog):
     def _tab_appearance(self):
         w = QWidget()
         form = QFormLayout(w)
-        theme = self._cfg.setdefault("theme", {"mode": "system", "accent": "#8B4513"})
-        self.theme_box, self.theme_group, self.theme_radios = self._radio_row(
-            [("浅色", "light"), ("深色", "dark"), ("跟随系统", "system")],
-            theme.get("mode", "system"))
-        self.ed_accent = QLineEdit(theme.get("accent", "#8B4513"))
-        self.lang_box, self.lang_group, self.lang_radios = self._radio_row(
-            [("简体", "zh-Hans"), ("繁体", "zh-Hant"), ("English", "en")],
-            self._cfg.get("language", "zh-Hans"))
         self.cb_tree_expand = self._no_wheel_until_focused(QComboBox())
         self.cb_tree_expand.addItems(["不展开", "展开1层", "展开2层", "展开3层", "全部展开"])
         ui = self._cfg.setdefault("ui", {})
@@ -1328,13 +1314,10 @@ class SettingsDialog(QDialog):
         suph.setContentsMargins(0, 0, 0, 0)
         suph.addWidget(self.ed_supplement, 1)
         suph.addWidget(sbtn)
-        form.addRow("主题", self.theme_box)
-        form.addRow("强调色", self.ed_accent)
-        form.addRow("语言", self.lang_box)
         form.addRow("导航树展开", self.cb_tree_expand)
         form.addRow("应用字体", srow)
         form.addRow("经文补充字型", sup)
-        hint = QLabel("应用字体/字号与补充字型在下次启动生效；语言繁简/主题深色为预留框架。")
+        hint = QLabel("应用字体/字号与补充字型在下次启动生效。")
         hint.setStyleSheet("color: gray;")
         hint.setWordWrap(True)
         form.addRow(hint)
@@ -1580,10 +1563,6 @@ class SettingsDialog(QDialog):
         c["merge"]["mode"] = self._merge_mode_value()
         c["merge"]["depth"] = int(self.sp_merge_depth.value())
         c["merge"]["name_template"] = self.ed_merge_name.text().strip() or "{coll}.{nn}.{seg}"
-        # 外观
-        c.setdefault("theme", {})["mode"] = self._radio_value(self.theme_group, self.theme_radios)
-        c["theme"]["accent"] = self.ed_accent.text().strip()
-        c["language"] = self._radio_value(self.lang_group, self.lang_radios)
         # 导航树展开
         idx = self.cb_tree_expand.currentIndex()
         if idx == 0:

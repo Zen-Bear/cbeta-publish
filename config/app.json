@@ -3,11 +3,6 @@
   "verify_dir": "E:\\dev\\cbeta\\publish\\cbeta_verify",
   "mulu_dir": "E:\\dev\\cbeta\\publish\\mulu",
   "collections_dir": "E:\\dev\\cbeta\\publish\\collections",
-  "theme": {
-    "mode": "system",
-    "accent": "#8B4513"
-  },
-  "language": "zh-Hant",
   "update_interval": "manual",
   "output_dir": "E:\\dev\\cbeta\\publish\\collections_books",
   "ui": {
@@ -19,7 +14,7 @@
     "app_font_size": 10,
     "supplement_ttf": "E:\\dev\\cbeta\\xml2pdf\\cbeta\\CBETA 補充字型\\CBETASupplement.ttf"
   },
-  "default_source": "xml",
+  "default_source": "official",
   "default_formats": {
     "merge": [
       "pdf",
@@ -48,10 +43,10 @@
     "depth": 2,
     "by_volume": false,
     "ask_last": {
-      "mode": "none",
-      "depth": 1
+      "mode": "catalog",
+      "depth": 3
     },
-    "name_template": "{coll}（{count}部）"
+    "name_template": "{coll}.{seg3}（{count}部）"
   },
   "xml2pdf": {
     "path": "E:\\dev\\cbeta\\xml2pdf",

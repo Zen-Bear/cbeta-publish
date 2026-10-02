@@ -28,10 +28,8 @@ CONSOLE = os.environ.get("CBETA_CONSOLE") == "1"
 datas = []
 hiddenimports = []
 
-# 包内只读资源：主题 tokens + 格式图标（经 Path(__file__).parent 定位）
+# 包内只读资源：格式图标（经 Path(__file__).parent 定位）
 _theme = PUBLISH_ROOT / "cbeta_publish" / "gui" / "theme"
-if (_theme / "tokens.json").is_file():
-    datas.append((str(_theme / "tokens.json"), "cbeta_publish/gui/theme"))
 _icons = _theme / "icons"
 if _icons.is_dir():
     datas.append((str(_icons), "cbeta_publish/gui/theme/icons"))

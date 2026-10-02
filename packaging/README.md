@@ -62,7 +62,7 @@ signtool verify /pa /v cbeta-publish.exe
 - 第三方：PySide6、pypinyin、pymupdf(`fitz`)、EbookLib、reportlab、opencc、
   lxml、tinycss2、fontTools、playwright
 - `pycbeta`（从 `-X2P` 指定的 xml2pdf 仓库 [cbeta-xml2pdf](https://github.com/Zen-Bear/cbeta-xml2pdf) 收集：子模块 + `styles/`、`assets/`、`data/`）
-- 包内只读资源：`cbeta_publish/gui/theme/tokens.json` 与 `icons/*.png`
+- 包内只读资源：`cbeta_publish/gui/theme/icons/*.png`
 
 ### 可写数据（exe 同级，便携）
 - `config/app.json`（构建时改写为相对路径）

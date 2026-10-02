@@ -37,6 +37,8 @@ def _make_window():
     cfg["collections_dir"] = str(tmp / "collections")
     cfg["update_interval"] = "manual"
     cfg["_config_path"] = str(tmp / "app.json")
+    # 打包分册默认 none（避免 ask 弹框）；分册测试自行覆盖
+    cfg.setdefault("merge", {})["mode"] = "none"
     return MainWindow(cfg), tmp
 
 
