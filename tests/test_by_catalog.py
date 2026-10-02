@@ -234,6 +234,44 @@ class MergeBasenameTest(unittest.TestCase):
         self.assertTrue(all(not r[2].endswith((".pdf", ".epub")) for r in rows), rows)
         self.assertTrue(any(r[2].startswith("長阿含經") for r in rows), rows)
 
+    def test_source_and_date_template_vars(self):
+        # {source}/{src}=来源（官方/自制），{date}=YYYY-MM-DD，{date8}=YYYYMMDD
+        import re as _re
+        win = self.win
+        d = {"name": "C"}
+        g = self._g(segments=["S"], works=["T0001"])
+        old_src = win.config.get("default_source")
+        try:
+            win.config["default_source"] = "xml"
+            self.assertEqual(win._merge_basename(d, g, 1, template="{source}"),
+                             "自制")
+            self.assertEqual(win._merge_basename(d, g, 1, template="{src}"),
+                             "自制")
+            win.config["default_source"] = "official"
+            self.assertEqual(win._merge_basename(d, g, 1, template="{source}"),
+                             "官方")
+        finally:
+            if old_src is None:
+                win.config.pop("default_source", None)
+            else:
+                win.config["default_source"] = old_src
+        date = win._merge_basename(d, g, 1, template="{date}")
+        date8 = win._merge_basename(d, g, 1, template="{date8}")
+        self.assertRegex(date, r"^\d{4}-\d{2}-\d{2}$")
+        self.assertRegex(date8, r"^\d{8}$")
+        self.assertEqual(date.replace("-", ""), date8)
+        # 组合：默认模板不变，显式拼接可用
+        win.config["default_source"] = "xml"
+        try:
+            name = win._merge_basename(d, g, 1,
+                                       template="{coll}.{source}.{date8}")
+            self.assertRegex(name, r"^C\.自制\.\d{8}$")
+        finally:
+            if old_src is None:
+                win.config.pop("default_source", None)
+            else:
+                win.config["default_source"] = old_src
+
     def test_none_mode_uses_template(self):
         # 不分册同样走模板（无序号；{coll}/{count} 可用；缺省即丛书名本身）
         win = self.win

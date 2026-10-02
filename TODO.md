@@ -2,7 +2,7 @@
 
 > 设计文档：`docs/设计总案.md`（总方案）、`docs/UI设计.md`（UI）、
 > `docs/链路B-设计契约.md`（与 xml2pdf 的跨仓调用契约）。
-> 测试：`python -m unittest discover tests`（当前 514 项通过）。
+> 测试：`python -m unittest discover tests`（当前 519 项通过）。
 
 ## 已完成（里程碑）
 
@@ -54,6 +54,10 @@
   （`_work_author_map` 去僧姓/同名归并；`_dynasty_index` + `_dynasty_name` 去「CE 年代」区间）；
   未署名/未詳置末，朝代按朝代序、作者按拼音序；设置页/合并弹框/右栏视图/ ZIP·导出同步。
   `tests/test_by_author_dynasty.py`。
+- [x] 模板变量 `{source}`/`{src}`（来源）/`{date}`/`{date8}`（今天）；不分册 ZIP 也走模板。
+- [x] 自制书源新重制：源 XML（工作根 `{work} {书名}/*.xml` 最新 mtime）比产物新则「仅缺」也重制；
+  官方书不推断过期。`tests/test_xml2pdf_bridge.py`。
+- [x] 缓存页增加「校验目录」（`verify_dir`）统计与清理。
 
 ### P2 — 校验可配置阈值（已完成）
 - [x] 全局配置 `xml2pdf.verify_max_diff`（默认 5）与 `verify_diff_lines`（默认 5）；

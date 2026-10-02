@@ -750,7 +750,7 @@ class MainWindow(QMainWindow):
         self.btn_download=QPushButton("下载/更新")
         self.btn_download.setToolTip("下载/更新官方电子书（来源=官方时）")
         self.btn_make=QPushButton("自制")
-        self.btn_make.setToolTip("生成缺失的自制电子书（已有书籍直接复用）")
+        self.btn_make.setToolTip("生成缺失的自制电子书（已有书籍直接复用；源 XML 较新时自动重制）")
         self.btn_remake=QPushButton("重制")
         self.btn_remake.setToolTip("重新生成全部自制电子书（忽略已有书籍）")
         self.btn_merge=QPushButton("合并")
@@ -6044,6 +6044,9 @@ class MainWindow(QMainWindow):
         # 不分册（idx=None）：单文件无序号，{n}/{nn} 置空（如缺省模板即 {coll}）；
         # {coll}/{count} 正常展开
         _no_serial = idx is None
+        import datetime as _dt
+        _today = _dt.date.today().isoformat()
+        _src_label = "自制" if self._run_source() == "xml" else "官方"
         vals = {
             "{coll}": str((d or {}).get("name") or ""),
             "{n}": "" if _no_serial else str(_idx),
@@ -6053,6 +6056,10 @@ class MainWindow(QMainWindow):
             "{stem}": g.get("stem") or "",
             "{label}": g.get("label") or "",
             "{count}": str(len(g.get("works") or [])),
+            "{source}": _src_label,
+            "{src}": _src_label,
+            "{date}": _today,
+            "{date8}": _today.replace("-", ""),
         }
         for i, s in enumerate(segs, 1):
             if i == 1:
@@ -6264,7 +6271,15 @@ class MainWindow(QMainWindow):
                     ok_map[fmt][w]=out
                 else:
                     failed.append(f"{w}.{fmt} XML转换失败")
-                if not update(done[0], f"[{fmt}] {'复用' if reused else '生成'} "
+                if reused:
+                    verb="复用"
+                elif out is not None and xml2pdf_bridge.source_newer(
+                        self.config, w,
+                        xml2pdf_bridge.find_built(w, fmt, xml_out)):
+                    verb="重制（源更新）"
+                else:
+                    verb="生成"
+                if not update(done[0], f"[{fmt}] {verb} "
                                           f"{(out.name if out is not None else f'{w}.{fmt}')}"):
                     cancelled=True
                     break
@@ -6421,6 +6436,8 @@ class MainWindow(QMainWindow):
                     # 只传 work id：XML 源解析归 xml2pdf（本地候选源→官方下载）。
                     # 注意 CBReader 书库是 P5a（按卷切分），不是 xml2pdf 要的
                     # P5（整部经），publish 侧不再自行定位 XML 文件。
+                    _hit0 = xml2pdf_bridge.find_built(w, fmt, xml_out)
+                    _srcnew = xml2pdf_bridge.source_newer(self.config, w, _hit0)
                     out, reused = xml2pdf_bridge.ensure_one(
                         w, fmt, xml_out, self.config, preset=run_preset, regen_all=regen_all,
                         name=xml2pdf_bridge.built_name(self.config, w))
@@ -6428,7 +6445,8 @@ class MainWindow(QMainWindow):
                         ok.append(out); ok_titles.append(self.sutra.title_of(w)); ok_works.append(w)
                     else:
                         failed.append(f"{w}.{fmt} XML转换失败")
-                    if not bump(f"[{fmt}] {'复用' if reused else '生成'} "
+                    _verb = "复用" if reused else ("重制（源更新）" if _srcnew else "生成")
+                    if not bump(f"[{fmt}] {_verb} "
                                 f"{(out.name if out is not None else f'{w}.{fmt}')}"):
                         cancelled=True
                         break
@@ -6629,9 +6647,9 @@ class MainWindow(QMainWindow):
         """某格式「可用 works」→ 分册组（[(g, gidx, base)...]）；none 返回单组。
         base=组产物基名（none 用 d['name']，分册用 _merge_basename）。"""
         if mode=="none":
-            g={"label": None, "stem": d.get("name",""), "segments": [],
+            g={"label": None, "stem": None, "segments": [], "full_segments": [],
                "works": list(avail_works)}
-            return [(g, None, d.get("name","") or "未命名")]
+            return [(g, None, self._merge_basename(d, g, None, total=1))]
         titles=[self.sutra.title_of(w) for w in avail_works]
         groups=self._group_works(d, avail_works, titles, avail_works, mode=mode, depth=depth)
         out=[]

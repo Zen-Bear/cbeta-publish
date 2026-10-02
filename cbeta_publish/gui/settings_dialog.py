@@ -351,7 +351,9 @@ class SettingsDialog(QDialog):
                           "{seg3}→阿彌陀經；{seg}＝末段；{stem}→下划线全路径；"
                           "{label}→斜杠全路径；{n}→序号（不补零）；{nn}→序号"
                           "（自适应补零，宽度看总文件数）；{count}→本组部数；"
-                          "{coll}→丛书名。超段变量置空。")
+                          "{coll}→丛书名；{source}（同 {src}）→本次来源（官方/自制）；"
+                          "{date}→今天（YYYY-MM-DD）；{date8}→今天（YYYYMMDD）。"
+                          "超段变量置空。")
         _seghint.setStyleSheet("color: gray;")
         _seghint.setWordWrap(True)
         mv.addWidget(_seghint)
@@ -994,6 +996,8 @@ class SettingsDialog(QDialog):
             ("ebooks", "官方电子书缓存", lambda: self._cfg.get("official_ebooks_dir", "")),
             # 自制电子书：用 bridge 默认兜底（配置缺省也有值），保证能统计/清理
             ("xmlbooks", "自制电子书", lambda: str(xml2pdf_bridge.xml_books_dir(self._cfg))),
+            # 校验工作根：验证报告与暂存产物（清理后需重新校验）
+            ("verify", "校验目录", lambda: str(xml2pdf_bridge.verify_dir(self._cfg))),
         ]
         for key, label, getter in specs:
             row = QWidget()
@@ -1010,7 +1014,8 @@ class SettingsDialog(QDialog):
         btn_refresh = QPushButton("刷新统计")
         btn_refresh.clicked.connect(self._refresh_cache_stats)
         form.addRow(btn_refresh)
-        hint = QLabel("清理会删除对应目录下的全部文件（保留目录本身）；官方电子书清理后需重新下载。")
+        hint = QLabel("清理会删除对应目录下的全部文件（保留目录本身）；官方电子书清理后需重新下载，"
+                      "校验目录清理后需重新校验。")
         hint.setStyleSheet("color: gray;")
         hint.setWordWrap(True)
         form.addRow(hint)

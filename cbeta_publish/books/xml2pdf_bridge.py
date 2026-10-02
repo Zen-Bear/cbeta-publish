@@ -401,17 +401,47 @@ def find_built(work: str, fmt: str, base_dir):
     return cands[0] if cands else None
 
 
+def source_mtime(config, work: str):
+    """该 work 的 XML 源最新 mtime：工作根下其目录内**根级** `*.xml` 取最大。
+
+    xml2pdf 会在同一目录下产出 html/figures/docx 等（也含 xml 派生），只认根级
+    `*.xml` 才反映真正的源更新；无工作目录/无 XML 返回 None。
+    """
+    d = work_dir_of(config, work)
+    if d is None:
+        return None
+    try:
+        stamps = [p.stat().st_mtime for p in d.glob("*.xml") if p.is_file()]
+    except Exception:
+        return None
+    return max(stamps) if stamps else None
+
+
+def source_newer(config, work: str, built) -> bool:
+    """XML 源是否比已有自制书新（是则应重制）。任一侧缺失返回 False。"""
+    if built is None:
+        return False
+    try:
+        if not Path(built).exists():
+            return False
+        src = source_mtime(config, work)
+        return src is not None and src > Path(built).stat().st_mtime
+    except OSError:
+        return False
+
+
 def ensure_one(work: str, fmt: str, base_dir, config, preset=None,
                regen_all: bool = False, name: str = None):
     """确保一部自制书存在，返回 (产物 Path | None, reused: bool)。
 
     name: 产物基名（不含扩展名）；缺省=work。调用方传 `built_name(config, work)`
     以统一到 L2 带书名布局。
-    regen_all=False（仅生成缺少）：已有产物直接复用（`find_built`）；
-    否则一律重新生成并覆盖原路径。
+    regen_all=False（仅生成缺少）：已有产物直接复用（`find_built`），但若
+    其 XML 源比产物新（`source_newer`）则重新生成并覆盖原路径；
+    regen_all=True 一律重新生成并覆盖原路径。
     """
     hit = find_built(work, fmt, base_dir)
-    if not regen_all and hit is not None:
+    if not regen_all and hit is not None and not source_newer(config, work, hit):
         return hit, True
     out = hit if hit is not None else xml_dest(work, fmt, base_dir, name)
     got = convert(work, None, out, config, fmt=fmt, preset=preset)

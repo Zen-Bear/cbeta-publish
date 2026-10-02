@@ -106,6 +106,20 @@ class PackSplitTest(unittest.TestCase):
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
+    def test_none_zip_follows_template_vars(self):
+        # 不分册 ZIP 也走模板：{source}/{date8} 可用（默认模板仍等于丛书名）
+        win, tmp = _make_window(name_template="{coll}.{source}.{date8}")
+        try:
+            out = tmp / "z"
+            out.mkdir()
+            with _Patch(win, ["pdf"], out):
+                win._zip()
+            zips = [p.name for p in out.glob("*.zip")]
+            self.assertEqual(len(zips), 1)
+            self.assertRegex(zips[0], r"^测\.官方\.\d{8}_pdf\.zip$")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
     def test_manual_split_zips(self):
         win, tmp = _make_window()
         try:

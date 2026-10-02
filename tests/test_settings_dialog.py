@@ -665,6 +665,16 @@ class SettingsDialogTest(unittest.TestCase):
         self.assertEqual(lbl.text(), "（未配置）" if not getter() else lbl.text())
         self.assertNotEqual(lbl.text(), "（未配置）")
 
+    def test_cache_verify_row_wired(self):
+        # 缓存页新增「校验目录」：getter 用 bridge.verify_dir（未配置也有默认）
+        from cbeta_publish.books import xml2pdf_bridge
+        dlg = self._dlg()
+        self.assertIn("verify", dlg._cache_rows)
+        getter, lbl = dlg._cache_rows["verify"]
+        self.assertEqual(getter(), str(xml2pdf_bridge.verify_dir(dlg._cfg)))
+        self.assertTrue(getter())
+        self.assertNotEqual(lbl.text(), "（未配置）")
+
 
 if __name__ == "__main__":
     unittest.main()

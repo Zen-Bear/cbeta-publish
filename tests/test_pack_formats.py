@@ -37,8 +37,10 @@ def _make_window():
     cfg["collections_dir"] = str(tmp / "collections")
     cfg["update_interval"] = "manual"
     cfg["_config_path"] = str(tmp / "app.json")
-    # 打包分册默认 none（避免 ask 弹框）；分册测试自行覆盖
+    # 打包分册默认 none（避免 ask 弹框）；分册测试自行覆盖。
+    # 用缺省模板 {coll}.{nn}.{seg}：不分册展开即丛书名，ZIP 名与旧一致。
     cfg.setdefault("merge", {})["mode"] = "none"
+    cfg["merge"]["name_template"] = "{coll}.{nn}.{seg}"
     return MainWindow(cfg), tmp
 
 

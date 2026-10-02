@@ -747,6 +747,62 @@ class BridgeBuiltNamingTest(unittest.TestCase):
         finally:
             b.convert = real
 
+    def _touch(self, path, ts):
+        import os as _os
+        _os.utime(path, (ts, ts))
+
+    def test_source_mtime_ignores_subdirs(self):
+        import os as _os
+        import cbeta_publish.books.xml2pdf_bridge as b
+        xml = self.work / "T0001 中論" / "T01n0001.xml"
+        self._touch(xml, 1000)
+        # html/ 下的派生物不算源
+        (self.work / "T0001 中論" / "html").mkdir(parents=True, exist_ok=True)
+        (self.work / "T0001 中論" / "html" / "x.xml").write_bytes(b"x")
+        self._touch(self.work / "T0001 中論" / "html" / "x.xml", 999999)
+        self.assertEqual(b.source_mtime(self.cfg, "T0001"), 1000.0)
+        self.assertIsNone(b.source_mtime(self.cfg, "T9999"))
+
+    def test_ensure_one_regens_when_source_newer(self):
+        # 源 XML 比产物新 → 仅缺模式也重制并覆盖原路径；源旧/无源仍复用
+        import cbeta_publish.books.xml2pdf_bridge as b
+        base = self.dir / "out"
+        (base / "pdf").mkdir(parents=True)
+        calls = []
+
+        def fake_convert(w, xml, out, config, fmt="pdf", preset=None, stop=None):
+            calls.append(Path(out))
+            Path(out).parent.mkdir(parents=True, exist_ok=True)
+            Path(out).write_bytes(b"x")
+            return Path(out)
+
+        real = b.convert
+        b.convert = fake_convert
+        xml = self.work / "T0001 中論" / "T01n0001.xml"
+        try:
+            self._touch(xml, 5000)
+            p, reused = b.ensure_one("T0001", "pdf", base, self.cfg, name="T0001 中論")
+            self.assertFalse(reused)
+            self.assertEqual(len(calls), 1)
+            # 产物置为新、源置为旧 → 复用
+            self._touch(p, 9000)
+            self._touch(xml, 1000)
+            p2, reused2 = b.ensure_one("T0001", "pdf", base, self.cfg, name="T0001 中論")
+            self.assertTrue(reused2)
+            self.assertEqual(len(calls), 1)
+            # 源比产物新 → 重制覆盖
+            self._touch(xml, 12000)
+            p3, reused3 = b.ensure_one("T0001", "pdf", base, self.cfg, name="T0001 中論")
+            self.assertFalse(reused3)
+            self.assertEqual(len(calls), 2)
+            self.assertEqual(p3, p2)
+            # 无工作目录的 work：始终复用（无源可比）
+            (base / "pdf" / "T9999.pdf").write_bytes(b"x")
+            _, reused4 = b.ensure_one("T9999", "pdf", base, self.cfg)
+            self.assertTrue(reused4)
+        finally:
+            b.convert = real
+
 
 class BridgeVerifySummaryTest(unittest.TestCase):
     """总验证报告：合并单本报告为固定名文件（摘要＋全文），二次扫描不认它。"""
