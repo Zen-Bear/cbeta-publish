@@ -186,18 +186,21 @@ class SettingsDialogTest(unittest.TestCase):
         self.assertTrue(dlg._btn_original.toolTip())
 
     def test_merge_mode_radios_and_roundtrip(self):
-        # 分册模式五选一 + 深度 + 文件名模板 + 阈值；持久化 merge 全套
+        # 分册模式七选一（两行）+ 深度 + 文件名模板 + 阈值；持久化 merge 全套
         dlg = self._dlg()
         self.assertEqual([dlg.rb_merge_none.text(), dlg.rb_merge_volume.text(),
                           dlg.rb_merge_catalog.text(), dlg.rb_merge_manual.text(),
+                          dlg.rb_merge_author.text(), dlg.rb_merge_dynasty.text(),
                           dlg.rb_merge_ask.text()],
                          ["不分册", "按刊本册", "按目录（部类）", "按手工分册（右栏）",
-                          "合并时选择（每次弹框）"])
-        # 五个单选同一行
-        _mrow = dlg.rb_merge_none.parent()
-        _rkinds = [type(_mrow.layout().itemAt(i).widget()).__name__
-                   for i in range(_mrow.layout().count())]
-        self.assertEqual(_rkinds.count("QRadioButton"), 5)
+                          "按作者", "按朝代", "合并时选择（每次弹框）"])
+        # 七个单选分两行
+        _kinds = []
+        for _row in dlg._rb_merge_rows:
+            _h = _row[0].parent().layout()
+            _kinds += [type(_h.itemAt(i).widget()).__name__
+                       for i in range(_h.count())]
+        self.assertEqual(_kinds.count("QRadioButton"), 7)
         dlg.rb_merge_catalog.setChecked(True)
         dlg.sp_merge_depth.setValue(3)
         dlg.ed_merge_name.setText("{coll}.{nn}.{seg}")
@@ -208,6 +211,18 @@ class SettingsDialogTest(unittest.TestCase):
         self.assertEqual(out["depth"], 3)
         self.assertEqual(out["name_template"], "{coll}.{nn}.{seg}")
         self.assertFalse(out["by_volume"])
+        # 作者/朝代往返
+        dlg.rb_merge_author.setChecked(True)
+        self.assertEqual(dlg._collect()["merge"]["mode"], "author")
+        dlg.rb_merge_dynasty.setChecked(True)
+        self.assertEqual(dlg._collect()["merge"]["mode"], "dynasty")
+        cfg = copy.deepcopy(DEFAULT_CONFIG)
+        cfg["merge"] = {"mode": "author", "depth": 1, "by_volume": False,
+                        "name_template": "{coll}.{nn}.{seg}"}
+        d2 = SettingsDialog(cfg, None)
+        self.assertTrue(d2.rb_merge_author.isChecked())
+        cfg["merge"]["mode"] = "dynasty"
+        self.assertTrue(SettingsDialog(cfg, None).rb_merge_dynasty.isChecked())
         self.assertEqual(dlg._collect()["pdf"]["split_pages"], 0)
         self.assertEqual(dlg._collect()["epub"]["split_items"], 0)
         cfg = copy.deepcopy(DEFAULT_CONFIG)

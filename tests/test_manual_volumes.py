@@ -90,7 +90,7 @@ class ViewComboTest(unittest.TestCase):
     def test_combo_items(self):
         vals = [self.win.coll_view_combo.itemData(i)
                 for i in range(self.win.coll_view_combo.count())]
-        self.assertEqual(vals, ["flat", "volume", "catalog", "manual"])
+        self.assertEqual(vals, ["flat", "volume", "catalog", "author", "dynasty", "manual"])
 
     def test_combo_left_of_remove_and_no_label(self):
         # 下拉框移到「移除」左边（同一按钮行）；不再有「分组:」标签

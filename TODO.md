@@ -2,7 +2,7 @@
 
 > 设计文档：`docs/设计总案.md`（总方案）、`docs/UI设计.md`（UI）、
 > `docs/链路B-设计契约.md`（与 xml2pdf 的跨仓调用契约）。
-> 测试：`python -m unittest discover tests`（当前 500 项通过）。
+> 测试：`python -m unittest discover tests`（当前 514 项通过）。
 
 ## 已完成（里程碑）
 
@@ -31,9 +31,10 @@
 - **软件名/版本**：单一来源 `cbeta_publish/__init__.py`（`APP_NAME`/`APP_ID`/`__version__`），
   窗口标题与 `QApplication` 元数据取此处。
 - **分册模式**：`catalog/catalog_path.py`（部类/刊本路径+序+`_` 命名）；`_group_works(mode, depth)`；
-  `gui/merge_dialog.py`（「合并时选择」每次弹框，记忆 `merge.ask_last`）；设置页五选一 + 深度
-  （含「按手工分册」）；右栏书单支持分组（平铺/按刊本册/按部类/手工分册，`_CollTree`）；
-  单测 `tests/test_by_catalog.py`、`tests/test_manual_volumes.py`。
+  `gui/merge_dialog.py`（「合并时选择」每次弹框，记忆 `merge.ask_last`）；设置页七选一
+  （不分册/刊本册/目录部类/手工分册/作者/朝代/合并时选择）+ 深度；右栏书单支持分组
+  （平铺/按刊本册/按部类/按作者/按朝代/手工分册，`_CollTree`；后四者为只读视图，可整体拷入手工分册）；
+  单测 `tests/test_by_catalog.py`、`tests/test_manual_volumes.py`、`tests/test_by_author_dynasty.py`。
 
 ## 待办
 
@@ -49,7 +50,10 @@
 ### 分册扩展
 - [x] ZIP/导出 也按分册模式（`none` 保持单 zip／平铺；其余按可用书分组，命名同合并模板）；
   「合并时选择」与 ZIP/导出共用弹框（共享 `ask_last`/模板）。`tests/test_pack_split.py`。
-- [ ] 作者/朝代 维度分册（三藏不单列）。
+- [x] 作者/朝代 维度分册（三藏不单列）：`_group_works` 加 `author`/`dynasty` 分支
+  （`_work_author_map` 去僧姓/同名归并；`_dynasty_index` + `_dynasty_name` 去「CE 年代」区间）；
+  未署名/未詳置末，朝代按朝代序、作者按拼音序；设置页/合并弹框/右栏视图/ ZIP·导出同步。
+  `tests/test_by_author_dynasty.py`。
 
 ### P2 — 校验可配置阈值（已完成）
 - [x] 全局配置 `xml2pdf.verify_max_diff`（默认 5）与 `verify_diff_lines`（默认 5）；
