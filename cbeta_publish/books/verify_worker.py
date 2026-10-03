@@ -35,13 +35,36 @@ class VerifyWorker(QThread):
                 self.progress.emit(i - 1, f"生成并校验 {w} ...", "run")
                 report = b.verify_work(w, self.fmts, self.out_dir, self.config,
                                        preset=self.preset, stop=lambda: self._stop)
-                # 逐格式判定：全通过=通过；部分通过=部分通过（入库靠 import 逐格式处理）
-                fmts_status = b.verify_report_formats(report) if report is not None else {}
-                if report is not None:
+                # 同一 work 可能有多个语义产物（如 TX0011 上/中下）：聚合全部相关报告，
+                # 避免只看最新一份而漏判另一份。
+                reports = b.work_verify_reports(self.out_dir, w, primary=report)
+                fmts_status = {}
+                pending_all = {}
+                overall = None
+                for rp in reports:
+                    one = b.verify_report_formats(rp)
+                    one_pending = b.verify_report_pending(rp)
                     # docx通过即pdf通过（pdf由docx校验覆盖，不重复验）
-                    fmts_status = b.apply_verify_coverage(
-                        fmts_status, b.verify_report_pending(report))
-                verdict = b.verify_report_pass(report) if report is not None else None
+                    one = b.apply_verify_coverage(one, one_pending)
+                    for fmt, val in one.items():
+                        if fmt not in fmts_status:
+                            fmts_status[fmt] = val
+                        elif val is False or fmts_status[fmt] is False:
+                            fmts_status[fmt] = False
+                        elif val is None or fmts_status[fmt] is None:
+                            fmts_status[fmt] = None
+                        else:
+                            fmts_status[fmt] = True
+                    for fmt, reason in one_pending.items():
+                        pending_all.setdefault(fmt, reason)
+                    one_verdict = b.verify_report_pass(rp)
+                    if one_verdict is False or overall is False:
+                        overall = False
+                    elif one_verdict is None or overall is None:
+                        overall = None
+                    else:
+                        overall = True
+                verdict = overall
                 if fmts_status:
                     passed = [f for f, v in fmts_status.items() if v]
                     failed_f = [f for f, v in fmts_status.items() if not v]
@@ -65,9 +88,9 @@ class VerifyWorker(QThread):
                 else:
                     failed.append(w)
                     note = ""
-                    if report is not None:
+                    if reports:
                         nobase = sorted(
-                            f for f, r in b.verify_report_pending(report).items()
+                            f for f, r in pending_all.items()
                             if f and r == "no baseline")
                         if nobase:
                             note = f"（{'/'.join(nobase)} 无基线）"

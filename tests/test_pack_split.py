@@ -106,6 +106,46 @@ class PackSplitTest(unittest.TestCase):
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
+    def test_multi_product_zip_keeps_all_files(self):
+        # 同一 work 的多个自制产物不能只打第一项。
+        win, tmp = _make_window()
+        old_source = win.config.get("default_source")
+        had_xml = "xml_to_ebooks_dir" in win.config
+        old_xml = win.config.get("xml_to_ebooks_dir")
+        names = ["T0001 上.pdf", "T0001 中下.pdf"]
+        xb = tmp / "xb"
+        (xb / "pdf").mkdir(parents=True)
+        for name in names:
+            (xb / "pdf" / name).write_bytes(b"P")
+        win.config["default_source"] = "xml"
+        win.config["xml_to_ebooks_dir"] = str(xb)
+        sub = tmp / "collections" / "custom" / "单测.json"
+        sub.write_text(json.dumps(
+            {"id": "s", "name": "单测", "category": "custom", "tags": [],
+             "work_ids": ["T0001"]}, ensure_ascii=False), encoding="utf-8")
+        win._load_collections()
+        for i in range(win.coll_combo.count()):
+            if str(win.coll_combo.itemData(i)).endswith("单测.json"):
+                win.coll_combo.setCurrentIndex(i)
+                break
+        _ensure_app().processEvents()
+        try:
+            out = tmp / "multi-zip"
+            out.mkdir()
+            with _Patch(win, ["pdf"], out):
+                win._zip()
+            zips = list(out.glob("*.zip"))
+            self.assertEqual(len(zips), 1)
+            with zipfile.ZipFile(zips[0]) as z:
+                self.assertEqual(sorted(z.namelist()), sorted(names))
+        finally:
+            win.config["default_source"] = old_source
+            if had_xml:
+                win.config["xml_to_ebooks_dir"] = old_xml
+            else:
+                win.config.pop("xml_to_ebooks_dir", None)
+            shutil.rmtree(tmp, ignore_errors=True)
+
     def test_none_zip_follows_template_vars(self):
         # 不分册 ZIP 也走模板：{source}/{date8} 可用（默认模板仍等于丛书名）
         win, tmp = _make_window(name_template="{coll}.{source}.{date8}")

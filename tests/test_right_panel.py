@@ -798,6 +798,39 @@ class RightPanelTest(unittest.TestCase):
         finally:
             restore()
 
+    def test_collect_open_rows_lists_multi_made_products(self):
+        # 同一 work 有多个自制产物时逐个列出，不只列第一项。
+        import tempfile
+        win = self.win
+        saved = {k: win.config.get(k) for k in
+                 ("xml_to_ebooks_dir", "official_ebooks_dir",
+                  "cbeta_ebooks_dir", "official_library")}
+        tmp = Path(tempfile.mkdtemp())
+        xb = tmp / "xb"
+        (xb / "pdf").mkdir(parents=True)
+        first = xb / "pdf" / "TX0011 上.pdf"
+        second = xb / "pdf" / "TX0011 中下.pdf"
+        first.write_bytes(b"a")
+        second.write_bytes(b"b")
+        win.config["xml_to_ebooks_dir"] = str(xb)
+        win.config["official_ebooks_dir"] = str(tmp / "missing-eb")
+        win.config.pop("cbeta_ebooks_dir", None)
+        win.config["official_library"] = {"root": str(tmp / "missing-lib"),
+                                          "overrides": {}}
+        try:
+            got = [(label, path) for _, label, path in
+                   win._collect_open_rows("TX0011", True)]
+        finally:
+            for k, v in saved.items():
+                if v is None:
+                    win.config.pop(k, None)
+                else:
+                    win.config[k] = v
+            shutil.rmtree(tmp, ignore_errors=True)
+        self.assertEqual(got, [(f"PDF（自制：{first.stem}）", first),
+                               (f"PDF（自制：{second.stem}）", second),
+                               ("打开多卷PDF目录（自制）", xb / "pdf")])
+
     def test_tree_context_menu(self):
         # 右键：书叶弹菜单（含分隔线＋标题行）；非书叶不弹；点击打开文件
         from PySide6.QtCore import Qt

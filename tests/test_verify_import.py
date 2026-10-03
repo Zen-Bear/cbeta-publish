@@ -488,6 +488,30 @@ class VerifySendImportTest(unittest.TestCase):
         self.assertTrue(any("部分通过" in m and "docx/pdf" in m and "epub" in m
                             for m in msgs), msgs)
 
+    def test_worker_aggregates_same_work_variants(self):
+        # 同一 work 的多个语义产物报告都要参加判定，不能只看最新一份。
+        from cbeta_publish.books.verify_worker import VerifyWorker
+        import cbeta_publish.books.xml2pdf_bridge as b
+        out = self.tmp / "variant-aggr"
+        first = out / "TX0011 上（验证）" / "report.txt"
+        second = out / "TX0011 中下（验证）" / "report.txt"
+        first.parent.mkdir(parents=True, exist_ok=True)
+        second.parent.mkdir(parents=True, exist_ok=True)
+        first.write_text("=== TX0011\n  [OK]  docx 缺0 多0\n", encoding="utf-8")
+        second.write_text("=== TX0011\n  [FAIL]  docx 缺3 多1\n", encoding="utf-8")
+        real = b.verify_work
+        b.verify_work = lambda *a, **k: first
+        done = {}
+        try:
+            w = VerifyWorker(["TX0011"], ["docx"], out, self.win.config)
+            w.finished_all.connect(
+                lambda ok, tot, fl: done.update(ok=ok, tot=tot, fl=list(fl)))
+            w.run()
+        finally:
+            b.verify_work = real
+        self.assertEqual(done.get("ok"), 0)
+        self.assertEqual(done.get("fl"), ["TX0011"])
+
     def test_show_results_links_imported_files(self):
         # 结果页：已入库条目每个格式文件可点开（file:// 链接到入库目标）
         win = self.win
@@ -582,6 +606,12 @@ class VerifySendImportTest(unittest.TestCase):
             def _update_preset_buttons(self):
                 self.updated = True
 
+            def _refresh_theme_box(self, keep_value=None):
+                self.theme_refreshed = True
+
+            def _update_theme_button(self):
+                self.theme_button_updated = True
+
         class _FakeDlg:
             last = None
 
@@ -609,6 +639,10 @@ class VerifySendImportTest(unittest.TestCase):
         box = _FakeDlg.last.panel.cfg_preset_box
         self.assertEqual(box.currentText(), "跟随测")
         self.assertTrue(_FakeDlg.last.panel.updated)
+        # 主题下拉须随预设选中重刷（否则停留在 run.json 槽的样式）
+        self.assertTrue(getattr(_FakeDlg.last.panel, "theme_refreshed", False))
+        self.assertTrue(getattr(_FakeDlg.last.panel, "theme_button_updated",
+                                False))
 
     def test_open_window_aligns_preset_workroot(self):
         # 预设 source.cbeta_ebook 与 publish 工作根不一致 → 询问；Yes 则覆盖对齐
@@ -692,7 +726,7 @@ class VerifySendImportTest(unittest.TestCase):
         vd = vdir / "T0001 大般若經（验证）"
         vd.mkdir(parents=True, exist_ok=True)
         (vd / "report.txt").write_text(
-            "=== T01n0001.xml\n"
+            "=== T0001\n"
             "  [OK] (缺0/多0 ≤阈值10)\n  docx 【源】a\n  docx 【新】b\n"
             "  [FAIL] (缺3/多1 >阈值10)\n  epub 【源】c\n  epub 【新】d\n",
             encoding="utf-8")
@@ -703,6 +737,29 @@ class VerifySendImportTest(unittest.TestCase):
         self.assertEqual(len(res["ok"]), 1)
         self.assertEqual(res["fail"], [])
         self.assertIn("未入 epub", res["ok"][0])
+
+    def test_import_same_work_variants(self):
+        # 同一 work 的多个语义产物各按自己的报告入库，不互相覆盖/误套。
+        win = self.win
+        vdir = self.tmp / "txv"
+        vdir.mkdir(parents=True, exist_ok=True)
+        names = ("TX0011 宗依論（上）.docx", "TX0011 宗依論（中、下）.docx")
+        for name in names:
+            (vdir / name).write_bytes(b"DOCX")
+            report_dir = vdir / f"{name[:-len('.docx')]}（验证）"
+            report_dir.mkdir(parents=True, exist_ok=True)
+            (report_dir / "report.txt").write_text(
+                "=== TX0011\n  [OK]  docx 缺0 多0\n", encoding="utf-8")
+        base = self.tmp / "txlib"
+        res = self._do_import(win, ["TX0011"], vdir, base)
+        self.assertEqual(
+            [(p.name, p.read_bytes()) for p in
+             sorted((base / "docx").iterdir(), key=lambda p: p.name)],
+            [(names[0], b"DOCX"), (names[1], b"DOCX")])
+        self.assertEqual(len(res["ok"]), 2)
+        self.assertEqual(res["fail"], [])
+        self.assertEqual(res["undet"], [])
+        self.assertEqual(len(res["ok_files"]["TX0011"]), 2)
 
     def _do_import(self, win, works, vdir, base):
         return win._do_import_verified(works, vdir, base)

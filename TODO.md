@@ -2,7 +2,7 @@
 
 > 设计文档：`docs/设计总案.md`（总方案）、`docs/UI设计.md`（UI）、
 > `docs/链路B-设计契约.md`（与 xml2pdf 的跨仓调用契约）。
-> 测试：`python -m unittest discover tests`（当前 519 项通过）。
+> 测试：`python -m unittest discover tests`（当前 530 项通过）。
 
 ## 已完成（里程碑）
 

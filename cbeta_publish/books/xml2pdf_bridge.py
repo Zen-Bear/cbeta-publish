@@ -63,6 +63,119 @@ def _run_cli(argv):
             return 1
 
 
+def _run_cli_convert(src, fmt, output, config, preset):
+    """构造一次 CLI 调用并返回 `(退出码, 输出尾部)`；调用前不检查停机，由调用方决定。"""
+    x2p = _x2p_root(config)
+    if not x2p.exists():
+        print("xml2pdf path not found", x2p)
+        return None, ""
+    _ensure_path(str(x2p))
+    run_wrap = write_run_wrapper(config, preset) if preset else None
+    argv = ["-i", src, "-f", fmt, "-o", str(output)]
+    if run_wrap is not None:
+        argv += ["--config", str(run_wrap)]
+    elif preset:
+        argv += ["--config", str(preset)]
+    # CBETA XML 目录（工作根）：不可空，空则用默认
+    argv += ["--cbeta-ebook", str(xml_work_dir(config))]
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf):
+            return _run_cli(argv), (buf.getvalue() or "")[-500:].strip()
+    except Exception as e:
+        print("pycbeta lib fail", e)
+        return None, ""
+    finally:
+        if run_wrap is not None:
+            remove_temp_preset(run_wrap)
+
+
+def _product_suffix(fmt: str) -> str:
+    if str(fmt).lower() == "txt_notes":
+        return ".txt"
+    return f".{fmt}"
+
+
+def _is_product_output(path: Path, fmt: str) -> bool:
+    """判断暂存目录里的顶层条目是否为本次请求格式的正式产物。"""
+    try:
+        if path.name.endswith("（验证）"):
+            return False
+        if str(fmt).lower() == "html":
+            return path.is_dir() and path.name.lower().endswith("_html")
+        suffix = _product_suffix(fmt)
+        return path.is_file() and path.suffix.lower() == suffix.lower()
+    except OSError:
+        return False
+
+
+def _replace_staged_path(src: Path, dest: Path):
+    # 文件目标优先原子替换；目录目标必须先清空旧目录。失败不吞源文件诊断。
+    try:
+        if not (dest.is_dir() and not dest.is_symlink()):
+            src.replace(dest)
+            return True
+        import shutil
+        shutil.rmtree(dest, ignore_errors=True)
+    except OSError:
+        pass
+    try:
+        import shutil
+        if dest.is_symlink() or dest.is_file():
+            dest.unlink()
+        elif dest.is_dir():
+            shutil.rmtree(dest, ignore_errors=True)
+        shutil.move(str(src), str(dest))
+        return True
+    except OSError as e:
+        print("move staged output fail", e)
+        return False
+
+
+def convert_outputs(work_id: str, fmt: str, out_dir, config: dict, preset=None,
+                    stop=None) -> list:
+    """用上游默认命名转换一部作品的全部源文档，返回搬入 `out_dir` 的产物。
+
+    同一 work id 可能对应多个源 XML（如 TX0011 的 TX18/TX19 两册）。
+    显式 `-o` 文件会让后渲染的源覆盖先渲染的源，因此这里传输出目录，
+    让上游按各自标题落盘，再把产物与报告一起搬回 `out_dir`。
+    """
+    if stop is not None:
+        try:
+            if stop():
+                return []
+        except Exception:
+            pass
+    out_dir = Path(out_dir)
+    try:
+        out_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    import shutil
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix=f"{work_id}-{fmt}-", dir=out_dir) as stage:
+        stage_path = Path(stage)
+        code, tail = _run_cli_convert(str(work_id), fmt, stage_path, config, preset)
+        if code:
+            print("pycbeta fail", code, tail)
+            return []
+        moved = []
+        try:
+            entries = sorted(stage_path.iterdir(), key=lambda p: p.name.lower())
+        except OSError:
+            return []
+        for child in entries:
+            dest = out_dir / child.name
+            if not _replace_staged_path(child, dest):
+                continue
+            if _is_product_output(dest, fmt) and not dest.name.endswith("_转换报告.txt"):
+                moved.append(dest)
+        if not moved:
+            print(f"pycbeta produced no {fmt} output for {work_id}")
+            return []
+        return sorted(moved, key=lambda p: p.name.lower())
+
+
 def convert(work_id: str, xml_path, out_file, config: dict, fmt: str = "pdf",
             preset=None, stop=None) -> Path | None:
     """进程内调 pycbeta 生成单个文件。
@@ -74,6 +187,8 @@ def convert(work_id: str, xml_path, out_file, config: dict, fmt: str = "pdf",
     传参时会被包进一张**临时 run.json**（5 槽沿用 xml2pdf 仓库当前 run.json，
     `config-json` 指向该预设），这样主题 CSS 槽不回出厂；用后删除。
     out_file: 显式输出文件路径（publish 侧定名，保证合并可寻址）。
+    注意：多源 work 不要用显式 `-o`（后渲染的源会覆盖先渲染的源），
+    请用 `convert_outputs` 走输出目录。
     stop: 可调用对象，调用前返回 True 表示取消。
     返回产物 Path（存在）或 None。
     """
@@ -91,26 +206,8 @@ def convert(work_id: str, xml_path, out_file, config: dict, fmt: str = "pdf",
     out_file = Path(out_file)
     out_file.parent.mkdir(parents=True, exist_ok=True)
     src = str(xml_path) if xml_path else str(work_id)
-    run_wrap = write_run_wrapper(config, preset) if preset else None
-    argv = ["-i", src, "-f", fmt, "-o", str(out_file)]
-    if run_wrap is not None:
-        argv += ["--config", str(run_wrap)]
-    elif preset:
-        argv += ["--config", str(preset)]
-    # CBETA XML 目录（工作根）：不可空，空则用默认
-    argv += ["--cbeta-ebook", str(xml_work_dir(config))]
-    buf = io.StringIO()
-    try:
-        with contextlib.redirect_stdout(buf):
-            code = _run_cli(argv)
-    except Exception as e:
-        print("pycbeta lib fail", e)
-        return None
-    finally:
-        if run_wrap is not None:
-            remove_temp_preset(run_wrap)
+    code, tail = _run_cli_convert(src, fmt, out_file, config, preset)
     if code:
-        tail = (buf.getvalue() or "")[-500:].strip()
         print("pycbeta fail", code, tail)
         return None
     return out_file if out_file.exists() else None
@@ -386,19 +483,46 @@ def xml_dest(work: str, fmt: str, base_dir, name: str = None):
     return Path(base_dir) / fmt / f"{name or work}.{fmt}"
 
 
-def find_built(work: str, fmt: str, base_dir):
-    """已生成的自制书：精确名 `{fmt}/{work}.{fmt}` 优先，
-    其次带书名 `{fmt}/{work} *.{fmt}`（L2 命名，边界=空格，避免 T185 误命中 T1858）；
-    都没有返回 None（旧版平展/顶层不双读）。"""
+def work_source_files(config, work: str) -> list:
+    """该 work 在本地工作目录内的根级源 XML 列表（排序、确定性）。
+
+    同一 work id 可能对应多个源文档（如 TX0011 的 TX18/TX19 两册）。
+    只看已缓存的工作目录，不触发下载或材料化。
+    """
+    d = work_dir_of(config, work)
+    if d is None:
+        return []
+    try:
+        return sorted(
+            (p for p in d.iterdir() if p.is_file() and p.suffix.lower() == ".xml"),
+            key=lambda p: p.name.lower())
+    except OSError:
+        return []
+
+
+def find_all_built(work: str, fmt: str, base_dir):
+    """已生成的自制书全部产物（排序、确定性）：精确名优先，其次带书名通配。
+
+    一个 work 可能对应多个源文档，因此也可能对应多个产物。
+    """
     base = Path(base_dir)
     exact = base / fmt / f"{work}.{fmt}"
-    if exact.exists():
-        return exact
+    out = [exact] if exact.is_file() else []
     try:
-        cands = sorted((base / fmt).glob(f"{work} *.{fmt}"))
-    except Exception:
-        return None
-    return cands[0] if cands else None
+        cands = sorted((base / fmt).glob(f"{work} *.{fmt}"),
+                       key=lambda p: p.name.lower())
+    except OSError:
+        return out
+    for cand in cands:
+        if cand.is_file() and cand != exact:
+            out.append(cand)
+    return out
+
+
+def find_built(work: str, fmt: str, base_dir):
+    """已生成的自制书代表产物：`find_all_built` 的第一项，无则 None。"""
+    found = find_all_built(work, fmt, base_dir)
+    return found[0] if found else None
 
 
 def source_mtime(config, work: str):
@@ -407,12 +531,9 @@ def source_mtime(config, work: str):
     xml2pdf 会在同一目录下产出 html/figures/docx 等（也含 xml 派生），只认根级
     `*.xml` 才反映真正的源更新；无工作目录/无 XML 返回 None。
     """
-    d = work_dir_of(config, work)
-    if d is None:
-        return None
     try:
-        stamps = [p.stat().st_mtime for p in d.glob("*.xml") if p.is_file()]
-    except Exception:
+        stamps = [p.stat().st_mtime for p in work_source_files(config, work)]
+    except OSError:
         return None
     return max(stamps) if stamps else None
 
@@ -430,24 +551,78 @@ def source_newer(config, work: str, built) -> bool:
         return False
 
 
+def sources_newer(config, work: str, built_list) -> bool:
+    """任一已有产物是否比最新 XML 源旧（任一旧即应重制）。"""
+    latest = source_mtime(config, work)
+    if latest is None:
+        return False
+    try:
+        return any(Path(p).stat().st_mtime < latest for p in built_list)
+    except OSError:
+        return True
+
+
+def _outputs_current(existing, sources, fresh: bool) -> bool:
+    if not existing:
+        return False
+    if sources and len(existing) < len(sources):
+        # 已有多源但产物不全：保守重制，避免沿用被覆盖的旧产物。
+        return False
+    return fresh
+
+
+def ensure_products(work: str, fmt: str, base_dir, config, preset=None,
+                    regen_all: bool = False, name: str = None):
+    """确保一部作品该格式的全部自制产物存在，返回 ([Path...], 全部复用?)。
+
+    同一 work id 可能对应多个源 XML（如 TX0011 的 TX18/TX19 两册），
+    此时上游默认命名才能区分产物；只有在源集合已知为单文件时才沿用
+    `name`/精确路径的旧行为。`name` 在多源批量生成中不作为输出名。
+    """
+    base_dir = Path(base_dir)
+    out_dir = base_dir / fmt
+    try:
+        out_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    existing = find_all_built(work, fmt, base_dir)
+    sources = work_source_files(config, work)
+    if not regen_all and _outputs_current(
+            existing, sources, not sources_newer(config, work, existing)):
+        return existing, True
+    if sources and len(sources) == 1 and len(existing) <= 1:
+        target = existing[0] if existing else xml_dest(work, fmt, base_dir, name)
+        got = convert(work, None, target, config, fmt=fmt, preset=preset)
+        if got is not None and got.exists():
+            return [got], False
+        return [], False
+    outputs = convert_outputs(work, fmt, out_dir, config, preset=preset)
+    if not outputs:
+        return [], False
+    if sources and len(outputs) == len(sources):
+        # 本轮是完整重制：删掉同 work 下未再生成的旧名残留，避免旧坏文件继续被复用。
+        current = {p.name for p in outputs}
+        for old in existing:
+            if old.name not in current:
+                try:
+                    if old.exists():
+                        old.unlink()
+                except OSError:
+                    pass
+    return outputs, False
+
+
 def ensure_one(work: str, fmt: str, base_dir, config, preset=None,
                regen_all: bool = False, name: str = None):
-    """确保一部自制书存在，返回 (产物 Path | None, reused: bool)。
+    """确保一部自制书存在，返回 (代表产物 Path | None, 全部复用?)。
 
-    name: 产物基名（不含扩展名）；缺省=work。调用方传 `built_name(config, work)`
-    以统一到 L2 带书名布局。
-    regen_all=False（仅生成缺少）：已有产物直接复用（`find_built`），但若
-    其 XML 源比产物新（`source_newer`）则重新生成并覆盖原路径；
-    regen_all=True 一律重新生成并覆盖原路径。
+    兼容旧的单产物调用；多源 work 会生成全部产物，但只返回第一项。
+    需要全部产物时请用 `ensure_products`。
     """
-    hit = find_built(work, fmt, base_dir)
-    if not regen_all and hit is not None and not source_newer(config, work, hit):
-        return hit, True
-    out = hit if hit is not None else xml_dest(work, fmt, base_dir, name)
-    got = convert(work, None, out, config, fmt=fmt, preset=preset)
-    if got is not None and got.exists():
-        return got, False
-    return None, False
+    outputs, reused = ensure_products(work, fmt, base_dir, config,
+                                      preset=preset, regen_all=regen_all,
+                                      name=name)
+    return (outputs[0] if outputs else None), reused
 
 
 # ---------- 校验（进程内逐本生成+校验；publish 只管跑与入库） ----------
@@ -577,17 +752,69 @@ def find_verify_report(out_dir, work: str) -> Path | None:
     return _newest_report(cands)
 
 
+def _report_group_key(path, stem: str):
+    """同一校验语义的报告归一组；不同语义产物（如同一 work 的上/中下）各自保留。
+
+    `(验证)` 目录名是上游默认产物名，同一目录内的新旧两种命名取最新。
+    """
+    parent = Path(path).parent
+    if parent.name.endswith("（验证）"):
+        return (stem, parent.name[:-len("（验证）")])
+    name = Path(path).name
+    if name.endswith("_verify_report.txt"):
+        return (stem, name[:-len("_verify_report.txt")])
+    return (stem, name)
+
+
+def _report_group_identity(path) -> str:
+    """报告对应的产物语义名（校验目录名或报告文件名去掉验证后缀）。"""
+    path = Path(path)
+    parent = path.parent
+    if parent.name.endswith("（验证）"):
+        return parent.name[:-len("（验证）")]
+    if path.name.endswith("_verify_report.txt"):
+        return path.name[:-len("_verify_report.txt")]
+    return ""
+
+
+def _verify_stem_matches(stem: str, work: str) -> bool:
+    return stem == work or bool(stem and stem.startswith(work + " "))
+
+
+def work_verify_reports(out_dir, work: str, primary=None):
+    """某 work 在校验目录中的全部相关报告（同一 work 的不同语义产物各保留）。
+
+    `primary` 是本次 `verify_work` 返回的报告：即使它不在标准扫描命名里
+    （测试替身常见），也一并纳入，避免聚合时漏掉。没有本次报告时不回退
+    扫描旧报告，避免把旧报告当作本次结论。
+    """
+    if primary is None:
+        return []
+    matches = [p for p, stem in verify_reports(out_dir)
+               if _verify_stem_matches(stem, work)]
+    if all(Path(p) != Path(primary) for p in matches):
+        matches.append(Path(primary))
+    return matches
+
+
 def verify_reports(out_dir):
-    """列出 out_dir 下全部校验报告 [(Path, stem)]，**每个 stem 只取最新一份**
-    （同一书可能同时有独立窗的 `{stem}_verify_report.txt` 与 CLI 的 `report.txt`）：
+    """列出 out_dir 下全部校验报告 [(Path, stem)]，**每个语义产物只取最新一份**
+
+    （同一书可能同时有独立窗的 `{stem}_verify_report.txt` 与 CLI 的 `report.txt`；
+    同一 work 的不同语义产物，例如 TX0011 的上/中下，会分别保留）。
     `*_verify_report.txt` 取文件名 stem；`（验证）/report.txt` 取父目录名前缀。"""
     out = Path(out_dir)
-    by_stem = {}
+    by_group = {}
     def _collect(p, stem):
         if not stem:
             return
-        prev = by_stem.get(stem)
-        by_stem[stem] = p if prev is None else _newest_report([prev, p])
+        key = _report_group_key(p, stem)
+        prev = by_group.get(key)
+        if prev is None:
+            by_group[key] = (p, stem)
+        else:
+            newest = _newest_report([prev[0], p])
+            by_group[key] = (p, stem) if newest is p else prev
     try:
         for p in out.rglob("*_verify_report.txt"):
             _collect(p, p.name[:-len("_verify_report.txt")])
@@ -601,7 +828,7 @@ def verify_reports(out_dir):
             _collect(p, parent.split(" ", 1)[0] if parent else "")
     except Exception:
         pass
-    return [(p, stem) for stem, p in by_stem.items()]
+    return [(p, stem) for p, stem in by_group.values()]
 
 
 def parse_work_summary_line(line) -> list:

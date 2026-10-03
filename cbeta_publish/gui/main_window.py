@@ -2244,6 +2244,13 @@ class MainWindow(QMainWindow):
                     dlg.panel._update_preset_buttons()
                 except Exception:
                     pass
+                try:
+                    # 主题下拉锚定预设选项：上面只改了选中显示（信号屏蔽），
+                    # 须显式重刷，否则仍显示构造时 run.json 槽的样式
+                    dlg.panel._refresh_theme_box()
+                    dlg.panel._update_theme_button()
+                except Exception:
+                    pass
         except Exception:
             pass
         # 「输出格式」对 publish 无意义（格式由右栏勾选、以 -f 传入）：预置为当前勾选，避免误导
@@ -3919,6 +3926,37 @@ class MainWindow(QMainWindow):
         except Exception as e:
             print(e)
 
+    @staticmethod
+    def _expand_group_files(group, path_map):
+        """把分组里每个 work 的全部自制产物展开为并行 ok/titles。
+
+        分组仍按 work id 归属（`works` 不变），`ok` 则包含该 work 的每个产物，
+        便于多源 work（如 TX0011 上/中下）全部进入合并。首个产物沿用分组标题，
+        其余产物用实际文件名做书签/进度标题。
+        """
+        files = []
+        titles = []
+        for f, t, w in zip(group.get("ok") or [], group.get("titles") or [],
+                           group.get("works") or []):
+            paths = path_map.get(w)
+            if not paths:
+                paths = [Path(f)]
+            for i, p in enumerate(paths):
+                files.append(p)
+                titles.append(t if i == 0 else Path(p).stem)
+        group["ok"] = files
+        group["titles"] = titles
+        return group
+
+    @staticmethod
+    def _made_paths(value):
+        """统一自制产物映射值：既兼容旧的单 Path，也支持多源的 Path 列表。"""
+        if value is None:
+            return []
+        if isinstance(value, (list, tuple)):
+            return [Path(p) for p in value]
+        return [Path(value)]
+
     def _ebook_path(self, w, fmt):
         """按当前来源返回该书的电子书路径（不存在则 None）：
         两边同构 `{root}/{fmt}/…`，根分开（官方 cbeta_ebooks／自制 xml_to_ebooks_dir）。"""
@@ -4571,11 +4609,19 @@ class MainWindow(QMainWindow):
                     if _made_base is None:
                         continue
                     try:
-                        hit = _b.find_built(work, fmt, _made_base)
+                        hits = _b.find_all_built(work, fmt, _made_base)
                     except Exception:
-                        hit = None
-                    if hit is not None and Path(hit).is_file():
-                        rows.append((src, f"{flabel}（{src_label}）", Path(hit)))
+                        hits = []
+                    hits = [Path(p) for p in hits]
+                    if len(hits) == 1 and hits[0].is_file():
+                        rows.append((src, f"{flabel}（{src_label}）", hits[0]))
+                    elif len(hits) > 1:
+                        # 同一 work 可能有多个源产物（如 TX0011 上/中下）：逐个列出并给目录入口。
+                        for hit in hits:
+                            if hit.is_file():
+                                rows.append((src, f"{flabel}（{src_label}：{hit.stem}）", hit))
+                        rows.append((src, f"打开多卷{flabel}目录（{src_label}）",
+                                     hits[0].parent))
                 elif src == "cache":
                     if _cache_base is None:
                         continue
@@ -4842,7 +4888,8 @@ class MainWindow(QMainWindow):
             works, fmts, title=title, regen_all=bool(regen_all))
         n=sum(len(v) for v in ok_map.values())
         base=xml2pdf_bridge.xml_books_dir(self.config)
-        entries=[(w, fmt, p) for fmt, m in ok_map.items() for w, p in m.items()]
+        entries=[(w, fmt, p) for fmt, m in ok_map.items()
+                 for w, paths in m.items() for p in self._made_paths(paths)]
         if cancelled:
             summary=f"已取消（已完成 {n} 部）"
         elif failed:
@@ -5385,16 +5432,26 @@ class MainWindow(QMainWindow):
             pass
 
     @staticmethod
-    def _verify_products(vdir, stem):
-        """找某书的全部校验正式产物：校验目录顶层 `{stem}*{ext}`，
-        返回 [(fmt, Path)]；按扩展名识别格式（pdf/epub/docx/odt/md/txt）。"""
+    def _verify_products(vdir, stem, report=None):
+        """找某书的校验正式产物，返回 [(fmt, Path)]；按扩展名识别格式（pdf/epub/docx/odt/md/txt）。
+
+        同一 work 可能有多个语义产物（如 TX0011 上/中下）：如果给了报告，
+        先按该报告所在 `(验证)` 目录名派生的产物名精确匹配，避免把一份报告
+        套到另一份产物上；独立窗等旧命名再回退原来的通配。
+        """
+        from cbeta_publish.books import xml2pdf_bridge as _b
         ext2fmt={".pdf":"pdf",".epub":"epub",".docx":"docx",
                  ".odt":"odt",".md":"md",".txt":"txt"}
         out=[]
+        expected = _b._report_group_identity(report) if report is not None else ""
         for ext, fmt in ext2fmt.items():
             try:
-                cands=[p for p in vdir.glob(f"{stem}*{ext}")
-                       if p.is_file() and not p.name.endswith(("_verify_report.txt","_ids.txt"))]
+                if expected:
+                    cand = Path(vdir) / f"{expected}{ext}"
+                    cands = [cand] if cand.is_file() else []
+                else:
+                    cands=[p for p in Path(vdir).glob(f"{stem}*{ext}")
+                           if p.is_file() and not p.name.endswith(("_verify_report.txt","_ids.txt"))]
             except Exception:
                 cands=[]
             if cands:
@@ -5444,7 +5501,7 @@ class MainWindow(QMainWindow):
                 fmt_status=_b.apply_verify_coverage(fmt_status, pending)
                 overall=_b.verify_report_pass(rp)
                 nums=_b.verify_report_numbers(rp)
-                products=self._verify_products(vdir, hit)
+                products=self._verify_products(vdir, hit, rp)
                 if not products:
                     fail_list.append(f"{hit} 缺产物")
                 else:
@@ -6239,7 +6296,8 @@ class MainWindow(QMainWindow):
     def _ensure_xml_batch(self, works, fmts, title="生成（自制）", regen_all=False):
         """确保 works×fmts 的自制书存在（默认仅缺；regen_all=True 为「重制」显式指定）。
 
-        返回 (ok_map, failed, cancelled)：ok_map = {fmt: {work: Path}}。
+        返回 (ok_map, failed, cancelled)：ok_map = {fmt: {work: [Path...]}}。
+        同一 work 可能对应多个源 XML，因此一个 work 也可能有多个产物。
         """
         from cbeta_publish.books import xml2pdf_bridge
         xml_out=xml2pdf_bridge.xml_books_dir(self.config)
@@ -6253,7 +6311,14 @@ class MainWindow(QMainWindow):
             regen_all=True
         ok_map={f: {} for f in fmts}
         failed=[]
-        total=max(1, len(works)*len(fmts))
+        expected={}
+        for w in works:
+            try:
+                found=xml2pdf_bridge.work_source_files(self.config, w)
+            except Exception:
+                found=[]
+            expected[w]=max(1, len(found))
+        total=max(1, sum(expected.values())*len(fmts))
         done=[0]
         dlg, update, pstate = self._make_progress(title, total)
         if fmts:
@@ -6263,29 +6328,32 @@ class MainWindow(QMainWindow):
         cancelled=False
         for fmt in fmts:
             for w in works:
-                out, reused = xml2pdf_bridge.ensure_one(
+                _was_newer=xml2pdf_bridge.sources_newer(
+                    self.config, w,
+                    xml2pdf_bridge.find_all_built(w, fmt, xml_out))
+                outs, reused = xml2pdf_bridge.ensure_products(
                     w, fmt, xml_out, self.config, preset=preset, regen_all=regen_all,
                     name=xml2pdf_bridge.built_name(self.config, w))
-                done[0]+=1
-                if out is not None and out.exists():
-                    ok_map[fmt][w]=out
+                outs=[p for p in outs if p.exists()]
+                if outs:
+                    ok_map[fmt][w]=outs
                 else:
                     failed.append(f"{w}.{fmt} XML转换失败")
                 if reused:
                     verb="复用"
-                elif out is not None and xml2pdf_bridge.source_newer(
-                        self.config, w,
-                        xml2pdf_bridge.find_built(w, fmt, xml_out)):
+                elif _was_newer:
                     verb="重制（源更新）"
                 else:
                     verb="生成"
-                if not update(done[0], f"[{fmt}] {verb} "
-                                          f"{(out.name if out is not None else f'{w}.{fmt}')}"):
+                names=", ".join(p.name for p in outs) if outs else f"{w}.{fmt}"
+                done[0]+=expected[w]
+                if not update(done[0], f"[{fmt}] {verb} {names}"):
                     cancelled=True
                     break
             if cancelled:
                 break
-        pstate["finish"]([f"完成 {sum(len(v) for v in ok_map.values())}/{total}"
+        actual=sum(len(paths) for m in ok_map.values() for paths in m.values())
+        pstate["finish"]([f"完成 {actual}/{total}"
                           + (f"，失败 {len(failed)}" if failed else "")])
         return ok_map, failed, cancelled
 
@@ -6391,7 +6459,17 @@ class MainWindow(QMainWindow):
         skipped=[]
         failed=[]
         cover_cfg=self._cover_config()
-        prep_total=max(1, len(works)*len(fmts))
+        _made_counts = {}
+        for w in works:
+            if run_source == "xml":
+                try:
+                    found = xml2pdf_bridge.work_source_files(self.config, w)
+                except Exception:
+                    found = []
+                _made_counts[self._normalize_work(w)] = max(1, len(found))
+            else:
+                _made_counts[self._normalize_work(w)] = 1
+        prep_total=max(1, sum(_made_counts.values())*len(fmts))
         total_units=prep_total*2
         done_units=0
         cancelled=False
@@ -6431,29 +6509,35 @@ class MainWindow(QMainWindow):
             ok=[]
             ok_titles=[]
             ok_works=[]
+            made_paths={}
+            format_inputs=0
             for w in works:
                 if _src(w)=="xml":
                     # 只传 work id：XML 源解析归 xml2pdf（本地候选源→官方下载）。
                     # 注意 CBReader 书库是 P5a（按卷切分），不是 xml2pdf 要的
                     # P5（整部经），publish 侧不再自行定位 XML 文件。
-                    _hit0 = xml2pdf_bridge.find_built(w, fmt, xml_out)
-                    _srcnew = xml2pdf_bridge.source_newer(self.config, w, _hit0)
-                    out, reused = xml2pdf_bridge.ensure_one(
+                    _hit = xml2pdf_bridge.find_all_built(w, fmt, xml_out)
+                    _srcnew = xml2pdf_bridge.sources_newer(self.config, w, _hit)
+                    outs, reused = xml2pdf_bridge.ensure_products(
                         w, fmt, xml_out, self.config, preset=run_preset, regen_all=regen_all,
                         name=xml2pdf_bridge.built_name(self.config, w))
-                    if out is not None and out.exists():
-                        ok.append(out); ok_titles.append(self.sutra.title_of(w)); ok_works.append(w)
+                    outs=[p for p in outs if p.exists()]
+                    if outs:
+                        made_paths[w]=outs
+                        ok.append(outs[0]); ok_titles.append(self.sutra.title_of(w)); ok_works.append(w)
+                        format_inputs+=len(outs)
                     else:
                         failed.append(f"{w}.{fmt} XML转换失败")
                     _verb = "复用" if reused else ("重制（源更新）" if _srcnew else "生成")
-                    if not bump(f"[{fmt}] {_verb} "
-                                f"{(out.name if out is not None else f'{w}.{fmt}')}"):
+                    _names=", ".join(p.name for p in outs) if outs else f"{w}.{fmt}"
+                    if not bump(f"[{fmt}] {_verb} {_names}"):
                         cancelled=True
                         break
                     continue
                 dest=_official_dest(fmt, w)
                 if dest.exists():
                     ok.append(dest); ok_titles.append(self.sutra.title_of(w)); ok_works.append(w)
+                    format_inputs+=1
                 elif skip_missing:
                     skipped.append(f"{w}.{fmt}")
                 else:
@@ -6487,6 +6571,7 @@ class MainWindow(QMainWindow):
             group_offset=0
             try:
                 for gindex, g in enumerate(groups, 1):
+                    g=self._expand_group_files(g, made_paths)
                     glabel=g["label"]; gok=g["ok"]; gtitles=g["titles"]; gworks=g["works"]; stem=g["stem"]
                     gbase=merge_base+group_offset
                     def gprog(dd, nn, ll, _gbase=gbase, _n=len(gok)):
@@ -6528,7 +6613,7 @@ class MainWindow(QMainWindow):
                 import traceback
                 traceback.print_exc()
                 failed.append(f"{fmt} 合成失败: {e}")
-            done_units=merge_base+len(works)
+            done_units=merge_base+format_inputs
         self.btn_merge.setEnabled(True)
         if cancelled:
             pstate["finish"](["已取消合成（本次不输出/未完成）。"])
@@ -6740,7 +6825,10 @@ class MainWindow(QMainWindow):
         success=[]
         failed=[]
         cancelled=False
-        total=max(1, len(works)*len(fmts)*2)   # 收集文件 + 写入压缩 各占一半
+        # 同一 work 可能有多个自制产物：按实际文件数计算进度。
+        _pack_files=sum(len(self._made_paths((src_map.get(f) or {}).get(w)))
+                        for f in fmts for w in works)
+        total=max(1, _pack_files*2)   # 收集文件 + 写入压缩 各占一半
         done=0
         dlg, update, pstate = self._make_progress("ZIP 打包", total)
         used_zips=set()   # 分册：zip 文件名去重 guard
@@ -6748,8 +6836,9 @@ class MainWindow(QMainWindow):
             # 收集本格式可用文件（保持 works 顺序）
             avail=[]
             for w in works:
-                f=src_map.get(fmt, {}).get(w)
-                if f is not None and Path(f).exists():
+                paths=[p for p in self._made_paths(src_map.get(fmt, {}).get(w))
+                       if p.exists()]
+                if paths and len(paths)==len(self._made_paths(src_map.get(fmt, {}).get(w))):
                     avail.append(w)
                 else:
                     failed.append(f"{w}.{fmt} 缺失")
@@ -6774,19 +6863,27 @@ class MainWindow(QMainWindow):
                 try:
                     with zipfile.ZipFile(zpath,"w", zipfile.ZIP_DEFLATED) as z:
                         for w in gworks:
-                            f=Path(src_map[fmt][w])
-                            if f.is_dir():
-                                # 目录型：顶层段改显示名，内部相对路径不变
-                                _disp=self._pack_unique_name(pkg_used, self._pack_display_stem(w))
-                                for sub in sorted(p for p in f.rglob("*") if p.is_file()):
-                                    z.write(sub, arcname=f"{_disp}/{sub.relative_to(f).as_posix()}")
-                            else:
-                                _disp=self._pack_unique_name(
-                                    pkg_used, f"{self._pack_display_stem(w)}.{fmt}")
-                                z.write(f, arcname=_disp)
-                            done+=1
-                            if not update(done, f"[{fmt}] 压缩 {_disp}"):
-                                cancelled=True
+                            paths=self._made_paths(src_map[fmt][w])
+                            for f in paths:
+                                f=Path(f)
+                                if f.is_dir():
+                                    # 目录型：顶层段改显示名，内部相对路径不变
+                                    _disp=self._pack_unique_name(pkg_used, self._pack_display_stem(w))
+                                    for sub in sorted(p for p in f.rglob("*") if p.is_file()):
+                                        z.write(sub, arcname=f"{_disp}/{sub.relative_to(f).as_posix()}")
+                                else:
+                                    if len(paths) > 1:
+                                        # 多源 work 的各产物已有各自标题：保留实际文件名。
+                                        _disp=self._pack_unique_name(pkg_used, f.name)
+                                    else:
+                                        _disp=self._pack_unique_name(
+                                            pkg_used, f"{self._pack_display_stem(w)}.{fmt}")
+                                    z.write(f, arcname=_disp)
+                                done+=1
+                                if not update(done, f"[{fmt}] 压缩 {_disp}"):
+                                    cancelled=True
+                                    break
+                            if cancelled:
                                 break
                     if cancelled:
                         try:
@@ -6922,16 +7019,25 @@ class MainWindow(QMainWindow):
         failed=[]
         cancelled=False
         done=0
-        total=max(1, len(works)*len(fmts)*(2 if mode!="none" else 1))
+        _pack_files=sum(len(self._made_paths((src_map.get(f) or {}).get(w)))
+                        for f in fmts for w in works)
+        total=max(1, _pack_files*(2 if mode!="none" else 1))
         dlg, update, pstate = self._make_progress("导出", total)
         used_dirs=set()   # 分册：子目录名去重 guard
         for fmt in fmts:
             if mode=="none":
                 # 不分册：现状——平铺拷贝到目标目录
                 for w in works:
-                    src=src_map.get(fmt, {}).get(w)
-                    src=Path(src) if src is not None else None
-                    if src is not None and src.exists():
+                    paths=[p for p in self._made_paths(src_map.get(fmt, {}).get(w))
+                           if p.exists()]
+                    if not paths:
+                        failed.append(f"{w}.{fmt} 缺失")
+                        done+=1
+                        if not update(done, f"[{fmt}] {w}"):
+                            cancelled=True
+                            break
+                        continue
+                    for src in paths:
                         try:
                             if src.is_dir():
                                 dest = Path(target)/self._pack_unique_name(
@@ -6939,17 +7045,22 @@ class MainWindow(QMainWindow):
                                 shutil.copytree(src, dest, dirs_exist_ok=True)
                                 success.append(str(dest))
                             else:
-                                dest = Path(target)/self._pack_unique_name(
-                                    used_dirs, f"{self._pack_display_stem(w)}.{fmt}")
+                                if len(paths) > 1:
+                                    # 多源 work 的各产物已有各自标题：保留实际文件名。
+                                    dest = Path(target)/self._pack_unique_name(
+                                        used_dirs, src.name)
+                                else:
+                                    dest = Path(target)/self._pack_unique_name(
+                                        used_dirs, f"{self._pack_display_stem(w)}.{fmt}")
                                 shutil.copy(src, dest)
                                 success.append(str(dest))
                         except Exception as e:
                             failed.append(f"{w}.{fmt} 拷贝失败: {e}")
-                    else:
-                        failed.append(f"{w}.{fmt} 缺失")
-                    done+=1
-                    if not update(done, f"[{fmt}] {w}"):
-                        cancelled=True
+                        done+=1
+                        if not update(done, f"[{fmt}] {w}"):
+                            cancelled=True
+                            break
+                    if cancelled:
                         break
                 if cancelled:
                     break
@@ -6957,8 +7068,8 @@ class MainWindow(QMainWindow):
             # 分册：按可用 works 分组 → 每组每格式一个目录
             avail=[]
             for w in works:
-                src=src_map.get(fmt, {}).get(w)
-                if src is not None and Path(src).exists():
+                paths=self._made_paths(src_map.get(fmt, {}).get(w))
+                if paths and all(p.exists() for p in paths):
                     avail.append(w)
                 else:
                     failed.append(f"{w}.{fmt} 缺失")
@@ -6979,21 +7090,27 @@ class MainWindow(QMainWindow):
                 gdir.mkdir(parents=True, exist_ok=True)
                 inner=set()
                 for w in gworks:
-                    src=Path(src_map[fmt][w])
-                    try:
-                        if src.is_dir():
-                            dest=gdir/self._pack_unique_name(inner, self._pack_display_stem(w))
-                            shutil.copytree(src, dest, dirs_exist_ok=True)
-                        else:
-                            dest=gdir/self._pack_unique_name(
-                                inner, f"{self._pack_display_stem(w)}.{fmt}")
-                            shutil.copy(src, dest)
-                        success.append(str(dest))
-                    except Exception as e:
-                        failed.append(f"{w}.{fmt} 拷贝失败: {e}")
-                    done+=1
-                    if not update(done, f"[{fmt}] {w}"):
-                        cancelled=True
+                    paths=self._made_paths(src_map[fmt][w])
+                    for src in paths:
+                        try:
+                            if src.is_dir():
+                                dest=gdir/self._pack_unique_name(inner, self._pack_display_stem(w))
+                                shutil.copytree(src, dest, dirs_exist_ok=True)
+                            else:
+                                if len(paths) > 1:
+                                    dest=gdir/self._pack_unique_name(inner, src.name)
+                                else:
+                                    dest=gdir/self._pack_unique_name(
+                                        inner, f"{self._pack_display_stem(w)}.{fmt}")
+                                shutil.copy(src, dest)
+                            success.append(str(dest))
+                        except Exception as e:
+                            failed.append(f"{w}.{fmt} 拷贝失败: {e}")
+                        done+=1
+                        if not update(done, f"[{fmt}] {w}"):
+                            cancelled=True
+                            break
+                    if cancelled:
                         break
                 if cancelled:
                     break

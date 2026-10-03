@@ -191,6 +191,10 @@ class BridgePresetDirTest(unittest.TestCase):
     def test_ensure_one_missing_vs_all(self):
         # 仅缺：已有产物直接复用（不调 convert）；全部：一律重跑 convert 并覆盖原路径
         import cbeta_publish.books.xml2pdf_bridge as b
+        xmlroot = self.dir / "xml"
+        (xmlroot / "T0001 测经").mkdir(parents=True, exist_ok=True)
+        (xmlroot / "T0001 测经" / "T01n0001.xml").write_bytes(b"<x/>")
+        self.cfg["xml2pdf"]["cbeta_ebook"] = str(xmlroot)
         base = self.dir / "out"
         (base / "pdf").mkdir(parents=True)
         calls = []
@@ -431,6 +435,20 @@ class BridgeVerifyWorkTest(unittest.TestCase):
         got = dict((stem, rp.name) for rp, stem in b.verify_reports(d))
         self.assertEqual(got.get("T0001"), "T0001_verify_report.txt")
         self.assertEqual(got.get("T0002"), "report.txt")
+
+    def test_verify_reports_keep_same_work_variants(self):
+        # 同一 work 的不同语义产物各保留一份报告（如 TX0011 上/中下）。
+        import cbeta_publish.books.xml2pdf_bridge as b
+        d = self.dir / "variants"
+        first = d / "TX0011 宗依論（上）（验证）"
+        second = d / "TX0011 宗依論（中、下）（验证）"
+        first.mkdir(parents=True)
+        second.mkdir(parents=True)
+        (first / "report.txt").write_text("=== TX0011\n [OK]\n", encoding="utf-8")
+        (second / "report.txt").write_text("=== TX0011\n [OK]\n", encoding="utf-8")
+        got = {(stem, rp.parent.name) for rp, stem in b.verify_reports(d)}
+        self.assertEqual(got, {("TX0011", "TX0011 宗依論（上）（验证）"),
+                               ("TX0011", "TX0011 宗依論（中、下）（验证）")})
 
     def test_verify_reports_dedupes_same_stem_newest(self):
         # 同一书旧（独立窗）与新（CLI）报告并存：只取最新一份，不重复计数
@@ -762,6 +780,111 @@ class BridgeBuiltNamingTest(unittest.TestCase):
         self._touch(self.work / "T0001 中論" / "html" / "x.xml", 999999)
         self.assertEqual(b.source_mtime(self.cfg, "T0001"), 1000.0)
         self.assertIsNone(b.source_mtime(self.cfg, "T9999"))
+
+    def test_find_all_built_and_source_files(self):
+        import cbeta_publish.books.xml2pdf_bridge as b
+        self.assertEqual(
+            [p.name for p in b.work_source_files(self.cfg, "T0001")],
+            ["T01n0001.xml"])
+        base = self.dir / "all"
+        (base / "pdf").mkdir(parents=True)
+        (base / "pdf" / "T0001 中論.pdf").write_bytes(b"x")
+        (base / "pdf" / "T0001.pdf").write_bytes(b"x")
+        self.assertEqual(
+            [p.name for p in b.find_all_built("T0001", "pdf", base)],
+            ["T0001.pdf", "T0001 中論.pdf"])
+
+    def test_ensure_products_multi_source_directory_output(self):
+        # 同一 work 有多个源 XML 时，不再用显式 -o 单文件（后渲染会覆盖先渲染）。
+        import cbeta_publish.books.xml2pdf_bridge as b
+        srcdir = self.work / "TX0011 宗依論"
+        srcdir.mkdir(parents=True, exist_ok=True)
+        (srcdir / "TX18n0011.xml").write_text("<x/>", encoding="utf-8")
+        (srcdir / "TX19n0011.xml").write_text("<x/>", encoding="utf-8")
+        base = self.dir / "multi"
+        (base / "docx").mkdir(parents=True)
+        (base / "docx" / "TX0011 旧名.docx").write_bytes(b"stale")
+        calls = []
+        real = b._run_cli
+
+        def fake(argv):
+            out = Path(argv[argv.index("-o") + 1])
+            self.assertTrue(out.is_dir())
+            calls.append(out)
+            for name in ("TX0011 宗依論（上）.docx",
+                         "TX0011 宗依論（中、下）.docx"):
+                (out / name).write_bytes(b"x")
+            report = out / "TX0011 宗依論（上）（验证）"
+            report.mkdir()
+            (report / "r.txt").write_bytes(b"x")
+            return 0
+
+        b._run_cli = fake
+        try:
+            outs, reused = b.ensure_products("TX0011", "docx", base, self.cfg)
+        finally:
+            b._run_cli = real
+        self.assertFalse(reused)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual([p.name for p in outs],
+                         ["TX0011 宗依論（上）.docx", "TX0011 宗依論（中、下）.docx"])
+        self.assertTrue((base / "docx" / "TX0011 宗依論（中、下）.docx").is_file())
+        self.assertFalse((base / "docx" / "TX0011 旧名.docx").exists())
+        self.assertTrue((base / "docx" / "TX0011 宗依論（上）（验证）" / "r.txt").is_file())
+        outs2, reused2 = b.ensure_products("TX0011", "docx", base, self.cfg)
+        self.assertTrue(reused2)
+        self.assertEqual(outs2, outs)
+
+    def test_convert_outputs_keeps_html_dirs_but_not_verify_dirs(self):
+        import cbeta_publish.books.xml2pdf_bridge as b
+        base = self.dir / "html-out"
+        (base / "html").mkdir(parents=True)
+        real = b._run_cli
+
+        def fake(argv):
+            out = Path(argv[argv.index("-o") + 1])
+            (out / "T0001_a_html").mkdir()
+            (out / "T0001_a_html" / "index.html").write_bytes(b"x")
+            (out / "T0001_a（验证）").mkdir()
+            (out / "T0001_a（验证）" / "report.txt").write_bytes(b"x")
+            return 0
+
+        b._run_cli = fake
+        try:
+            outs = b.convert_outputs("T0001", "html", base / "html", self.cfg)
+        finally:
+            b._run_cli = real
+        self.assertEqual([p.name for p in outs], ["T0001_a_html"])
+        self.assertTrue((base / "html" / "T0001_a_html" / "index.html").is_file())
+        self.assertTrue((base / "html" / "T0001_a（验证）" / "report.txt").is_file())
+
+    def test_ensure_products_unknown_source_uses_staging(self):
+        # 没有本地源清单时也不固定 -o 单文件名，让上游一次生成并搬出全部产物。
+        import cbeta_publish.books.xml2pdf_bridge as b
+        empty = self.dir / "empty-xml"
+        empty.mkdir()
+        cfg = {"xml2pdf": {"path": self.cfg["xml2pdf"]["path"],
+                           "cbeta_ebook": str(empty)}}
+        base = self.dir / "unknown"
+        (base / "pdf").mkdir(parents=True)
+        real = b._run_cli
+
+        def fake(argv):
+            out = Path(argv[argv.index("-o") + 1])
+            self.assertTrue(out.is_dir())
+            (out / "T9999 全名.pdf").write_bytes(b"x")
+            return 0
+
+        b._run_cli = fake
+        try:
+            outs, reused = b.ensure_products(
+                "T9999", "pdf", base, cfg, name="T9999 指定名")
+        finally:
+            b._run_cli = real
+        self.assertFalse(reused)
+        self.assertEqual([p.name for p in outs], ["T9999 全名.pdf"])
+        self.assertTrue((base / "pdf" / "T9999 全名.pdf").is_file())
+        self.assertFalse((base / "pdf" / "T9999 指定名.pdf").exists())
 
     def test_ensure_one_regens_when_source_newer(self):
         # 源 XML 比产物新 → 仅缺模式也重制并覆盖原路径；源旧/无源仍复用

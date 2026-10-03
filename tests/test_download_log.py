@@ -323,6 +323,7 @@ class MergeXmlSourceTest(unittest.TestCase):
         # 工作根隔离到 tmp：直生命名取工作目录名（L2 带书名）
         _old_ebook = (win.config.get("xml2pdf") or {}).get("cbeta_ebook")
         (self.tmp / "xml" / "T0001 测经").mkdir(parents=True, exist_ok=True)
+        (self.tmp / "xml" / "T0001 测经" / "T01n0001.xml").write_bytes(b"<x/>")
         win.config["xml2pdf"]["cbeta_ebook"] = str(self.tmp / "xml")
         win.chk_pdf.setChecked(True)
         win.chk_epub.setChecked(False)
@@ -439,6 +440,37 @@ class MergeXmlSourceTest(unittest.TestCase):
         self.assertIn("T0001", ok_map["pdf"])
         self.assertEqual(len(failed), 1)
         self.assertIn("T9999", failed[0])
+
+    def test_ensure_xml_batch_flattens_multi_products(self):
+        # 同一 work 的多个自制产物都要进入 ok_map，不能只留第一项。
+        import cbeta_publish.books.xml2pdf_bridge as b
+        win = self.win
+        out_dir = self._xml_env()
+        one = out_dir / "pdf" / "TX0011 上.pdf"
+        two = out_dir / "pdf" / "TX0011 中下.pdf"
+        one.parent.mkdir(parents=True, exist_ok=True)
+        one.write_bytes(b"a")
+        two.write_bytes(b"b")
+        real = b.ensure_products
+        b.ensure_products = lambda *a, **k: ([one, two], True)
+        try:
+            ok_map, failed, cancelled = win._ensure_xml_batch(["TX0011"], ["pdf"])
+        finally:
+            b.ensure_products = real
+        self.assertFalse(cancelled)
+        self.assertEqual(failed, [])
+        self.assertEqual(ok_map["pdf"]["TX0011"], [one, two])
+
+    def test_expand_group_files_preserves_all_products(self):
+        # 分组合并时，一个 work 的多个自制产物都要进入同一个分组。
+        first = Path("TX0011 上.pdf")
+        second = Path("TX0011 中下.pdf")
+        group = {"ok": [first], "titles": ["T0001"], "works": ["T0001"]}
+        expanded = MainWindow._expand_group_files(
+            group, {"T0001": [first, second]})
+        self.assertEqual(expanded["ok"], [first, second])
+        self.assertEqual(expanded["titles"], ["T0001", "TX0011 中下"])
+        self.assertEqual(expanded["works"], ["T0001"])
 
 
 class MergeEditNoteGuardTest(unittest.TestCase):

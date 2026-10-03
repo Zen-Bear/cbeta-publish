@@ -21,13 +21,17 @@
 def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=None) -> Path | None
 # 内部：进程内 pycbeta.cli.main(["-i", work_id, "-f", fmt, "-o", out_file,
 #                              "--config", preset, "--cbeta-ebook", <工作根>])
+def convert_outputs(work_id, fmt, out_dir, config, preset=None, stop=None) -> list[Path]
+# 内部：同一调用传输出目录（不是固定文件名），上游按各自标题落盘，
+#      publish 再把产物与报告搬回 out_dir。
 ```
 
 - **库调用**，不起子进程：省每本一次 python 启动；进度/取消/错误是直接对象
   （`stop()` 在本与本之间生效；单本内部无更细进度，对面只在完成时落一行）。
 - `-i` **只传 work id**：XML 源由 xml2pdf 的 `materialize_work` 解析
-  （工作根 → 本地候选源 → 官方下载）。publish 侧**不**自行定位 XML——CBReader
-  书库是 P5a（按卷切分），不是对面要的 P5（整部经），拿它去找只会喂错文件。
+  （工作根 → 本地候选源 → 官方下载）。publish 侧**不**自行定位单个 XML——CBReader
+  书库是 P5a（按卷切分），不是对面要的 P5（整部经），拿它去找只会喂错文件；
+  需要判断产物是否齐全时，也只数已缓存工作目录根下的 `*.xml`，不解析、不喂单文件。
 - `--cbeta-ebook` = XML 工作根，**publish 显式传入**（配置键
   `xml2pdf.cbeta_ebook`；为空则不传，由对面自身配置决定）。这样 xml2pdf 也能
   脱离 publish 独立运行，互不干扰。（契约术语里"XML 源"专指 `source.xml_dir`
@@ -44,7 +48,14 @@ def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=No
     打开「调整…」时已把面板「输出格式」预置为该勾选，避免误导。
   - **CSS 槽（样式表）属 run.json**：已由临时 run.json 包装保留仓库主题
     （命名/临时预设两条路径一致）。
-- `-o` = publish 定名的完整产物路径（`{fmt}/{work}.{fmt}` 或校验目录；见 §4）。
+- `-o` = 输出目标：
+  - `convert` 传 publish 定名的完整产物路径（`{fmt}/{name}.{fmt}`，
+    `name=built_name` 即工作目录名，缺省=work）；
+  - `convert_outputs` 传输出目录，让上游按各自源文档标题落盘（`{佛典編號 书名}.{ext}`，
+    书名取各源 `title level="m"` 并跟随 `source.title_t2s`，见上游设计规格 §11 输出规则）。
+    同一 work id 可能对应多个源 XML（例如 TX0011 的 TX18/TX19 两册）；
+    若对多源强制同一个显式 `-o` 文件，后渲染的源会覆盖先渲染的源。
+    批量侧发现源集合后按上游默认命名收回全部产物，不再假设一 work 一文件。
 
 **辅助函数**（同在 `xml2pdf_bridge.py`）：
 `write_run_wrapper` / `remove_temp_preset`（临时 run.json 生成与删除）/
@@ -53,7 +64,9 @@ def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=No
 `presets_dir`（= `<仓库>/presets`，由 xml2pdf 决定，publish 不另配）/
 `list_presets` / `resolve_preset` / `load_preset_dict` / `save_preset`
 （预设读写；优先走上游公开 API，不可用时回退本地）/
-`xml_books_dir` / `xml_dest` / `find_built` / `ensure_one`（自制书寻址与复用）/
+`xml_books_dir` / `xml_dest` / `find_built` / `find_all_built` /
+`work_source_files` / `ensure_products`（自制书寻址、批量生成与复用；
+`ensure_one` 只保留旧调用兼容，返回代表产物）/
 `verify_work` / `find_verify_report` / `verify_reports` / `verify_report_pass`
 （校验，见 §5）。官方侧：`official_ebook_source.official_books_dir`（收敛官方缓存根键）。
 
@@ -134,12 +147,14 @@ def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=No
 **输出目录**（两缓存根同构 `{root}/{fmt}/…`，根分开防复用串源）
 - 官方：`cbeta_ebooks/{fmt}/{work}.{fmt}`；目录型 `cbeta_ebooks/{fmt}/{work}/`
   （`official_books_dir` 收敛配置键，`cbeta_ebooks_dir` 优先兼容 `official_ebooks_dir`）。
-- 自制：`xml_to_ebooks_dir/{fmt}/{work}.{fmt}`（pdf/epub/docx 分格式目录；
-  `find_built` 优先精确名，其次同 `{fmt}/` 下 `{work}*.{fmt}` 通配）。
+- 自制：`xml_to_ebooks_dir/{fmt}/` 下按上游默认命名落盘（pdf/epub/docx 分格式目录；
+  `find_all_built` 找同一 work 的全部产物；`find_built` 返回其中第一项）。
+  同一 work 的多个源文档分别生成各自产物（如 TX0011 上/中下两个 docx），
+  目录型输出同样保留各自文件。复用按“产物齐全＋源不比产物新”判定。
 - **旧版平展布局作废**（不迁移、不双读、不自动删）：旧文件需用户手动删除；
   自制书按新布局会视为不存在 → 需重下/重生成。
 - **生成策略**：合并/ZIP/导出**恒为「仅缺」**＝已有产物复用、只生成缺少
-  （`bridge.ensure_one(regen_all=False)`）。需整体重生成时先点右栏 `[重制]`
+  （`bridge.ensure_products(regen_all=False)`）。需整体重生成时先点右栏 `[重制]`
   （`regen_all=True`；「调整…」临时预设亦强制重生成）。**不用 mtime/哈希推断过期**。
   两边目录互不混淆；ZIP/导出同样按来源取目录。
 
@@ -151,7 +166,7 @@ def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=No
   下载前 HEAD 探针（10s）：404/410 确定不存在即抛 `RemoteNotFound` 快失败
   （失败项记 `不存在`，跳过 90s×3 重试），超时/其它异常照常下载；
   校验基线同库 `seed` 进工作根 `{id 书名}/docx|txt|epub/`，只补缺失）
-右栏来源 = xml      → xml2pdf_bridge.ensure_one(work_id, preset, regen_all) → xml_to_ebooks_dir/{fmt}/{work}.{fmt}
+右栏来源 = xml      → xml2pdf_bridge.ensure_products(work_id, preset, regen_all) → xml_to_ebooks_dir/{fmt}/ 上游默认命名产物（同一 work 可能多个文件）
 → ebook_merger 单一格式合并 / ZIP 打包 / 拷贝导出
 ```
 - 说明页：来源=自制时在「说明」标题下一行居中注 `intro["note"]`（设置「自制书说明」，
@@ -170,7 +185,7 @@ def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=No
 - **缺书确认（官方源；合并/ZIP/导出一致）**：是=先下载（下完仍缺再问
   「是否继续（仅打已有）」）、否=跳过缺书继续（缺的记失败）、取消=不打。
 - 自制格式勾选（右栏）：pdf/epub/**docx**（docx 默认勾选）；**合并只取 pdf/epub**，
-  docx 走 ZIP/导出/校验/打开。`ensure_one`/`find_built`/`xml_dest` 格式通用，无需特判。
+  docx 走 ZIP/导出/校验/打开。`ensure_products`/`find_all_built`/`xml_dest` 格式通用，无需特判。
 - 校验（进程内「自制/重制」＋自动/手动导入）：设置「制作书籍」=`校验`
   （`xml2pdf.verify_build`）时，右栏 `[自制]/[重制]` 转为校验式——`[自制]` 只处理
   自制书目录里**缺少**的书，`[重制]` 整批全部重做；触发 `VerifyWorker` 逐本调
@@ -179,7 +194,9 @@ def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=No
   "--cbeta-ebook", <工作根>, "--verify",
   "--verify-max-diff", N, "--verify-diff-lines", M])`
   （阈值取全局 `xml2pdf.verify_max_diff`（默认 5）与 `verify_diff_lines`（默认 5），钳制 0–50；
-  上游预设 `verify` 段无此二项、仅 CLI 支持，故 publish 始终透传。上游 `cli.py` 修 work id 校验 `2a10d12`；
+  上游预设 `verify` 段无此二项、仅 CLI 支持，故 publish 始终透传。`VerifyWorker`
+  聚合该 work 的全部语义产物报告：任一失败即该 work 失败，只有全部通过才算通过；
+  上游 `cli.py` 修 work id 校验 `2a10d12`；
   官方基线源目录 `src` 亦按 work id 修正 `16df9cf`：文件→其目录 / 目录→该目录 /
   編號→已材料化 XML 的 work 目录，否则 `find_official`/`auto_fetch` 定位不到）；
   预设经临时 run.json 保主题。**比对档由上游 `generate_formal` 生成**（`verify` 段覆盖
@@ -188,7 +205,7 @@ def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=No
   报告落 `{id 书名}（验证）/`（`verify_dir/<丛书>/`，默认 `<工程>/cbeta_verify`，
   与自制书目录分离）。跑完自动导入（可手动重试）：报告兼容
    `{stem}_verify_report.txt` / `report.txt` 两种命名（`bridge.verify_reports`，
-   同一 work 只取最新）。**判读按格式**：优先读每 work 段首的上游总结行
+    同一语义产物只取最新；同一 work 的不同语义产物分别保留）。**判读按格式**：优先读每 work 段首的上游总结行
    （`bridge.parse_work_summary_line`：`[id] N format: 1[docx=OK(0/0)], 2[pdf=1],
    3[epub=FAIL(48/97)]`；`pdf=数字` 为被覆盖、结论跟随同行第 M 条；`COVERED` 无 ref、
    `NO_BASELINE`/`NOGEN`/`ERROR` 为未判定原因；`→` 左侧为产物格式）；
@@ -203,8 +220,9 @@ def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=No
    缺逐格式信息时退回整体判定
    （`bridge.verify_report_pass`：有 `[FAIL]`→不通过；≥1 `[OK]` 无 `[FAIL]`→通过；否则未判定）。
    **逐格式入库**：通过的格式 **move** 入 `{fmt}/{id 书名}.{fmt}`（L2 带书名，
-   保留上游产物名；入库即被 `ensure_one(missing)` 复用），
-   未通过的格式跳过、不拖累通过者（如 docx 过、epub 没过 → 入 docx＋被覆盖的 pdf）。
+    保留上游产物名；入库即被 `ensure_products` 的产物齐全检查复用），
+    未通过的格式跳过、不拖累通过者（如 docx 过、epub 没过 → 入 docx＋被覆盖的 pdf）。
+    上/中下等多源语义产物按各自报告目录精确入库，不互相覆盖或误套报告。
    未判定标注原因（如 `T1858 未判定（epub无基线）`）；失败标签带数
    （如 `T1859 校验未通过（epub 缺48/多97）`）。结果页每部书列出入库了哪个格式文件
    （可点开；人工放行的标"人工放行"）。
@@ -220,7 +238,7 @@ def convert(work_id, xml_path, out_file, config, fmt="pdf", preset=None, stop=No
 
 ## 6. 实施清单
 
-- [x] `publish`：`xml2pdf_bridge.py`（库调用＋预设（上游 API）＋分格式目录＋`ensure_one` 生成策略）
+- [x] `publish`：`xml2pdf_bridge.py`（库调用＋预设（上游 API）＋分格式目录＋`ensure_products` 生成策略，支持一 work 多产物）
 - [x] `publish`：右栏来源单选＋预设下拉＋[调整…]（生成策略单选已移除：合并/ZIP/导出恒仅缺，「重制」按钮=全部重生成）
 - [x] `publish`：`[合并]` 整批同源、分格式目录、说明页注明；**ZIP/导出 亦支持自制**
 - [x] `publish`：**自制/重制（设置=校验）**（进程内 `VerifyWorker`→`verify_work`，跑完自动导入；
@@ -270,11 +288,11 @@ JSON）时只当 `config-json` 单槽，其余 CSS 槽回出厂，不取仓库�
 
 1. 覆盖不全：预设是整棵配置树（`output/pages/source/engines/annotations/…`），
    CLI 只覆盖部分叶子，无开关的项会丢；走文件是面板产出 dict → CLI 消费
-   文件的无损直通。
+    文件的无损直通。
 2. 耦合回流：上游每加一个面板选项，publish 就要手写一条映射；预设制正是
-   为清掉这类逐项耦合。
+    为清掉这类逐项耦合。
 3. 路径分叉：命名/临时预设共用一条 `--config` 路径（`_run_preset` 透传、
-   `ensure_one` 复用判断）；开关直传要另起一套 argv 装配，调用点更复杂。
+    `ensure_products` 复用判断）；开关直传要另起一套 argv 装配，调用点更复杂。
 
 故保持临时预设文件方案（`write_temp_preset` + 临时 run.json 包装，用后删）；
 开关直传只适合临时调试，不做正式路径。
@@ -304,7 +322,8 @@ publish 的「自制/重制（校验）」产物目录天然符合本规范；�
 ### 9.2 publish 侧导入规则
 
 1. 报告发现：递归扫描 `*_verify_report.txt` 与 `report.txt`
-  （`bridge.verify_reports`）。
+  （`bridge.verify_reports`）。同一 work 的不同语义产物各保留最新的一份报告
+  （例如 TX0011 上/中下），同一语义产物的新旧两种命名仍只取最新。
 2. 书单匹配：`stem == work`，或 `stem` 以 `work + " "` 开头；匹配不上当前丛书书单的跳过。
 3. 判读**按格式**：优先读每 work 段首的上游总结行
    （`[id] N format: 1[docx=OK(0/0)], 2[pdf=1], 3[epub=FAIL(48/97)]`；
@@ -315,14 +334,18 @@ publish 的「自制/重制（校验）」产物目录天然符合本规范；�
    缺逐格式信息时退回整体判定（`bridge.verify_report_pass`：含 `[FAIL]`→不通过；
    ≥1 `[OK]` 无 `[FAIL]`→通过；否则未判定）。缺数/多余数取自总结行
    （`FAIL(48/97)`→`缺48/多97`），用于失败标签与人工检验。
-4. 产物识别（`MainWindow._verify_products`）：只看目录**顶层** `{stem}*.{ext}`，
-   后缀映射 `pdf/epub/docx/odt/md/txt` → fmt；排除 `*_verify_report.txt`、`_ids.txt`；
-   每格式取排序后第一个。
-5. 入库（**逐格式**）：某格式判通过 → `shutil.move` 到 `{自制书根}/{fmt}/{id 书名}.{fmt}`
-   （L2 带书名，保留上游产物名；自动建目录、同名覆盖），入库即被 `ensure_one(missing)` 复用；
+4. 产物识别（`MainWindow._verify_products`）：有报告时优先用该报告所在
+  `(验证)` 目录名派生的产物名精确匹配；其余只看目录**顶层** `{stem}*.{ext}`，
+  后缀映射 `pdf/epub/docx/odt/md/txt` → fmt；排除 `*_verify_report.txt`、`_ids.txt`；
+  同一 work 的多个语义产物分别入库。
+5. 入库（**逐格式**）：某格式判通过 → `shutil.move` 到 `{自制书根}/{fmt}/{上游产物名}.{fmt}`
+  （L2 带书名，保留上游产物名；自动建目录、同名覆盖），入库即被 `ensure_products` 的
+  产物齐全检查复用；
    未通过/未判定的格式跳过，**不拖累**通过的格式（如 docx 过、epub 没过 → 只入 docx）。
-   `find_built` 先精确 `{fmt}/{work}.{fmt}`、再 `{fmt}/{work} *.{fmt}`（边界空格，
-   防 `T185` 误命中 `T1858`）；工作目录名 `{id} {书名}` 即命名来源（`built_name`）。
+    `find_built` 先精确 `{fmt}/{work}.{fmt}`、再 `{fmt}/{work} *.{fmt}`（边界空格，
+    防 `T185` 误命中 `T1858`）；`built_name`（工作目录名 `{id} {书名}`）只用于
+    单源精确路径与复用查找，不作为多源产物的命名来源——多源各产物名取各自源文档
+    的 `title level="m"`（如 TX0011 的上/中下，目录名只反映其中之一）。
 6. 无任何产物 → 记"缺产物"（失败）；全部格式都未通过 → 记"校验未通过"；
    都未判定 → "未判定"。
 7. **人工检验**：导入（自动/手动）后，未通过＋未判定项弹框询问，可看报告后勾选放行入库
