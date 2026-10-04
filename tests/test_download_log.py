@@ -565,12 +565,17 @@ class MergeEditNoteGuardTest(unittest.TestCase):
                 break
         _ensure_app().processEvents()
 
-    def _run_merge_no(self, cover):
+    def _run_merge_no(self, cover, coll_note=None):
         # 返回 (boxes, generated_calls)
         import cbeta_publish.books.xml2pdf_bridge as b
         from PySide6.QtWidgets import QMessageBox
         win = self.win
         self._select_coll(["T0001"])
+        _d = win._coll_dict(win.coll_combo.currentData())
+        if coll_note is not None:
+            _d["edit_note"] = coll_note
+        else:
+            _d.pop("edit_note", None)
         win.config["default_source"] = "xml"
         win.config["xml_to_ebooks_dir"] = str(self.tmp / "xb")
         root = self.tmp / "x2p"
@@ -613,6 +618,14 @@ class MergeEditNoteGuardTest(unittest.TestCase):
         boxes, calls = self._run_merge_no(
             {"enabled": False, "edit_note": {"file": str(f), "enabled": True}})
         self.assertTrue(any("封面总开关" in str(a) for a in boxes), boxes)
+        self.assertEqual(calls, [])
+
+    def test_collection_specific_note_guard(self):
+        # 丛书特定说明页：启用但无文件 → 前置检查弹框（作用于当前丛书）
+        boxes, calls = self._run_merge_no(
+            {"enabled": True, "edit_note": {"file": "", "enabled": False}},
+            coll_note={"file": "", "enabled": True})
+        self.assertTrue(any("加丛书说明页" in str(a) for a in boxes), boxes)
         self.assertEqual(calls, [])
 
     def test_ok_proceeds_without_question(self):

@@ -616,7 +616,10 @@ class MainWindow(QMainWindow):
         ch.addWidget(self.btn_blank)
         self.coll_combo=QComboBox()
         self.coll_combo.setToolTip("丛书缓存 + 丛书列表（上方分类下拉可过滤）")
-        ch.addWidget(self.coll_combo, 1)
+        ch.addWidget(self.coll_combo, 1)   # 加宽：延伸到「加说明页」按钮左侧
+        self.btn_coll_note=QPushButton("加说明页")
+        self.btn_coll_note.setToolTip("设置当前丛书的说明页（与设置页「加丛书说明页」同源）")
+        ch.addWidget(self.btn_coll_note)
         rv.addWidget(combo_row)
         mgmt=QWidget()
         mh=QHBoxLayout(mgmt)
@@ -891,6 +894,7 @@ class MainWindow(QMainWindow):
         self.btn_tags.clicked.connect(self._edit_coll_tags)
         self.coll_tag_filter.currentIndexChanged.connect(self._on_coll_tag_filter)
         self.btn_blank.clicked.connect(self._new_blank_collection)
+        self.btn_coll_note.clicked.connect(self._coll_note_page_dialog)
         self.btn_rename.clicked.connect(self._rename_collection)
         self.btn_delete.clicked.connect(self._delete_collection)
         self.btn_save.clicked.connect(self._save_collections)
@@ -5881,7 +5885,11 @@ class MainWindow(QMainWindow):
 
     def _open_settings(self):
         from cbeta_publish.gui.settings_dialog import SettingsDialog
-        dlg=SettingsDialog(self.config, self)
+        _data=self.coll_combo.currentData()
+        _coll=None
+        if isinstance(_data, str) and not self._is_coll_placeholder(_data):
+            _coll=self._coll_dict(_data)
+        dlg=SettingsDialog(self.config, self, collection=_coll, collection_path=_data)
         dlg.exec()
         new_cfg=dlg.result_config()
         if new_cfg is not None:
@@ -5895,6 +5903,16 @@ class MainWindow(QMainWindow):
             # 设置可能改了来源/预设目录/默认预设：刷新右栏
             self._sync_source_preset_ui()
             self._refresh_dir_labels()
+            # 丛书特定说明页：写回当前丛书（保存则落盘，否则仅本次内存）
+            _cen=dlg.collection_edit_note()
+            if _cen is not None and _coll is not None:
+                _old=(_coll.get("edit_note") or {"file": "", "enabled": False})
+                if _cen != _old:
+                    _coll["edit_note"]=_cen
+                    self._mark_coll_changed(str(_data))
+                    if saved:
+                        self._save_one_collection(str(_data))
+                    self._load_coll_works()
             if saved:
                 self.detail.setText("设置已保存（界面字体即时生效；封面字体下次合并生效）")
             else:
@@ -5907,6 +5925,111 @@ class MainWindow(QMainWindow):
                 r()
             except Exception:
                 pass
+
+    def _note_status_text(self, note):
+        """说明页状态文本：启用/未启用 + 文件相对路径 + 是否存在。"""
+        note = note or {}
+        f = (note.get("file") or "").strip()
+        en = bool(note.get("enabled", False))
+        if not f:
+            return "未选择文件"
+        try:
+            from cbeta_publish.books.ebook_merger import resolve_note_path
+            from cbeta_publish.gui.settings_dialog import note_display_path
+            p = resolve_note_path(f)
+            exists = p is not None and p.is_file()
+            disp = note_display_path(f)
+        except Exception:
+            exists = False
+            disp = f
+        return f"{disp}（{'存在' if exists else '缺失'}）" + ("" if en else "，未启用")
+
+    def _coll_note_page_dialog(self):
+        """右栏「加说明页」：显示/编辑当前丛书的说明页（顺带显示全局编辑说明页）。
+
+        两处各自 复选＋选择…＋清除＋文件框；确定即落盘（config + 丛书文件）。
+        取消勾选但保留文件名不会影响合并（未启用即不插页），只是显示冗余；
+        「清除」把文件一并清空，界面干净。
+        """
+        from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
+                                       QCheckBox, QLineEdit, QPushButton,
+                                       QDialogButtonBox)
+        from cbeta_publish.gui.settings_dialog import (choose_note_file,
+                                                       note_display_path)
+        data = self.coll_combo.currentData()
+        if self._is_coll_placeholder(data):
+            self._wrap_box(QMessageBox.Warning, "失败", "请选择一个丛书")
+            return
+        d = self._coll_dict(data)
+        if d is None:
+            self._wrap_box(QMessageBox.Warning, "失败", "丛书读取失败")
+            return
+        cover = self.config.setdefault("cover", {})
+        gnote = dict(cover.get("edit_note") or {"file": "", "enabled": False})
+        cnote = dict(d.get("edit_note") or {"file": "", "enabled": False})
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("说明页")
+        dlg.resize(560, 300)
+        v = QVBoxLayout(dlg)
+
+        def _section(title, note, hint):
+            v.addWidget(QLabel(f"<b>{title}</b>"))
+            if hint:
+                lb = QLabel(hint)
+                lb.setStyleSheet("color: gray;")
+                lb.setWordWrap(True)
+                v.addWidget(lb)
+            row = QWidget()
+            h = QHBoxLayout(row)
+            h.setContentsMargins(0, 0, 0, 0)
+            chk = QCheckBox("加说明页")
+            chk.setChecked(bool(note.get("enabled", False)))
+            ed = QLineEdit(note_display_path(note.get("file", "")))
+            ed.setReadOnly(True)
+            ed.setPlaceholderText("未关联")
+            ed.setCursorPosition(0)
+            btn_pick = QPushButton("选择…")
+            btn_pick.clicked.connect(lambda: choose_note_file(dlg, ed))
+            btn_clear = QPushButton("清除")
+            def _clear():
+                ed.setText("")
+                chk.setChecked(False)
+            btn_clear.clicked.connect(_clear)
+            h.addWidget(chk)
+            h.addWidget(btn_pick)
+            h.addWidget(btn_clear)
+            h.addWidget(ed, 1)
+            v.addWidget(row)
+            return chk, ed
+
+        g_chk, g_ed = _section("加编辑说明页（所有丛书）", gnote,
+                               "全局说明页，作用于所有丛书（设置→封面/版式 也可改）")
+        c_chk, c_ed = _section(f"加丛书说明页（{d.get('name', '')}）", cnote,
+                               "作用于当前丛书，随丛书切换")
+        v.addStretch(1)
+        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        btns.accepted.connect(dlg.accept)
+        btns.rejected.connect(dlg.reject)
+        v.addWidget(btns)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        # 确定即落盘：全局写 config/app.json；丛书写其 JSON
+        cover["edit_note"] = {"file": g_ed.text().strip(),
+                              "enabled": g_chk.isChecked()}
+        d["edit_note"] = {"file": c_ed.text().strip(),
+                          "enabled": c_chk.isChecked()}
+        self._save_config()
+        if self._is_blank_name(d.get("name", "")):
+            # 空白工作丛书：不强制命名落盘，暂存内存（星号提示），随「保存」处理
+            self._mark_coll_changed(str(data))
+            self.detail.setText("已保存全局说明页；空白丛书未命名，说明页设置暂存内存")
+            return
+        if self._save_one_collection(str(data)):
+            self._load_coll_works()
+            self.detail.setText("已保存说明页设置（全局 + 当前丛书）")
+        else:
+            self.detail.setText("已保存全局说明页；当前丛书落盘失败")
 
     def _cover_config(self):
         # 直接使用内存配置，避免 CWD 相对读取
@@ -6586,33 +6709,39 @@ class MainWindow(QMainWindow):
         done_units=0
         cancelled=False
         dlg, update, pstate = self._make_progress("合成", 100)
-        # 编辑说明前置检查（一次）：启用但未选文件 / 文件无效 / 封面总开关关闭
-        # 都会导致不插编辑说明页——弹框问是否继续，避免静默跳过
+        # 编辑说明前置检查（一次）：全局「加编辑说明页」与「加丛书说明页」
+        # （后者存于当前丛书 JSON）；启用但未选文件 / 文件无效 / 封面总开关关闭
+        # 都会导致不插说明页——弹框问是否继续，避免静默跳过。顺序：全局→丛书特定。
         from cbeta_publish.books.ebook_merger import parse_editnote_file
-        _en_parsed=None
-        _encfg0=(cover_cfg.get("edit_note") or {})
-        if _encfg0.get("enabled", False):
-            _enf0=(_encfg0.get("file") or "").strip()
-            _en_problems=[]
-            if not _enf0:
-                _en_problems.append("已勾选插入编辑说明页，但未选择说明文件")
+        _editnotes=[]      # 已解析说明页（全局在前，丛书特定在后）
+        _en_problems=[]
+        def _load_note(_cfg, _who):
+            if not (_cfg and _cfg.get("enabled", False)):
+                return
+            _f=(_cfg.get("file") or "").strip()
+            if not _f:
+                _en_problems.append(f"已勾选{_who}，但未选择说明文件")
+                return
+            _p=parse_editnote_file(_f)
+            if _p is None:
+                _en_problems.append(f"{_who}文件缺失或无有效内容：{_f}")
             else:
-                _en_parsed=parse_editnote_file(_enf0)
-                if _en_parsed is None:
-                    _en_problems.append(f"说明文件缺失或无有效内容：{_enf0}")
-            if _en_parsed is not None and not cover_cfg.get("enabled", True):
-                _en_problems.append("封面总开关已关闭（合并时不加封面封底），编辑说明页需要封面区")
-            if _en_problems:
-                _ret=self._wrap_box(QMessageBox.Question, "编辑说明",
-                    "；".join(_en_problems) + "。\n是否继续合并（不插编辑说明页）？",
-                    QMessageBox.Yes | QMessageBox.No)
-                if _ret!=QMessageBox.Yes:
-                    self.btn_merge.setEnabled(True)
-                    pstate["finish"](["已取消合成（本次不输出/未完成）。"])
-                    self._load_coll_works()
-                    self.detail.setText("已取消合成")
-                    return
-                _en_parsed=None
+                _editnotes.append(_p)
+        _load_note(cover_cfg.get("edit_note"), "加编辑说明页")
+        _load_note(d.get("edit_note"), "加丛书说明页")
+        if _editnotes and not cover_cfg.get("enabled", True):
+            _en_problems.append("封面总开关已关闭（合并时不加封面封底），说明页需要封面区")
+        if _en_problems:
+            _ret=self._wrap_box(QMessageBox.Question, "编辑说明",
+                "；".join(_en_problems) + "。\n是否继续合并（不插说明页）？",
+                QMessageBox.Yes | QMessageBox.No)
+            if _ret!=QMessageBox.Yes:
+                self.btn_merge.setEnabled(True)
+                pstate["finish"](["已取消合成（本次不输出/未完成）。"])
+                self._load_coll_works()
+                self.detail.setText("已取消合成")
+                return
+            _editnotes=[]
         def bump(label=""):
             nonlocal done_units
             done_units+=1
@@ -6698,8 +6827,8 @@ class MainWindow(QMainWindow):
                         out=out_dir/f"{self._merge_basename(d, g, gindex, total=len(groups))}.{fmt}"
                         update(100*gbase/total_units, f"[{fmt}] 分册「{glabel}」 → {out.name}（{len(gok)} 部）")
                     intro=self._intro_for(gworks, cover_cfg, made_by_xml=(run_source=="xml"))
-                    # 编辑说明仅第一分册
-                    _en_one=_en_parsed if gindex==1 else None
+                    # 编辑说明仅第一分册；全局→丛书特定顺序传入（可多页）
+                    _en_one=(_editnotes or None) if gindex==1 else None
                     gfiles=[]
                     if fmt=="pdf":
                         parts=merge_pdfs(gok, out, titles=gtitles, collection_name=cname, organizer=organizer, cover_config=cover_cfg, intro=intro, progress=gprog, split_pages=split_pages, editnote=_en_one)

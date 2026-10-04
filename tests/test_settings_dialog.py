@@ -5,6 +5,8 @@
 """
 import copy
 import os
+import shutil
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -84,6 +86,117 @@ class SettingsDialogTest(unittest.TestCase):
         self.assertTrue(sub.widget(2).isAncestorOf(dlg.font_rows["title"]))
         self.assertTrue(sub.widget(3).isAncestorOf(dlg.sp_body["a5"]))
         self.assertTrue(sub.widget(4).isAncestorOf(dlg.sp_margins["a5"]["left"]))
+
+    def test_subtabs_styled(self):
+        # 设置顶层页签与嵌套子页签统一强调样式（加粗 + 选中下划线）
+        from cbeta_publish.gui.settings_dialog import SUBTAB_QSS
+        dlg = self._dlg()
+        try:
+            for sub in (dlg._tabs, dlg._dirs_tabs, dlg._cover_subtabs):
+                self.assertEqual(sub.styleSheet(), SUBTAB_QSS)
+                self.assertIn("font-weight:bold", sub.styleSheet())
+                self.assertIn("QTabBar::tab:selected", sub.styleSheet())
+        finally:
+            dlg.close()
+
+    def test_note_display_path_relative(self):
+        # 数据根内的绝对路径 → 相对路径；根外绝对路径原样；相对路径归一化
+        import cbeta_publish.gui.settings_dialog as sd
+        abs_inside = sd.PROJECT_ROOT / "assets" / "notes" / "sample.txt"
+        self.assertEqual(sd.note_display_path(str(abs_inside)),
+                         str(Path("assets") / "notes" / "sample.txt"))
+        self.assertEqual(sd.note_display_path("assets/notes/a.txt"),
+                         str(Path("assets") / "notes" / "a.txt"))
+        self.assertEqual(sd.note_display_path("Z:/x/y.txt"), "Z:/x/y.txt")
+        self.assertEqual(sd.note_display_path(""), "")
+
+    def test_note_checkbox_texts_renamed(self):
+        dlg = self._dlg()
+        try:
+            self.assertEqual(dlg.chk_editnote_enabled.text(), "加编辑说明页")
+            self.assertEqual(dlg.chk_editnote_coll_enabled.text(), "加丛书说明页")
+        finally:
+            dlg.close()
+
+    def test_collection_edit_note_roundtrip(self):
+        # 丛书特定说明页：全局项 tooltip；随丛书上下文；collection_edit_note 往返
+        coll = {"id": "c", "name": "C", "category": "custom", "tags": [],
+                "work_ids": ["T0001"],
+                "edit_note": {"file": "E:/n.txt", "enabled": True}}
+        dlg = SettingsDialog(copy.deepcopy(DEFAULT_CONFIG), None,
+                             collection=coll, collection_path="x.json")
+        try:
+            self.assertEqual(dlg.chk_editnote_enabled.toolTip(), "所有丛书的说明页")
+            self.assertEqual(dlg.chk_editnote_coll_enabled.toolTip(), "当前丛书的说明页（随丛书切换）")
+            self.assertTrue(dlg.chk_editnote_coll_enabled.isChecked())
+            self.assertEqual(dlg.ed_editnote_coll.text(), "E:/n.txt")
+            dlg.ed_editnote_coll.setText("E:/m.txt")
+            dlg.chk_editnote_coll_enabled.setChecked(False)
+            self.assertEqual(dlg.collection_edit_note(),
+                             {"file": "E:/m.txt", "enabled": False})
+        finally:
+            dlg.close()
+        # 无丛书上下文：控件禁用、返回 None
+        dlg2 = self._dlg()
+        try:
+            self.assertIsNone(dlg2.collection_edit_note())
+            self.assertFalse(dlg2.chk_editnote_coll_enabled.isEnabled())
+        finally:
+            dlg2.close()
+
+    def test_note_rel_inside_and_outside(self):
+        # 限定 assets/notes/ 内：目录内→相对路径；目录外→None
+        import cbeta_publish.gui.settings_dialog as sd
+        tmp = Path(tempfile.mkdtemp())
+        real = sd.NOTES_DIR
+        sd.NOTES_DIR = tmp / "notes"
+        try:
+            (sd.NOTES_DIR).mkdir(parents=True)
+            inside = sd.NOTES_DIR / "n.txt"
+            inside.write_text("x", encoding="utf-8")
+            self.assertEqual(SettingsDialog._note_rel(str(inside)),
+                             str(Path("assets") / "notes" / "n.txt"))
+            outside = tmp / "out.txt"
+            outside.write_text("x", encoding="utf-8")
+            self.assertIsNone(SettingsDialog._note_rel(str(outside)))
+            # 前缀相近但不是子目录 → 拒绝
+            near = tmp / "notes2"
+            near.mkdir()
+            (near / "m.txt").write_text("x", encoding="utf-8")
+            self.assertIsNone(SettingsDialog._note_rel(str(near / "m.txt")))
+        finally:
+            sd.NOTES_DIR = real
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_choose_note_inside_and_outside(self):
+        from unittest import mock
+        import cbeta_publish.gui.settings_dialog as sd
+        tmp = Path(tempfile.mkdtemp())
+        real = sd.NOTES_DIR
+        sd.NOTES_DIR = tmp / "notes"
+        sd.NOTES_DIR.mkdir(parents=True)
+        dlg = self._dlg()
+        try:
+            inside = sd.NOTES_DIR / "n.txt"
+            inside.write_text("<title>T\n正文\n", encoding="utf-8")
+            with mock.patch.object(sd.QFileDialog, "getOpenFileName",
+                                   return_value=(str(inside), "")):
+                dlg._choose_note(dlg.ed_editnote)
+            self.assertEqual(dlg.ed_editnote.text(),
+                             str(Path("assets") / "notes" / "n.txt"))
+            # 目录外：复制进 notes 后采用
+            outside = tmp / "外说明.txt"
+            outside.write_text("<title>T\n正文\n", encoding="utf-8")
+            with mock.patch.object(sd.QFileDialog, "getOpenFileName",
+                                   return_value=(str(outside), "")):
+                dlg._choose_note(dlg.ed_editnote)
+            self.assertEqual(dlg.ed_editnote.text(),
+                             str(Path("assets") / "notes" / "外说明.txt"))
+            self.assertTrue((sd.NOTES_DIR / "外说明.txt").is_file())
+        finally:
+            dlg.close()
+            sd.NOTES_DIR = real
+            shutil.rmtree(tmp, ignore_errors=True)
 
     def test_font_input_uses_native_separator(self):
         cfg = copy.deepcopy(DEFAULT_CONFIG)
@@ -370,13 +483,13 @@ class SettingsDialogTest(unittest.TestCase):
         self.assertTrue(d2.chk_editnote_enabled.isChecked())
         self.assertIn("editnote_title", d2.font_rows)
         self.assertIn("editnote_body", d2.font_rows)
-        # 行结构：复选框＋浏览按钮＋输入框同行；说明页标题并入复选框行右侧
+        # 行结构：复选框＋选择/导入按钮＋输入框同行；说明页标题并入复选框行右侧
         from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton
         row = dlg.chk_editnote_enabled.parent()
         kinds = [type(w).__name__ for w in
                  [row.layout().itemAt(i).widget() for i in range(row.layout().count())]]
         self.assertEqual(kinds, ["QCheckBox", "QPushButton", "QLineEdit"])
-        self.assertEqual(row.layout().itemAt(1).widget().text(), "（内容文件）")
+        self.assertEqual(row.layout().itemAt(1).widget().text(), "选择…")
         irow = dlg.chk_intro_enabled.parent()
         itexts = [w.text() for w in
                   [irow.layout().itemAt(i).widget() for i in range(irow.layout().count())]

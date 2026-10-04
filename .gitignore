@@ -25,6 +25,10 @@ _export/
 config/ui_state.json
 config/verify_records.json
 
+# ---- 说明文件：用户私有，仅随包示例 sample.txt 进库 ----
+assets/notes/*
+!assets/notes/sample.txt
+
 # ---- 派生缓存 ----
 collections/index.json
 

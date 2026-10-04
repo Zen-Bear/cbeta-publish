@@ -1040,5 +1040,84 @@ class LastCollectionTest(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+class CollNoteDialogTest(unittest.TestCase):
+    """右栏「加说明页」：显示/编辑全局+当前丛书说明页，确定即落盘。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.win, cls.tmp = _make_window()
+        win = cls.win
+        for i in range(win.coll_combo.count()):
+            if str(win.coll_combo.itemData(i)).endswith("測試叢書.json"):
+                win.coll_combo.setCurrentIndex(i)
+                break
+        _ensure_app().processEvents()
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def test_button_and_status_text(self):
+        win = self.win
+        self.assertEqual(win.btn_coll_note.text(), "加说明页")
+        self.assertIn("未选择文件", win._note_status_text(None))
+        self.assertIn("未启用",
+                      win._note_status_text({"file": "assets/notes/x.txt",
+                                             "enabled": False}))
+
+    def test_dialog_saves_global_and_collection(self):
+        from PySide6.QtWidgets import (QApplication, QCheckBox, QLineEdit)
+        from PySide6.QtCore import QTimer
+        win = self.win
+        data = win.coll_combo.currentData()
+        d = win._coll_dict(data)
+        # 清初值，确保断言到本次写入
+        win.config.setdefault("cover", {})["edit_note"] = {"file": "", "enabled": False}
+        d["edit_note"] = {"file": "", "enabled": False}
+
+        def act():
+            dlg = QApplication.activeModalWidget()
+            chks = dlg.findChildren(QCheckBox)
+            eds = dlg.findChildren(QLineEdit)
+            chks[0].setChecked(True)
+            eds[0].setText("assets/notes/g.txt")
+            chks[1].setChecked(True)
+            eds[1].setText("assets/notes/c.txt")
+            dlg.accept()
+
+        QTimer.singleShot(0, act)
+        win._coll_note_page_dialog()
+        self.assertEqual(win.config["cover"]["edit_note"],
+                         {"file": "assets/notes/g.txt", "enabled": True})
+        self.assertEqual(d["edit_note"],
+                         {"file": "assets/notes/c.txt", "enabled": True})
+        cdisk = json.loads(Path(win._config_path).read_text(encoding="utf-8"))
+        self.assertEqual(cdisk["cover"]["edit_note"],
+                         {"file": "assets/notes/g.txt", "enabled": True})
+        disk = json.loads(Path(data).read_text(encoding="utf-8"))
+        self.assertEqual(disk["edit_note"],
+                         {"file": "assets/notes/c.txt", "enabled": True})
+
+    def test_dialog_clear_unchecks_and_blanks(self):
+        from PySide6.QtWidgets import QApplication, QCheckBox, QLineEdit, QPushButton
+        from PySide6.QtCore import QTimer
+        win = self.win
+        data = win.coll_combo.currentData()
+        d = win._coll_dict(data)
+        d["edit_note"] = {"file": "assets/notes/c.txt", "enabled": True}
+
+        def act():
+            dlg = QApplication.activeModalWidget()
+            # 点两处「清除」→ 文件清空、复选框取消
+            for b in dlg.findChildren(QPushButton):
+                if b.text() == "清除":
+                    b.click()
+            dlg.accept()
+
+        QTimer.singleShot(0, act)
+        win._coll_note_page_dialog()
+        self.assertEqual(d["edit_note"], {"file": "", "enabled": False})
+
+
 if __name__ == "__main__":
     unittest.main()

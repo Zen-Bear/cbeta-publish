@@ -617,7 +617,12 @@ class RenameCollectionTest(unittest.TestCase):
         self.assertIsInstance(lay, QHBoxLayout)
         self.assertIs(lay.itemAt(0).widget(), win.btn_blank)
         self.assertIs(lay.itemAt(1).widget(), win.coll_combo)
+        # 下拉加宽（stretch=1），右侧「加说明页」按钮紧接其后
         self.assertEqual(lay.stretch(1), 1)
+        items = [lay.itemAt(i).widget() for i in range(lay.count())]
+        self.assertIn(win.btn_coll_note, items)
+        self.assertEqual(items.index(win.btn_coll_note),
+                         items.index(win.coll_combo) + 1)
 
     def test_mgmt_row_order_and_tags_label(self):
         win = self.win

@@ -18,6 +18,15 @@ PROJECT_ROOT = app_root()
 CONFIG_PATH = PROJECT_ROOT / "config" / "app.json"
 BACKUP_DIR = PROJECT_ROOT / "mulu" / "backup"
 IMAGES_DIR = PROJECT_ROOT / "assets" / "images"
+NOTES_DIR = PROJECT_ROOT / "assets" / "notes"
+
+#: 嵌套子页签强调样式：加粗标签 + 选中蓝色下划线 + 面板细边框
+#: `border:0` 去掉标签间的竖向分隔线
+SUBTAB_QSS = (
+    "QTabBar::tab { font-weight:bold; padding:4px 10px; border:0px; }"
+    "QTabBar::tab:selected { color:#1565c0; border-bottom:2px solid #1565c0; }"
+    "QTabWidget::pane { border:1px solid #cccccc; border-radius:2px; }"
+)
 
 DEFAULT_CONFIG = {
     "official_ebooks_dir": str(PROJECT_ROOT / "cbeta_ebooks"),
@@ -111,16 +120,71 @@ def _backup_last():
     shutil.copy2(str(CONFIG_PATH), str(last_dir / "app.json"))
 
 
+def note_rel(f):
+    """所选文件在 assets/notes/ 内 → 相对路径；否则 None（大小写不敏感）。"""
+    try:
+        root = os.path.normcase(str(NOTES_DIR.resolve()) + os.sep)
+        full = os.path.normcase(str(Path(f).resolve()))
+        if full.startswith(root):
+            return str(Path("assets") / "notes" / Path(f).name)
+    except OSError:
+        pass
+    return None
+
+
+def note_display_path(f):
+    """说明文件显示/存储路径：在数据根内一律显示相对路径，否则原样。"""
+    p = str(f or "").strip()
+    if not p:
+        return ""
+    pp = Path(p)
+    try:
+        if pp.is_absolute():
+            return str(pp.resolve().relative_to(app_root().resolve()))
+        return str(pp)
+    except (ValueError, OSError):
+        return p
+
+
+def choose_note_file(parent, ed):
+    """选说明 TXT（共享给设置页与右栏弹窗）：
+    assets/notes/ 内直接采用（存相对路径）；目录外复制进来后采用。"""
+    f, _ = QFileDialog.getOpenFileName(parent, "选择说明 TXT 文件",
+                                       str(NOTES_DIR), "文本 (*.txt)")
+    if not f:
+        return
+    rel = note_rel(f)
+    if rel is not None:
+        ed.setText(rel)
+        ed.setCursorPosition(0)
+        return
+    try:
+        NOTES_DIR.mkdir(parents=True, exist_ok=True)
+        target = NOTES_DIR / Path(f).name
+        if Path(f).resolve() != target.resolve():
+            shutil.copy2(str(f), str(target))
+        ed.setText(str(Path("assets") / "notes" / target.name))
+        ed.setCursorPosition(0)
+    except Exception as e:
+        QMessageBox.warning(parent, "失败", f"导入说明文件失败：{e}")
+
+
 class SettingsDialog(QDialog):
-    def __init__(self, config: dict, parent=None):
+    def __init__(self, config: dict, parent=None, collection=None,
+                 collection_path=None):
         super().__init__(parent)
         self.setWindowTitle("设置")
         self.resize(680, 560)
         self._cfg = json.loads(json.dumps(config))  # 深拷贝
         self._cfg_path = CONFIG_PATH
+        # 当前丛书上下文（丛书特定说明页用）；None=无丛书（设置项禁用）
+        self._coll = json.loads(json.dumps(collection)) if isinstance(collection, dict) else None
+        self._coll_path = collection_path
 
         v = QVBoxLayout(self)
         tabs = QTabWidget()
+        self._tabs = tabs
+        tabs.setStyleSheet(SUBTAB_QSS)
         tabs.addTab(self._tab_dirs(), "数据/输出")
         tabs.addTab(self._tab_cover(), "封面/版式")
         tabs.addTab(self._tab_made(), "自制E书")
@@ -361,6 +425,7 @@ class SettingsDialog(QDialog):
         mv.addStretch(1)   # 余高沉底：行只取自然高度，不均摊拉高（否则行间空两行）
         dirs_tabs = QTabWidget()
         self._dirs_tabs = dirs_tabs
+        dirs_tabs.setStyleSheet(SUBTAB_QSS)
         dirs_tabs.addTab(mode_box, "分册模式")
         dirs_tabs.addTab(def_box, "E书默认来源和格式")
         dirs_tabs.addTab(lib_box, "官方电子书本地库")
@@ -585,23 +650,63 @@ class SettingsDialog(QDialog):
         self.chk_cover_enabled.setChecked(bool(cover.get("enabled", True)))
         cform.addRow(self.chk_cover_enabled)
         # 编辑说明（TXT 转排版，插在说明页之前、仅第一分册；默认关闭）：
-        # 复选框＋浏览按钮＋输入框同一行（无单独标签行）
+        # 复选框＋选择/导入按钮＋输入框同一行（说明 TXT 统一托管 assets/notes/）
         _en = cover.setdefault("edit_note", {"file": "", "enabled": False})
-        self.ed_editnote = QLineEdit(_en.get("file", ""))
+        self.ed_editnote = QLineEdit(note_display_path(_en.get("file", "")))
         self.ed_editnote.setReadOnly(True)
+        self.ed_editnote.setCursorPosition(0)   # 长路径显示开头，而非末尾
         self.ed_editnote.setPlaceholderText("未关联（合并时不插编辑说明页）")
         _enrow = QWidget()
         _enh = QHBoxLayout(_enrow)
         _enh.setContentsMargins(0, 0, 0, 0)
-        self.chk_editnote_enabled = QCheckBox("插入编辑说明页")
+        self.chk_editnote_enabled = QCheckBox("加编辑说明页")
         self.chk_editnote_enabled.setChecked(bool(_en.get("enabled", False)))
-        self.btn_editnote_file = QPushButton("（内容文件）")
-        self.btn_editnote_file.setToolTip("选择编辑说明 TXT 文件")
-        self.btn_editnote_file.clicked.connect(self._pick_editnote)
+        self.chk_editnote_enabled.setToolTip("所有丛书的说明页")
+        self.btn_editnote_file = QPushButton("选择…")
+        self.btn_editnote_file.setToolTip("选 assets/notes/ 内 TXT 直接采用；选目录外则复制进该目录后采用")
+        self.btn_editnote_file.clicked.connect(lambda: self._choose_note(self.ed_editnote))
         _enh.addWidget(self.chk_editnote_enabled)
         _enh.addWidget(self.btn_editnote_file)
         _enh.addWidget(self.ed_editnote, 1)
         cform.addRow(_enrow)
+        # 丛书特定说明页（作用于当前丛书；切丛书再打开显示对应值）：
+        _cen = (self._coll or {}).get("edit_note") or {"file": "", "enabled": False}
+        self.ed_editnote_coll = QLineEdit(note_display_path(_cen.get("file", "")))
+        self.ed_editnote_coll.setReadOnly(True)
+        self.ed_editnote_coll.setCursorPosition(0)   # 长路径显示开头，而非末尾
+        self.ed_editnote_coll.setPlaceholderText("未关联（当前丛书不插特定说明页）")
+        _cenrow = QWidget()
+        _cenh = QHBoxLayout(_cenrow)
+        _cenh.setContentsMargins(0, 0, 0, 0)
+        self.chk_editnote_coll_enabled = QCheckBox("加丛书说明页")
+        self.chk_editnote_coll_enabled.setChecked(bool(_cen.get("enabled", False)))
+        self.chk_editnote_coll_enabled.setToolTip("当前丛书的说明页（随丛书切换）")
+        self.btn_editnote_coll_file = QPushButton("选择…")
+        self.btn_editnote_coll_file.setToolTip("选 assets/notes/ 内 TXT 直接采用；选目录外则复制进该目录后采用")
+        self.btn_editnote_coll_file.clicked.connect(
+            lambda: self._choose_note(self.ed_editnote_coll))
+        _cenh.addWidget(self.chk_editnote_coll_enabled)
+        _cenh.addWidget(self.btn_editnote_coll_file)
+        _cenh.addWidget(self.ed_editnote_coll, 1)
+        cform.addRow(_cenrow)
+        # 说明目录提示 + 打开目录
+        _noterow = QWidget()
+        _nh = QHBoxLayout(_noterow)
+        _nh.setContentsMargins(0, 0, 0, 0)
+        _nbtn = QPushButton("打开说明目录")
+        _nbtn.setToolTip(f"{NOTES_DIR}")
+        _nbtn.clicked.connect(self._open_notes_dir)
+        _ntip = QLabel("说明 TXT 统一放 assets/notes/（可参考 sample.txt 模板）；文件名与丛书无关，可多丛书共用")
+        _ntip.setStyleSheet("color: gray;")
+        _ntip.setWordWrap(True)
+        _nh.addWidget(_nbtn)
+        _nh.addWidget(_ntip, 1)
+        cform.addRow(_noterow)
+        if self._coll is None:
+            for _w in (self.ed_editnote_coll, self.chk_editnote_coll_enabled,
+                       self.btn_editnote_coll_file):
+                _w.setEnabled(False)
+            self.chk_editnote_coll_enabled.setToolTip("未选择丛书（该设置随丛书保存）")
         # 说明页（部类统计 + 完整清单，自动从书单推导；仅封面模式生效）：
         # 标题标签＋输入框并到复选框同一行右侧
         intro = cover.setdefault("intro", {"enabled": True, "title": "说明", "note": "依 CBETA XML 自制", "list": True})
@@ -674,6 +779,7 @@ class SettingsDialog(QDialog):
         # 版式子页签（按使用顺序）：封面/说明 → 封面/封底图、背景色 → 字体 → 基准字号 → 边距
         sub = QTabWidget()
         self._cover_subtabs = sub
+        sub.setStyleSheet(SUBTAB_QSS)
         sub.addTab(_cpage, "封面/说明")
         sub.addTab(self._cover_tab_images(cover), "封面/封底图、背景色")
         sub.addTab(self._cover_tab_fonts(cover), "字体")
@@ -918,8 +1024,13 @@ class SettingsDialog(QDialog):
         self._set_mode(cover.get("mode", "print"))
         self.chk_cover_enabled.setChecked(bool(cover.get("enabled", True)))
         _en = cover.setdefault("edit_note", {"file": "", "enabled": False})
-        self.ed_editnote.setText(_en.get("file", ""))
+        self.ed_editnote.setText(note_display_path(_en.get("file", "")))
+        self.ed_editnote.setCursorPosition(0)
         self.chk_editnote_enabled.setChecked(bool(_en.get("enabled", False)))
+        _cen = (self._coll or {}).get("edit_note") or {"file": "", "enabled": False}
+        self.ed_editnote_coll.setText(note_display_path(_cen.get("file", "")))
+        self.ed_editnote_coll.setCursorPosition(0)
+        self.chk_editnote_coll_enabled.setChecked(bool(_cen.get("enabled", False)))
         intro = cover.setdefault("intro", {})
         self.chk_intro_enabled.setChecked(bool(intro.get("enabled", True)))
         self.ed_intro_title.setText(intro.get("title", "说明"))
@@ -1494,11 +1605,28 @@ class SettingsDialog(QDialog):
         except Exception:
             pass
 
-    def _pick_editnote(self):
-        f, _ = QFileDialog.getOpenFileName(self, "选择说明 TXT 文件", "",
-                                           "文本 (*.txt)")
-        if f:
-            self.ed_editnote.setText(f)
+    @staticmethod
+    def _note_rel(f):
+        return note_rel(f)
+
+    def _choose_note(self, ed):
+        choose_note_file(self, ed)
+
+    def _open_notes_dir(self):
+        try:
+            from PySide6.QtGui import QDesktopServices
+            from PySide6.QtCore import QUrl
+            NOTES_DIR.mkdir(parents=True, exist_ok=True)
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(NOTES_DIR.resolve())))
+        except Exception as e:
+            print(e)
+
+    def collection_edit_note(self):
+        """当前丛书的特定说明页设定 {file, enabled}；无丛书上下文返回 None。"""
+        if self._coll is None:
+            return None
+        return {"file": self.ed_editnote_coll.text().strip(),
+                "enabled": self.chk_editnote_coll_enabled.isChecked()}
 
     def _pick_image(self, key, ed):
         f, _ = QFileDialog.getOpenFileName(self, f"选择{key}图片", str(IMAGES_DIR),

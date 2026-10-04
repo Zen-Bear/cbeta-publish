@@ -123,6 +123,13 @@ if (Test-Path (Join-Path $Repo "assets\fonts")) {
     robocopy (Join-Path $Repo "assets\fonts") (Join-Path $Dist "assets\fonts") /E /NFL /NDL /NJH /NJS /NP | Out-Null
 }
 
+# 说明文件示例（assets/notes/sample.txt；用户私有说明不入包）
+New-Item -ItemType Directory -Force -Path (Join-Path $Dist "assets\notes") | Out-Null
+$sampleNote = Join-Path $Repo "assets\notes\sample.txt"
+if (Test-Path $sampleNote) {
+    Copy-Item $sampleNote (Join-Path $Dist "assets\notes\sample.txt") -Force
+}
+
 # ---------- 4. 拷贝制书预设（xml2pdf/presets + run.json）----------
 $X2PDist = Join-Path $Dist "xml2pdf"
 New-Item -ItemType Directory -Force -Path $X2PDist | Out-Null

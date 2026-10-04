@@ -114,6 +114,8 @@ def _font_path(p):
 
 _REPO_ROOT = app_root()
 IMAGES_DIR = _REPO_ROOT / "assets" / "images"
+#: 说明文件托管目录（用户私有，gitignore；仅 sample.txt 随包/进库）
+NOTES_DIR = _REPO_ROOT / "assets" / "notes"
 
 #: 封面图后缀（"不用管后缀名"；同号多文件并存时排序取第一个）
 COVER_IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png", ".tif", ".tiff",
@@ -842,6 +844,15 @@ def _epub_seq_title(i, total, title):
     return f"{max(1, int(i)):0{_w}d}. {title}"
 
 
+def resolve_note_path(path):
+    """说明 TXT 路径解析：相对路径按数据根（`app_root`）解析；空返回 None。"""
+    p = str(path or "").strip()
+    if not p:
+        return None
+    pp = Path(p)
+    return pp if pp.is_absolute() else app_root() / pp
+
+
 def parse_editnote_file(path):
     """编辑说明 TXT → {"title": str, "lines": [(kind, align, text), ...]}；
     文件缺失/空/无有效行返回 None。
@@ -859,8 +870,11 @@ def parse_editnote_file(path):
     标签行空格规则：标签前的空白一律保留；标签后的半角空格视为分隔符去掉
     （`<h1> 凡例`写法不受影响），全角空格/制表为有意缩进保留。
     """
+    _np = resolve_note_path(path)
+    if _np is None:
+        return None
     try:
-        text = Path(path).read_text(encoding="utf-8-sig", errors="replace")
+        text = _np.read_text(encoding="utf-8-sig", errors="replace")
     except OSError:
         return None
     title = EDITNOTE_DEFAULT_TITLE
@@ -921,6 +935,18 @@ def parse_editnote_file(path):
     if not any(k not in ("gap", "pb") for k, _, _ in lines):
         return None
     return {"title": title, "lines": lines}
+
+
+def _as_editnotes(editnote):
+    """把 editnote 参数统一为已解析说明页列表（支持 None / dict / list）。
+
+    合并时可能同时插「全局编辑说明」与「当前丛书特定说明」两页；
+    调用方传解析后的 dict 或 dict 列表，这里只做归一，不解析文件。"""
+    if not editnote:
+        return []
+    if isinstance(editnote, (list, tuple)):
+        return [e for e in editnote if e]
+    return [editnote]
 
 
 def _editnote_pdf(parsed, first_src: Path, out_path: Path, config: dict=None) -> int:
@@ -1263,17 +1289,17 @@ def _merge_pdfs_impl(sources, out, tmp_dir, split_pages, titles, collection_name
         front.append(_img_pdf("buddha", "img_buddha.pdf"))
         if pad:
             front.append(_blank("blank_buddha.pdf"))
-    # ---- 编辑说明（TXT 转排版）：说明页之前；无说明页时占其位 ----
-    en_start=None
-    en_title=""
-    if editnote:
-        en_start=len(front)
-        en_title=editnote.get("title") or EDITNOTE_DEFAULT_TITLE
-        en_pdf=tmp_dir/"editnote.pdf"
-        en_pages=_editnote_pdf(editnote, first, en_pdf, config=cfg)
-        front.append(en_pdf)
-        if pad and en_pages%2==1:
-            front.append(_blank("blank_editnote.pdf"))
+    # ---- 编辑说明（TXT 转排版）：说明页之前；可多页（全局 + 丛书特定）----
+    _en_items=[]   # [(front 起始索引, 标题)]
+    for _eni, _en in enumerate(_as_editnotes(editnote)):
+        _en_start=len(front)
+        _en_title=_en.get("title") or EDITNOTE_DEFAULT_TITLE
+        _en_pdf=tmp_dir/f"editnote_{_eni}.pdf"
+        _en_pages=_editnote_pdf(_en, first, _en_pdf, config=cfg)
+        front.append(_en_pdf)
+        if pad and _en_pages%2==1:
+            front.append(_blank(f"blank_editnote_{_eni}.pdf"))
+        _en_items.append((_en_start, _en_title))
     # ---- 说明页（部类统计 + 清单）：封面之后、目录之前 ----
     # 打印模式保证从奇数页起（前面页数为奇数时垫一张；多页前置按真实页数算）
     intro_start=None
@@ -1329,8 +1355,8 @@ def _merge_pdfs_impl(sources, out, tmp_dir, split_pages, titles, collection_name
     body_indices=set(range(len(pre), len(pre)+len(body_sources)))
     all_sources=pre+body_sources+back
     toc_entries=[[1, "封面", 1, BOOKMARK_TOP_MARGIN]]
-    if en_start is not None:
-        toc_entries.append([1, en_title or EDITNOTE_DEFAULT_TITLE, _pre_page(en_start), BOOKMARK_TOP_MARGIN])
+    for _en_start, _en_title in _en_items:
+        toc_entries.append([1, _en_title or EDITNOTE_DEFAULT_TITLE, _pre_page(_en_start), BOOKMARK_TOP_MARGIN])
     if intro_start is not None:
         toc_entries.append([1, intro.get("title","说明"), _pre_page(intro_start), BOOKMARK_TOP_MARGIN])
     toc_entries.append([1, "目录", _pre_page(toc_start), BOOKMARK_TOP_MARGIN])
@@ -1375,9 +1401,10 @@ def _merge_pdfs_impl(sources, out, tmp_dir, split_pages, titles, collection_name
         parts.append(part)
     return parts
 
-def _epub_editnote_page(parsed: dict, config: dict=None):
+def _epub_editnote_page(parsed: dict, config: dict=None, idx: int=1):
     """EPUB 编辑说明页：mini-syntax 转原生标签＋内联样式。
-    字号沿用封面设置（h1=toc_title 比率，h2–h5 依次缩小，正文 1.0em）。"""
+    字号沿用封面设置（h1=toc_title 比率，h2–h5 依次缩小，正文 1.0em）。
+    idx>1 时用独立文件名（editnote_2.xhtml…），支持全局 + 丛书特定多页。"""
     import html as _html
     from ebooklib import epub
     title = (parsed or {}).get("title") or EDITNOTE_DEFAULT_TITLE
@@ -1441,7 +1468,8 @@ def _epub_editnote_page(parsed: dict, config: dict=None):
         inner = f"<b>{t}</b>" if kind == "b" else t
         parts.append(f'<{tag} style="{";".join(style)}">{inner}</{tag}>')
     parts.append('</body></html>')
-    c = epub.EpubHtml(title=title, file_name="editnote.xhtml", lang="zh")
+    _fn = "editnote.xhtml" if idx <= 1 else f"editnote_{idx}.xhtml"
+    c = epub.EpubHtml(title=title, file_name=_fn, lang="zh")
     c.content = "".join(parts)
     return c
 
@@ -1772,10 +1800,7 @@ def merge_epubs(sources: list[Path], out: Path, split_items: int = 500,
     _en_first=[True]   # 编辑说明只进第一个合并文件
 
     def build_part(chunk, part_out):
-        if _en_first[0]:
-            _en = editnote
-        else:
-            _en = None
+        _ens = _as_editnotes(editnote) if _en_first[0] else []
         _en_first[0]=False
         merged=epub.EpubBook()
         merged.set_identifier(str(part_out))
@@ -1785,10 +1810,11 @@ def merge_epubs(sources: list[Path], out: Path, split_items: int = 500,
         merged.add_metadata("DC", "publisher", "CBETA")
         cover=_epub_cover_page(name, organizer, cover_config=cover_config)
         merged.add_item(cover)
-        en_page=None
-        if _en:
-            en_page=_epub_editnote_page(_en, cover_config)
-            merged.add_item(en_page)
+        en_pages=[]
+        for _eni, _en in enumerate(_ens, 1):
+            _pg=_epub_editnote_page(_en, cover_config, idx=_eni)
+            merged.add_item(_pg)
+            en_pages.append(_pg)
         intro_page=None
         if intro:
             intro_page=_epub_intro_page(intro)
@@ -1819,17 +1845,19 @@ def merge_epubs(sources: list[Path], out: Path, split_items: int = 500,
         merged.add_item(nav)
         if intro_page is not None:
             toc.insert(0, epub.Link("intro.xhtml", intro.get("title","说明"), "intro"))
-        if en_page is not None:
-            toc.insert(0, epub.Link("editnote.xhtml",
-                                    (_en or {}).get("title") or EDITNOTE_DEFAULT_TITLE,
-                                    "editnote"))
+        # 编辑说明可多页（全局 + 丛书特定）：按顺序插在目录最前（封面之前）
+        for _eni, _en in enumerate(reversed(list(enumerate(_ens, 1)))):
+            _idx, _note = _en
+            _fn = "editnote.xhtml" if _idx <= 1 else f"editnote_{_idx}.xhtml"
+            toc.insert(0, epub.Link(_fn,
+                                    _note.get("title") or EDITNOTE_DEFAULT_TITLE,
+                                    f"editnote{_idx}"))
         toc.insert(0, epub.Link("nav.xhtml", "丛书目录", "nav"))
         toc.insert(0, epub.Link("cover.xhtml", "封面", "cover"))
         merged.toc=tuple(toc)
         # 封面→[编辑说明→]说明→丛书目录→各书(封面页+正文)；nav 紧随封面，避免目录落在最后
         spine=[cover]
-        if en_page is not None:
-            spine.append(en_page)
+        spine.extend(en_pages)
         if intro_page is not None:
             spine.append(intro_page)
         merged.spine=spine+["nav"]+docs_spine

@@ -327,6 +327,57 @@ class MergeEpubEditNoteTest(unittest.TestCase):
         finally:
             shutil.rmtree(d, ignore_errors=True)
 
+    def test_two_editnotes_global_then_collection(self):
+        # 全局 + 丛书特定两页：editnote.xhtml + editnote_2.xhtml，顺序在前、各自内容正确
+        import zipfile
+        from cbeta_publish.books.ebook_merger import parse_editnote_file
+        d = Path(tempfile.mkdtemp())
+        try:
+            t1 = d / "g.txt"
+            t1.write_text("<title>全局序\nAAA\n", encoding="utf-8")
+            t2 = d / "c.txt"
+            t2.write_text("<title>丛书序\nBBB\n", encoding="utf-8")
+            notes = [parse_editnote_file(t1), parse_editnote_file(t2)]
+            intro = {"title": "说明", "summary": [], "sections": []}
+            a = d / "A.epub"
+            make_src(a, "A", juans=1)
+            out = d / "out" / "col.epub"
+            out.parent.mkdir(parents=True, exist_ok=True)
+            parts = merge_epubs([a], out, collection_name="丛书", organizer="编",
+                                titles=["甲"], cover_config={"enabled": True},
+                                intro=intro, editnote=notes)
+            book = epub.read_epub(str(parts[0]))
+            names = {it.get_name() for it in book.get_items()}
+            self.assertIn("editnote.xhtml", names)
+            self.assertIn("editnote_2.xhtml", names)
+            z = zipfile.ZipFile(parts[0])
+            self.assertIn("全局序", z.read("EPUB/editnote.xhtml").decode("utf-8", "replace"))
+            self.assertIn("丛书序", z.read("EPUB/editnote_2.xhtml").decode("utf-8", "replace"))
+            id2name = {}
+            for it in book.get_items():
+                try:
+                    id2name[it.get_id()] = it.get_name()
+                except Exception:
+                    pass
+            ids = [getattr(s, "get_id", lambda: s)() for s in book.spine]
+            ids = [x[0] if isinstance(x, tuple) else x for x in ids]
+            order = [id2name.get(i, "") for i in ids]
+            e1 = order.index("editnote.xhtml")
+            e2 = order.index("editnote_2.xhtml")
+            ii = order.index("intro.xhtml")
+            self.assertLess(e1, e2)
+            self.assertLess(e2, ii)
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+    def test_parse_editnote_relative_path(self):
+        # 说明路径支持相对数据根；空路径无效；随包 sample.txt 可解析
+        from cbeta_publish.books.ebook_merger import (parse_editnote_file,
+                                                      resolve_note_path)
+        self.assertTrue(resolve_note_path("assets/notes/sample.txt").is_file())
+        self.assertIsNotNone(parse_editnote_file("assets/notes/sample.txt"))
+        self.assertIsNone(parse_editnote_file(""))
+
     def test_editnote_before_intro(self):
         import zipfile
         from cbeta_publish.books.ebook_merger import parse_editnote_file

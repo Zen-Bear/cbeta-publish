@@ -51,6 +51,12 @@ def normalize_collection(d: dict) -> dict:
                     _ids.append(c)
             _vols.append({"title": str(v.get("title", "") or ""), "work_ids": _ids})
         d["manual_volumes"] = _vols
+    if isinstance(d.get("edit_note"), dict):
+        # 丛书特定说明页（设置「封面/版式」编辑，作用于当前丛书）：
+        # {file, enabled}；缺省无此键（不写、不插）。
+        _en = d["edit_note"]
+        d["edit_note"] = {"file": str(_en.get("file", "") or ""),
+                          "enabled": bool(_en.get("enabled", False))}
     if isinstance(d.get("works"), list):
         norm = []
         for x in d["works"]:

@@ -40,6 +40,15 @@ class NormalizeCollectionTest(unittest.TestCase):
         self.assertEqual(set(out["work_sources"]), {"TXa001", "T0128a"})
         self.assertEqual([w["id"] for w in out["works"]], ["TXa001", "T0128a"])
 
+    def test_normalize_edit_note(self):
+        d = {"work_ids": ["T0001"],
+             "edit_note": {"file": "E:/n.txt", "enabled": 1}}
+        out = normalize_collection(d)
+        self.assertEqual(out["edit_note"], {"file": "E:/n.txt", "enabled": True})
+        # 缺省无该键则不创建
+        self.assertNotIn("edit_note",
+                         normalize_collection({"work_ids": ["T0001"]}))
+
     def test_roundtrip_mixed_case(self):
         c = create_collection("测试", "custom", [], ["TXA001", "T0128A"])
         self.assertEqual(c.work_ids, ["TXa001", "T0128a"])
