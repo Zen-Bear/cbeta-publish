@@ -67,6 +67,74 @@ class VerifyReportTest(unittest.TestCase):
         self.assertIsNone(b.verify_report_pass(p))
         self.assertIsNone(b.verify_report_pass(self.dir / "nope.txt"))
 
+    def test_new_naming_scanned_with_underscore_stem(self):
+        # 新命名 {id}_{书名}_校验报告.txt：能扫到，stem 保留下划线部分
+        from cbeta_publish.books import xml2pdf_bridge as b
+        vd = self.dir / "T0001 长阿含经（验证）"
+        vd.mkdir(parents=True)
+        (vd / "T0001_长阿含经_校验报告.txt").write_text(
+            "=== T0001\n  [OK]  docx 缺0 多0\n", encoding="utf-8")
+        got = b.verify_reports(self.dir)
+        self.assertEqual(len(got), 1)
+        rp, stem = got[0]
+        self.assertEqual(stem, "T0001_长阿含经")
+        self.assertTrue(b._verify_stem_matches(stem, "T0001"))
+        self.assertFalse(b._verify_stem_matches(stem, "T0002"))
+
+    def test_same_dir_old_new_dedupe_newest(self):
+        # 同一验证目录新旧命名并存：只取最新一份
+        import os
+        from cbeta_publish.books import xml2pdf_bridge as b
+        vd = self.dir / "T0001 长阿含经（验证）"
+        vd.mkdir(parents=True)
+        old = vd / "report.txt"
+        new = vd / "T0001_长阿含经_校验报告.txt"
+        old.write_text("=== T0001\n  [FAIL]  docx 缺3 多1\n", encoding="utf-8")
+        new.write_text("=== T0001\n  [OK]  docx 缺0 多0\n", encoding="utf-8")
+        os.utime(old, (1000, 1000))
+        os.utime(new, (2000, 2000))
+        got = b.verify_reports(self.dir)
+        self.assertEqual(len(got), 1)
+        self.assertEqual(got[0][0].name, "T0001_长阿含经_校验报告.txt")
+        self.assertTrue(b.verify_report_pass(got[0][0]))
+
+    def test_underscore_match_safety(self):
+        # 下划线分隔匹配：T185 不误命中 T1858（要求分隔符对齐）
+        from cbeta_publish.books import xml2pdf_bridge as b
+        self.assertTrue(b._verify_stem_matches("T185", "T185"))
+        self.assertTrue(b._verify_stem_matches("T185_x", "T185"))
+        self.assertTrue(b._verify_stem_matches("T185 x", "T185"))
+        self.assertFalse(b._verify_stem_matches("T1858_x", "T185"))
+        self.assertFalse(b._verify_stem_matches("T185_x", "T1858"))
+        self.assertFalse(b._verify_stem_matches("", "T0001"))
+        self.assertFalse(b._verify_stem_matches("T0001", ""))
+
+    def test_find_verify_report_new_naming(self):
+        from cbeta_publish.books import xml2pdf_bridge as b
+        vd = self.dir / "T0001 长阿含经（验证）"
+        vd.mkdir(parents=True)
+        (vd / "T0001_长阿含经_校验报告.txt").write_text("x", encoding="utf-8")
+        self.assertEqual(
+            b.find_verify_report(self.dir, "T0001").name,
+            "T0001_长阿含经_校验报告.txt")
+        (self.dir / "T0002_校验报告.txt").write_text("x", encoding="utf-8")
+        self.assertEqual(
+            b.find_verify_report(self.dir, "T0002").name, "T0002_校验报告.txt")
+
+    def test_products_exclude_reports(self):
+        # 校验报告（新旧命名）与转换报告都不算 txt 产物
+        from cbeta_publish.gui.main_window import MainWindow
+        vdir = self.dir / "vprod"
+        vdir.mkdir(parents=True)
+        prod = vdir / "T0001 长阿含经.txt"
+        prod.write_bytes(b"TXT")
+        vd = vdir / "T0001 长阿含经（验证）"
+        vd.mkdir(parents=True)
+        (vd / "T0001_长阿含经_校验报告.txt").write_bytes(b"R")
+        (vdir / "T0001 长阿含经_转换报告.txt").write_bytes(b"C")
+        got = MainWindow._verify_products(vdir, "T0001")
+        self.assertEqual(got, [("txt", prod)])
+
 
 class VerifySendImportTest(unittest.TestCase):
     @classmethod
@@ -193,9 +261,10 @@ class VerifySendImportTest(unittest.TestCase):
         self.assertEqual(called, [False, True])
 
     def test_send_missing_only_skips_existing(self):
-        # 自制（regen_all=False）：只处理自制书目录里缺少的书
+        # 自制（regen_all=False）+ 复用关：只处理自制书目录里缺少的书
         import cbeta_publish.books.xml2pdf_bridge as b
         win = self.win
+        win.config.setdefault("xml2pdf", {})["verify_reuse"] = False
         base = Path(win.config["xml_to_ebooks_dir"])
         (base / "pdf").mkdir(parents=True, exist_ok=True)
         (base / "pdf" / "T0001.pdf").write_bytes(b"old")   # T0001 已有 → 跳过
@@ -206,6 +275,7 @@ class VerifySendImportTest(unittest.TestCase):
         finally:
             restore_v()
             restore()
+            win.config["xml2pdf"]["verify_reuse"] = True
         self.assertEqual([c[0] for c in calls], ["T0002"])
 
     def test_open_window_passes_current_coll(self):

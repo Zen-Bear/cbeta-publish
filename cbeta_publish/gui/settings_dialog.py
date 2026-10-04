@@ -43,7 +43,8 @@ DEFAULT_CONFIG = {
     "xml2pdf": {"path": "E:/dev/cbeta/xml2pdf",
                 "cbeta_ebook": str(PROJECT_ROOT / "cbeta_xml"),
                 "preset": "", "verify_build": False,
-                "verify_max_diff": 5, "verify_diff_lines": 5},
+                "verify_max_diff": 5, "verify_diff_lines": 5, "verify_reuse": True,
+                "reuse_pdf_companion": True},
     "catalog": {"filters": {"tripitaka": {"hidden": []}, "dynasty": {"hidden": []}, "vol": {"hidden": []}}},
     "cover": {
         "organizer": "CBETA 整理",
@@ -487,6 +488,17 @@ class SettingsDialog(QDialog):
         self.sp_verify_difflines.setToolTip(
             "失败时报告里列出的上下文对比行数（默认 5；透传上游 --verify-diff-lines）")
         form.addRow("报告失败上下文行数", self.sp_verify_difflines)
+        self.chk_verify_reuse = QCheckBox("校验结果复用（源未变时跳过校验）")
+        self.chk_verify_reuse.setChecked(bool(_x2p.get("verify_reuse", True)))
+        self.chk_verify_reuse.setToolTip(
+            "同书同格式校验通过后，若源 XML/预设/基线/阈值未变，下次自制/重制跳过校验直接复用")
+        form.addRow("校验复用", self.chk_verify_reuse)
+        self.chk_reuse_pdf_docx = QCheckBox("复用 PDF 伴生 docx（省一次渲染）")
+        self.chk_reuse_pdf_docx.setChecked(bool(_x2p.get("reuse_pdf_companion", True)))
+        self.chk_reuse_pdf_docx.setToolTip(
+            "pdf+docx 同跑时，直接把 pdf 管线附带的同内容 docx 当作 docx 产物，"
+            "省一次 docx 渲染（仅 docx2pdf 管线有伴生；html2pdf/竖排无则照常渲染）")
+        form.addRow("PDF伴生", self.chk_reuse_pdf_docx)
         form.addRow("自制程序路径", self._dir_row(self.ed_x2p))
         form.addRow("CBETA XML 目录", self._dir_row(self.ed_x2p_ebook))
         form.addRow("自制电子书", self._dir_row(self.ed_xmlbooks))
@@ -896,6 +908,8 @@ class SettingsDialog(QDialog):
         (self.rb_build_verify if x2p.get("verify_build") else self.rb_build_noverify).setChecked(True)
         self.sp_verify_maxdiff.setValue(max(0, min(50, int(x2p.get("verify_max_diff", 5) or 5))))
         self.sp_verify_difflines.setValue(max(0, min(50, int(x2p.get("verify_diff_lines", 5) or 5))))
+        self.chk_verify_reuse.setChecked(bool(x2p.get("verify_reuse", True)))
+        self.chk_reuse_pdf_docx.setChecked(bool(x2p.get("reuse_pdf_companion", True)))
         cover = c.setdefault("cover", {})
         self._migrate_series_imprint(cover)
         self.ed_organizer.setText(cover.get("organizer", "CBETA 整理"))
@@ -1010,6 +1024,18 @@ class SettingsDialog(QDialog):
             h.addWidget(lbl, 1); h.addWidget(btn)
             self._cache_rows[key] = (getter, lbl)
             form.addRow(label, row)
+        # 校验通过记录库（独立于校验目录；清目录不动它，清它不动目录）
+        from cbeta_publish.books import verify_cache as _vc
+        _vr = QWidget()
+        _vh = QHBoxLayout(_vr)
+        _vh.setContentsMargins(0, 0, 0, 0)
+        self._verify_records_lbl = QLabel("…")
+        self._verify_records_lbl.setMinimumWidth(150)
+        _vr_btn = QPushButton("清理通过记录")
+        _vr_btn.clicked.connect(self._clean_verify_records)
+        _vh.addWidget(self._verify_records_lbl, 1)
+        _vh.addWidget(_vr_btn)
+        form.addRow("校验通过记录", _vr)
         self._refresh_cache_stats()
         btn_refresh = QPushButton("刷新统计")
         btn_refresh.clicked.connect(self._refresh_cache_stats)
@@ -1030,6 +1056,13 @@ class SettingsDialog(QDialog):
                 continue
             st = dir_stats(d)
             lbl.setText(f"{human(st['bytes'])} / {st['files']} 文件")
+        try:
+            from cbeta_publish.books import verify_cache as _vc
+            st = _vc.stats(_vc.records_path(self._cfg))
+            self._verify_records_lbl.setText(
+                f"{st['entries']} 条（{st['works']} 部书）")
+        except Exception:
+            pass
 
     def _clean_cache(self, key, path):
         if not path:
@@ -1040,6 +1073,21 @@ class SettingsDialog(QDialog):
         from cbeta_publish.books.cache_manager import clean, human
         r = clean(path)
         QMessageBox.information(self, "完成", f"已删除 {r['removed_files']} 个文件（{human(r['removed_bytes'])}）")
+        self._refresh_cache_stats()
+
+    def _clean_verify_records(self):
+        from cbeta_publish.books import verify_cache as _vc
+        p = _vc.records_path(self._cfg)
+        st = _vc.stats(p)
+        if st["entries"] <= 0:
+            QMessageBox.information(self, "提示", "通过记录库为空，无需清理")
+            return
+        if QMessageBox.question(
+                self, "清理通过记录",
+                f"删除全部 {st['entries']} 条校验通过记录？\n"
+                "（校验目录不动；下次自制/重制将重新校验）") != QMessageBox.Yes:
+            return
+        _vc.clear(p)
         self._refresh_cache_stats()
 
     # ---------- 页签：更新源 ----------
@@ -1539,6 +1587,8 @@ class SettingsDialog(QDialog):
             "verify_build": self.rb_build_verify.isChecked(),
             "verify_max_diff": self.sp_verify_maxdiff.value(),
             "verify_diff_lines": self.sp_verify_difflines.value(),
+            "verify_reuse": self.chk_verify_reuse.isChecked(),
+            "reuse_pdf_companion": self.chk_reuse_pdf_docx.isChecked(),
         })
         # 封面/版式
         cover = c.setdefault("cover", {})

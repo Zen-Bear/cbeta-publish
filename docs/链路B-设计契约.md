@@ -157,6 +157,13 @@ def convert_outputs(work_id, fmt, out_dir, config, preset=None, stop=None) -> li
   （`bridge.ensure_products(regen_all=False)`）。需整体重生成时先点右栏 `[重制]`
   （`regen_all=True`；「调整…」临时预设亦强制重生成）。**不用 mtime/哈希推断过期**。
   两边目录互不混淆；ZIP/导出同样按来源取目录。
+- **PDF 伴生 docx 复用**（`xml2pdf.reuse_pdf_companion`，默认开；设置页「自制E书」）：
+  `docx2pdf` 管线在 PDF 成功产出时，必在输出根附一份同内容、同 stem 的 docx
+  （上游唯一目的是给 `--verify-only` 定位；无条件覆盖写）。publish 从不用 verify-only，
+  故 pdf+docx 同跑时由 `bridge.adopt_pdf_companions` 直接把该伴生搬进 `docx/`
+  当作 docx 产物（重制路径同时清理同 work 过期异名残留），**省一次完整 docx 渲染**；
+  html2pdf/竖排管线无伴生则照常渲染；仅选 pdf 时不动该文件。仅在本轮 PDF
+  真实渲染（非复用）后认领，历史遗留伴生不会被误用。
 
 ## 5. 数据流（合并 / ZIP / 导出）
 
@@ -189,6 +196,12 @@ def convert_outputs(work_id, fmt, out_dir, config, preset=None, stop=None) -> li
 - 校验（进程内「自制/重制」＋自动/手动导入）：设置「制作书籍」=`校验`
   （`xml2pdf.verify_build`）时，右栏 `[自制]/[重制]` 转为校验式——`[自制]` 只处理
   自制书目录里**缺少**的书，`[重制]` 整批全部重做；触发 `VerifyWorker` 逐本调
+- **校验复用**（`xml2pdf.verify_reuse`，默认开；需上游 `pycbeta.verify.verify_fingerprint`
+  可用，否则全部重验并提示）：跑校验前先算每部书每格式的上游指纹，
+  库（`config/verify_records.json`，gitignored，只存通过）中有同指纹且产物在库
+  即跳过（自制/重制都跳；重制对跳过项仍重生成产物但不校验）；
+  指纹对不上/无记录/产物缺失才真校验，通过且入库成功后写库。
+  跳过项不进导入扫描与总报告，单独列「已通过（跳过）」。
   `bridge.verify_work` → 库调用
   `pycbeta.cli.main(["-i", work, "-f", <勾选>, "-o", <vdir>, [--config wrap],
   "--cbeta-ebook", <工作根>, "--verify",
@@ -203,9 +216,9 @@ def convert_outputs(work_id, fmt, out_dir, config, preset=None, stop=None) -> li
   `output` 段，与 GUI 独立窗一致：`inline_brackets`/`suppress_jhead_dup`/`show_close_juan`
   等生效，`cli.py` `37a864a`），否则会与官方基线误报。正式产物 `{id 书名}.{fmt}` 落校验目录顶层，
   报告落 `{id 书名}（验证）/`（`verify_dir/<丛书>/`，默认 `<工程>/cbeta_verify`，
-  与自制书目录分离）。跑完自动导入（可手动重试）：报告兼容
-   `{stem}_verify_report.txt` / `report.txt` 两种命名（`bridge.verify_reports`，
-    同一语义产物只取最新；同一 work 的不同语义产物分别保留）。**判读按格式**：优先读每 work 段首的上游总结行
+     与自制书目录分离）。跑完自动导入（可手动重试）：报告兼容
+   `{stem}_verify_report.txt` / `{id}_{书名}_校验报告.txt` / `report.txt` 三种命名
+   （`bridge.verify_reports`，同一语义产物只取最新；同一 work 的不同语义产物分别保留）。**判读按格式**：优先读每 work 段首的上游总结行
    （`bridge.parse_work_summary_line`：`[id] N format: 1[docx=OK(0/0)], 2[pdf=1],
    3[epub=FAIL(48/97)]`；`pdf=数字` 为被覆盖、结论跟随同行第 M 条；`COVERED` 无 ref、
    `NO_BASELINE`/`NOGEN`/`ERROR` 为未判定原因；`→` 左侧为产物格式）；
@@ -309,11 +322,15 @@ publish 的「自制/重制（校验）」产物目录天然符合本规范；�
 1. 输出目录（`--out` / 窗内"输出"框）下，每个成功生成的书有**正式产物**：
    `{id 书名}.{ext}`（如 `T0032 四谛经.pdf`、`T0032 四谛经.docx`），放在目录**顶层**。
 2. 必须勾选「转换后校验」（`--verify`）：每书在 `{id 书名}（验证）/` 子目录下有一份
-   **报告**，命名二选一：
-   - `{stem}_verify_report.txt`（独立窗；`stem` = work id，如 `T0032`）；
-   - `report.txt`（CLI；work 取父目录名去 `（验证）` 后缀后的首 token，
+   **报告**，命名三选一（新版上游用第一种，旧版两种仍兼容读）：
+   - `{id}_{书名}_校验报告.txt`（如 `T0001_长阿含经_校验报告.txt`；无书名时 `{id}_校验报告.txt`）；
+   - `{stem}_verify_report.txt`（独立窗旧命名；`stem` = work id，如 `T0032`）；
+   - `report.txt`（CLI 旧命名；work 取父目录名去 `（验证）` 后缀后的首 token，
      如 `T0032 四谛经（验证）` → `T0032`）。
-3. 同一书两份报告并存时，以 **mtime 最新者**为准（同刻优先 `report.txt`）。
+   另有**转换报告** `{name}_转换报告.txt`（及 `{fmt}/` 下按格式的同名文件，
+   `output.convert_report` 控制，默认开）：只记录渲染特殊处理，**不是校验判据**，
+   不参与导入扫描、不算产物。
+3. 同一书多份报告并存时，以 **mtime 最新者**为准（同刻优先 `report.txt`）。
    只转换、未校验的产物**没有判据，一律不入库**。
 4. 总报告 `总验证报告.txt`（`bridge.write_verify_summary`，固定名覆盖写）：
    头＋摘要（行文同导入标签）＋全文（按 stem 拼接原文）；刻意避开两种发现模式，
@@ -321,10 +338,12 @@ publish 的「自制/重制（校验）」产物目录天然符合本规范；�
 
 ### 9.2 publish 侧导入规则
 
-1. 报告发现：递归扫描 `*_verify_report.txt` 与 `report.txt`
+1. 报告发现：递归扫描 `*_verify_report.txt`、`*_校验报告.txt` 与 `report.txt`
   （`bridge.verify_reports`）。同一 work 的不同语义产物各保留最新的一份报告
-  （例如 TX0011 上/中下），同一语义产物的新旧两种命名仍只取最新。
-2. 书单匹配：`stem == work`，或 `stem` 以 `work + " "` 开头；匹配不上当前丛书书单的跳过。
+  （例如 TX0011 上/中下），同一语义产物的新旧命名仍只取最新。
+2. 书单匹配：`stem == work`，或 `stem` 以 `work + " "` / `work + "_"` 开头
+  （新命名用下划线分隔，仍要求分隔符对齐，`T185` 不误命中 `T1858`）；
+  匹配不上当前丛书书单的跳过。
 3. 判读**按格式**：优先读每 work 段首的上游总结行
    （`[id] N format: 1[docx=OK(0/0)], 2[pdf=1], 3[epub=FAIL(48/97)]`；
    `pdf=数字` 为被覆盖、结论跟随同行第 M 条；`COVERED` 无 ref、`NO_BASELINE`/
@@ -336,7 +355,8 @@ publish 的「自制/重制（校验）」产物目录天然符合本规范；�
    （`FAIL(48/97)`→`缺48/多97`），用于失败标签与人工检验。
 4. 产物识别（`MainWindow._verify_products`）：有报告时优先用该报告所在
   `(验证)` 目录名派生的产物名精确匹配；其余只看目录**顶层** `{stem}*.{ext}`，
-  后缀映射 `pdf/epub/docx/odt/md/txt` → fmt；排除 `*_verify_report.txt`、`_ids.txt`；
+  后缀映射 `pdf/epub/docx/odt/md/txt` → fmt；排除 `*_verify_report.txt`、
+  `*_校验报告.txt`、`_ids.txt` 与 `*转换报告*`；
   同一 work 的多个语义产物分别入库。
 5. 入库（**逐格式**）：某格式判通过 → `shutil.move` 到 `{自制书根}/{fmt}/{上游产物名}.{fmt}`
   （L2 带书名，保留上游产物名；自动建目录、同名覆盖），入库即被 `ensure_products` 的

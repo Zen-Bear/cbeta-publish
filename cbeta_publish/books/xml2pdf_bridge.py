@@ -625,6 +625,42 @@ def ensure_one(work: str, fmt: str, base_dir, config, preset=None,
     return (outputs[0] if outputs else None), reused
 
 
+def adopt_pdf_companions(work: str, pdf_outs, base_dir, drop_stale: bool = False):
+    """把本轮 PDF 产物的伴生 docx 认领为 docx 产物（省一次 docx 渲染）。
+
+    上游 docx2pdf 管线在 PDF 成功产出时，总在输出根附一份同内容、同 stem 的
+    docx（唯一目的是 `--verify-only` 定位；无条件覆盖写）。publish 从不用
+    verify-only，pdf+docx 同跑时可直接把这份 docx 搬进 `docx/`，免去再次渲染。
+    仅应在本轮 PDF **真实渲染**（非复用）后调用；html2pdf 管线无伴生，返回空。
+    `drop_stale=True`（重制路径）：清理 docx 目录内同 work 的过期异名残留，
+    与 `ensure_products` 重制后的清理语义对齐。单个文件失败只跳过该文件。
+    """
+    base = Path(base_dir)
+    docx_dir = base / "docx"
+    adopted = []
+    for pdf in (pdf_outs or []):
+        try:
+            cand = Path(pdf).parent / f"{Path(pdf).stem}.docx"
+            if not cand.is_file():
+                continue
+            docx_dir.mkdir(parents=True, exist_ok=True)
+            dest = docx_dir / cand.name
+            if _replace_staged_path(cand, dest) and dest.is_file():
+                adopted.append(dest)
+        except OSError as e:
+            print("adopt pdf companion fail", e)
+    if drop_stale and adopted:
+        current = {p.name for p in adopted}
+        for old in find_all_built(work, "docx", base):
+            if old.name not in current:
+                try:
+                    if old.exists():
+                        old.unlink()
+                except OSError:
+                    pass
+    return adopted
+
+
 # ---------- 校验（进程内逐本生成+校验；publish 只管跑与入库） ----------
 
 VERIFY_DEFAULT_DIR = str(PROJECT_ROOT / "cbeta_verify")
@@ -644,8 +680,8 @@ def verify_work(work: str, fmts, out_dir, config: dict, preset=None, stop=None) 
     """进程内逐本校验：跑 `pycbeta.cli.main([... --verify])`，产物与报告落 out_dir。
 
     - 有预设时经 `write_run_wrapper` 包临时 run.json（保留仓库主题），用后删。
-    - 报告：CLI 写 `{id 书名}（验证）/report.txt`（GUI 写 `{stem}_verify_report.txt`）；
-      本函数返回实际报告 Path（存在）或 None。
+    - 报告：CLI 写 `{id 书名}（验证）/{id}_{书名}_校验报告.txt`
+      （旧版为 `report.txt`，仍兼容读）；本函数返回实际报告 Path（存在）或 None。
     """
     if stop is not None:
         try:
@@ -734,17 +770,26 @@ def _newest_report(paths):
 
 
 def find_verify_report(out_dir, work: str) -> Path | None:
-    """在 out_dir 下找某书最新校验报告（兼容两种命名）：
-    `{id 书名}（验证）/{stem}_verify_report.txt`（独立窗）与 `（验证）/report.txt`（CLI）。"""
+    """在 out_dir 下找某书最新校验报告（兼容三种命名）：
+    `{id 书名}（验证）/{id}_{书名}_校验报告.txt`（新）、
+    `{id 书名}（验证）/{stem}_verify_report.txt`（独立窗旧）与
+    `（验证）/report.txt`（CLI 旧）。"""
     out = Path(out_dir)
     cands = []
     exact = out / f"{work}_verify_report.txt"
     if exact.is_file():
         cands.append(exact)
+    exact2 = out / f"{work}_校验报告.txt"
+    if exact2.is_file():
+        cands.append(exact2)
     try:
         for d in out.glob(f"{work}*（验证）"):
             for name in (f"{work}_verify_report.txt", "report.txt"):
                 p = d / name
+                if p.is_file():
+                    cands.append(p)
+            # 新命名：{id}_{书名}_校验报告.txt（与旧 report.txt 同目录去重）
+            for p in d.glob("*_校验报告.txt"):
                 if p.is_file():
                     cands.append(p)
     except Exception:
@@ -755,14 +800,18 @@ def find_verify_report(out_dir, work: str) -> Path | None:
 def _report_group_key(path, stem: str):
     """同一校验语义的报告归一组；不同语义产物（如同一 work 的上/中下）各自保留。
 
-    `(验证)` 目录名是上游默认产物名，同一目录内的新旧两种命名取最新。
+    `(验证)` 目录名是上游默认产物名：同一目录内的新旧命名（`report.txt` /
+    `{stem}_verify_report.txt` / `{id}_{书名}_校验报告.txt`）取最新；
+    不同语义产物在不同目录，各自保留。
     """
     parent = Path(path).parent
     if parent.name.endswith("（验证）"):
-        return (stem, parent.name[:-len("（验证）")])
+        return ("dir", parent.name[:-len("（验证）")])
     name = Path(path).name
     if name.endswith("_verify_report.txt"):
         return (stem, name[:-len("_verify_report.txt")])
+    if name.endswith("_校验报告.txt"):
+        return (stem, name[:-len("_校验报告.txt")])
     return (stem, name)
 
 
@@ -774,11 +823,18 @@ def _report_group_identity(path) -> str:
         return parent.name[:-len("（验证）")]
     if path.name.endswith("_verify_report.txt"):
         return path.name[:-len("_verify_report.txt")]
+    if path.name.endswith("_校验报告.txt"):
+        return path.name[:-len("_校验报告.txt")]
     return ""
 
 
 def _verify_stem_matches(stem: str, work: str) -> bool:
-    return stem == work or bool(stem and stem.startswith(work + " "))
+    # 新命名用下划线分隔（T0001_长阿含经_校验报告.txt），同样按分隔符匹配，
+    # 避免 T185 误命中 T1858（要求分隔符后一位对齐）。
+    if not stem or not work:
+        return False
+    return (stem == work or stem.startswith(work + " ")
+            or stem.startswith(work + "_"))
 
 
 def work_verify_reports(out_dir, work: str, primary=None):
@@ -800,9 +856,10 @@ def work_verify_reports(out_dir, work: str, primary=None):
 def verify_reports(out_dir):
     """列出 out_dir 下全部校验报告 [(Path, stem)]，**每个语义产物只取最新一份**
 
-    （同一书可能同时有独立窗的 `{stem}_verify_report.txt` 与 CLI 的 `report.txt`；
-    同一 work 的不同语义产物，例如 TX0011 的上/中下，会分别保留）。
-    `*_verify_report.txt` 取文件名 stem；`（验证）/report.txt` 取父目录名前缀。"""
+    （同一书可能同时有独立窗的 `{stem}_verify_report.txt`、CLI 的 `report.txt`、
+    新命名的 `{id}_{书名}_校验报告.txt`；同一 work 的不同语义产物，例如 TX0011 的上/中下，会分别保留）。
+    `*_verify_report.txt` 与 `*_校验报告.txt` 取文件名 stem；`（验证）/report.txt` 取父目录名前缀。
+    同一验证目录内的新旧命名按同一组去重（取最新）。"""
     out = Path(out_dir)
     by_group = {}
     def _collect(p, stem):
@@ -818,6 +875,11 @@ def verify_reports(out_dir):
     try:
         for p in out.rglob("*_verify_report.txt"):
             _collect(p, p.name[:-len("_verify_report.txt")])
+    except Exception:
+        pass
+    try:
+        for p in out.rglob("*_校验报告.txt"):
+            _collect(p, p.name[:-len("_校验报告.txt")])
     except Exception:
         pass
     try:
@@ -1081,7 +1143,7 @@ def verify_report_formats(path) -> dict:
 
 
 #: 总验证报告固定名（覆盖写；刻意避开单本报告的两种发现模式
-#: `*_verify_report.txt` / `（验证）/report.txt`，不参与导入扫描）
+#: `*_verify_report.txt` / `*_校验报告.txt` / `（验证）/report.txt`，不参与导入扫描）
 VERIFY_SUMMARY_FILENAME = "总验证报告.txt"
 
 
@@ -1096,11 +1158,53 @@ def _pending_reason(fmt, pending):
     return "未判定"
 
 
-def write_verify_summary(vdir, coll_name=None):
+def verify_fingerprint_available(config) -> bool:
+    """上游是否提供校验指纹（`pycbeta.verify.verify_fingerprint` 可调用）。"""
+    try:
+        _ensure_path(str(_x2p_root(config)))
+        from pycbeta import verify as _v
+        return callable(getattr(_v, "verify_fingerprint", None))
+    except Exception:
+        return False
+
+
+def verify_fingerprint(work: str, fmt: str, config, preset=None):
+    """上游校验指纹预检：返回当前 (work, fmt) 的指纹，或 None。
+
+    None = 不能证明仍然有效（上游未实现/算不出/缺输入），调用方一律重验。
+    无副作用（不下载不渲染不写文件）。阈值取 publish 全局配置并钳制 0–50，
+    与 `verify_work` 透传值一致。
+    """
+    try:
+        _ensure_path(str(_x2p_root(config)))
+        from pycbeta import verify as _v
+        fn = getattr(_v, "verify_fingerprint", None)
+        if fn is None:
+            return None
+    except Exception:
+        return None
+    try:
+        md = int((_cfg(config).get("verify_max_diff", 5)) or 5)
+    except (TypeError, ValueError):
+        md = 5
+    try:
+        dl = int((_cfg(config).get("verify_diff_lines", 5)) or 5)
+    except (TypeError, ValueError):
+        dl = 5
+    try:
+        fp = fn(str(work), str(fmt), config_path=preset or None,
+                max_diff=max(0, min(50, md)), diff_lines=max(0, min(50, dl)))
+    except Exception:
+        return None
+    return fp if isinstance(fp, str) and fp else None
+
+
+def write_verify_summary(vdir, coll_name=None, works=None):
     """合并校验目录下全部单本报告为总报告（固定名覆盖写；无报告返回 None）。
 
     摘要行文与 `_do_import_verified` 一致（通过列格式、未通过带缺/多 numbers、
     未判定带原因），只读报告不搬产物；全文区按 stem 排序拼接各报告原文。
+    works 非空时只汇总这些 work 的报告（跳过复用项的旧报告不计入，避免误读）。
     """
     import datetime as _dt
     vdir = Path(vdir)
@@ -1108,6 +1212,10 @@ def write_verify_summary(vdir, coll_name=None):
         reports = sorted(verify_reports(vdir), key=lambda r: r[1])
     except Exception:
         return None
+    if works is not None:
+        _ws = {str(w) for w in (works or [])}
+        reports = [(rp, stem) for rp, stem in reports
+                   if any(_verify_stem_matches(stem, w) for w in _ws)]
     if not reports:
         return None
     ok_lines, fail_lines, undet_lines, bodies = [], [], [], []

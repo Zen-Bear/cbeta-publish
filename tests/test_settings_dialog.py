@@ -305,6 +305,19 @@ class SettingsDialogTest(unittest.TestCase):
         d2 = SettingsDialog(cfg, None)
         self.assertTrue(d2.rb_build_verify.isChecked())
 
+    def test_reuse_pdf_companion_default_and_roundtrip(self):
+        # PDF 伴生复用：默认开；落盘回读
+        dlg = self._dlg()
+        self.assertTrue(dlg.chk_reuse_pdf_docx.isChecked())
+        dlg.chk_reuse_pdf_docx.setChecked(False)
+        self.assertFalse(dlg._collect()["xml2pdf"]["reuse_pdf_companion"])
+        dlg.chk_reuse_pdf_docx.setChecked(True)
+        self.assertTrue(dlg._collect()["xml2pdf"]["reuse_pdf_companion"])
+        cfg = copy.deepcopy(DEFAULT_CONFIG)
+        cfg["xml2pdf"]["reuse_pdf_companion"] = False
+        d2 = SettingsDialog(cfg, None)
+        self.assertFalse(d2.chk_reuse_pdf_docx.isChecked())
+
     def test_verify_thresholds_default_and_roundtrip(self):
         # 校验阈值/上下文行数：0–50，默认 5；落盘回读
         dlg = self._dlg()

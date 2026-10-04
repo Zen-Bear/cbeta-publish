@@ -472,6 +472,74 @@ class MergeXmlSourceTest(unittest.TestCase):
         self.assertEqual(expanded["titles"], ["T0001", "TX0011 中下"])
         self.assertEqual(expanded["works"], ["T0001"])
 
+    def _patch_render_with_companion(self, with_companion=True):
+        """假渲染：pdf 产物旁边按需写伴生 docx；记录调用 (work, fmt)。"""
+        import cbeta_publish.books.xml2pdf_bridge as b
+        calls = []
+        real = b.ensure_products
+
+        def fake(w, fmt, base, config, preset=None, regen_all=False, name=None):
+            calls.append((w, fmt))
+            d = Path(base) / fmt
+            d.mkdir(parents=True, exist_ok=True)
+            out = d / f"{w}.{fmt}"
+            out.write_bytes(b"x")
+            if fmt == "pdf" and with_companion:
+                (d / f"{w}.docx").write_bytes(b"D")
+            return [out], False
+        b.ensure_products = fake
+        return calls, lambda: setattr(b, "ensure_products", real)
+
+    def test_ensure_xml_batch_reuses_pdf_companion(self):
+        # pdf+docx 同跑：docx 直接用 pdf 伴生，跳过 docx 渲染
+        win = self.win
+        out_dir = self._xml_env()
+        shutil.rmtree(out_dir, ignore_errors=True)
+        old = (win.config.get("xml2pdf", {}) or {}).get("reuse_pdf_companion")
+        win.config.setdefault("xml2pdf", {})["reuse_pdf_companion"] = True
+        calls, restore = self._patch_render_with_companion(True)
+        try:
+            ok_map, failed, cancelled = win._ensure_xml_batch(["T0001"], ["pdf", "docx"])
+        finally:
+            restore()
+            if old is None:
+                win.config["xml2pdf"].pop("reuse_pdf_companion", None)
+            else:
+                win.config["xml2pdf"]["reuse_pdf_companion"] = old
+        self.assertFalse(cancelled)
+        self.assertEqual(failed, [])
+        self.assertEqual(calls, [("T0001", "pdf")])       # docx 未渲染
+        docx = ok_map["docx"]["T0001"]
+        self.assertEqual([p.name for p in docx], ["T0001.docx"])
+        self.assertTrue(docx[0].is_file())
+
+    def test_ensure_xml_batch_companion_off_renders_docx(self):
+        # 开关关：docx 照常渲染（不看伴生）
+        win = self.win
+        out_dir = self._xml_env()
+        shutil.rmtree(out_dir, ignore_errors=True)
+        win.config.setdefault("xml2pdf", {})["reuse_pdf_companion"] = False
+        calls, restore = self._patch_render_with_companion(True)
+        try:
+            win._ensure_xml_batch(["T0001"], ["pdf", "docx"])
+        finally:
+            restore()
+            win.config["xml2pdf"]["reuse_pdf_companion"] = True
+        self.assertEqual(sorted(calls), [("T0001", "docx"), ("T0001", "pdf")])
+
+    def test_ensure_xml_batch_no_companion_renders_docx(self):
+        # 无伴生（html 管线等）：docx 回退正常渲染
+        win = self.win
+        out_dir = self._xml_env()
+        shutil.rmtree(out_dir, ignore_errors=True)
+        win.config.setdefault("xml2pdf", {})["reuse_pdf_companion"] = True
+        calls, restore = self._patch_render_with_companion(False)
+        try:
+            win._ensure_xml_batch(["T0001"], ["pdf", "docx"])
+        finally:
+            restore()
+        self.assertIn(("T0001", "docx"), calls)
+
 
 class MergeEditNoteGuardTest(unittest.TestCase):
     """编辑说明前置检查：启用但无文件/文件无效/封面总开关关闭 → 弹框问是否继续。"""

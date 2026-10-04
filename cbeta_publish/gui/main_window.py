@@ -30,7 +30,8 @@ VERIFY_IMPORT_RULES_HTML = """\
 （菜单打开独立窗时已自动填好）。</li>
 <li>跑完后，每本书在输出目录<b>顶层</b>有 <code>{id 书名}.{ext}</code>，
 每书在 <code>{id 书名}（验证）/</code> 里有<b>报告</b>
-（<code>{stem}_verify_report.txt</code> 或 <code>report.txt</code>）。</li>
+（<code>{stem}_verify_report.txt</code>、<code>{id}_{书名}_校验报告.txt</code>
+或 <code>report.txt</code>，新版上游用中间那种）。</li>
 <li>点「导入校验通过E书…」：只认当前丛书书单；<b>有 <code>[FAIL]</code> 的格式不入库</b>，
 通过的格式移入自制书目录（<code>{fmt}/{id 书名}.{fmt}</code>）；只转换没校验的书不入库。</li>
 <li>同一书有多份报告时看<b>最新</b>的一份；校验目录不在丛书默认位置时，
@@ -5275,13 +5276,29 @@ class MainWindow(QMainWindow):
             return None
         return data, d, works
 
+    def _verify_reuse_enabled(self):
+        """校验复用是否生效：开关开且上游提供指纹。"""
+        if not ((self.config.get("xml2pdf", {}) or {}).get("verify_reuse", True)):
+            return False
+        from cbeta_publish.books import xml2pdf_bridge as _b
+        try:
+            return bool(_b.verify_fingerprint_available(self.config))
+        except Exception:
+            return False
+
+    def _verify_records_path(self):
+        from cbeta_publish.books import verify_cache as _vc
+        return _vc.records_path({"_config_path": str(getattr(self, "_config_path", ""))})
+
     def _send_coll_to_verify(self, regen_all=False):
         """自制/重制（设置选「校验」时）：进程内逐本生成+校验，跑完自动导入通过项。
 
-        regen_all=False（自制）＝只处理自制书目录里**缺少**的书；
-        regen_all=True（重制）＝整批全部重做。
+        regen_all=False（自制）＝库中缺书/指纹过期才校验，指纹新鲜且产物在库直接跳过；
+        regen_all=True（重制）＝新鲜项重生成但跳过校验，其余渲染+校验。
+        校验复用（`xml2pdf.verify_reuse`，默认开）需上游指纹可用；否则全部重验。
         """
         from cbeta_publish.books import xml2pdf_bridge as _b
+        from cbeta_publish.books import verify_cache as _vc
         from cbeta_publish.books.verify_worker import VerifyWorker
         from PySide6.QtCore import QEventLoop
         got=self._verify_coll()
@@ -5300,14 +5317,60 @@ class MainWindow(QMainWindow):
         if not x2p.exists():
             self._wrap_box(QMessageBox.Warning,"未找到",f"xml2pdf 路径不存在：{x2p}")
             return
-        if not regen_all:
-            base_dir=_b.xml_books_dir(self.config)
+        base_dir=_b.xml_books_dir(self.config)
+        rpath=self._verify_records_path()
+        reuse_wanted=bool((self.config.get("xml2pdf", {}) or {}).get("verify_reuse", True))
+        reuse=reuse_wanted and self._verify_reuse_enabled()
+        preset=self._run_preset()
+        fps={}            # (work, fmt) -> 本次指纹（与校验运行同输入）
+        works_to_verify=[]
+        works_fmts={}
+        skipped=[]        # [(work, [fmts])]：全部新鲜，直接跳过
+        if reuse:
+            for w in works:
+                fresh_fmts, stale_fmts=[], []
+                for f in fmts:
+                    fp=_b.verify_fingerprint(w, f, self.config, preset=preset)
+                    if fp:
+                        fps[(w, f)]=fp
+                    if (fp and _vc.is_fresh(rpath, w, f, fp)
+                            and _b.find_built(w, f, base_dir) is not None):
+                        fresh_fmts.append(f)
+                    else:
+                        stale_fmts.append(f)
+                if stale_fmts:
+                    works_to_verify.append(w)
+                    works_fmts[w]=stale_fmts
+                else:
+                    skipped.append((w, fresh_fmts))
+        elif not regen_all:
             missing=[w for w in works
                      if not any(_b.find_built(w, f, base_dir) is not None for f in fmts)]
             if not missing:
                 self.detail.setText("没有缺少的自制书（改用「重制」可全部重做）")
                 return
-            works=missing
+            works_to_verify=list(missing)
+            works_fmts={w: list(fmts) for w in works_to_verify}
+        else:
+            works_to_verify=list(works)
+            works_fmts={w: list(fmts) for w in works_to_verify}
+        if not works_to_verify:
+            self.detail.setText(f"全部 {len(skipped)} 部已通过校验（源未变），无需重验")
+            return
+        regen_failed=[]
+        if regen_all and reuse:
+            # 新鲜项：重生成但跳过校验（输入未变，原结论仍成立）
+            for w, ff in skipped:
+                for f in ff:
+                    try:
+                        out, _reused=_b.ensure_one(
+                            w, f, base_dir, self.config, preset=preset,
+                            regen_all=True, name=_b.built_name(self.config, w))
+                    except Exception as e:
+                        print("regen fresh fail", w, f, e)
+                        out=None
+                    if out is None or not out.exists():
+                        regen_failed.append(f"{w}.{f} 重生成失败")
         slug=str(d.get("id") or d.get("name") or "")
         vdir=_b.verify_coll_dir(self.config, slug)
         try:
@@ -5315,14 +5378,14 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self._wrap_box(QMessageBox.Warning,"失败",f"校验目录不可写：{e}")
             return
-        preset=self._run_preset()
-        total=max(1, len(works))
+        total=max(1, len(works_to_verify))
         title="重制并校验" if regen_all else "自制并校验"
         dlg, update, pstate=self._make_progress(title, total)
         result={"ok": 0, "failed": []}
         def on_prog(done, label, level):
             update(done, label, is_html=False)
-        worker=VerifyWorker(works, fmts, vdir, self.config, preset=preset)
+        worker=VerifyWorker(works_to_verify, fmts, vdir, self.config,
+                              preset=preset, works_fmts=works_fmts)
         worker.progress.connect(on_prog)
         worker.finished_all.connect(lambda ok, tot, fl: result.update(ok=ok, failed=list(fl)))
         pstate["oncancel"]=worker.stop
@@ -5348,7 +5411,21 @@ class MainWindow(QMainWindow):
             pass
         self._verify_worker=None
         base=_b.xml_books_dir(self.config)
-        imp=self._do_import_verified(works, vdir, base)
+        imp=self._do_import_verified(works_to_verify, vdir, base)
+        # 跳过项的旧报告不参与导入扫描杂项：去掉命中跳过书的 skip 条目
+        _skipped_ids={w for w, _ff in skipped}
+        imp["skip"]=[s for s in imp.get("skip", [])
+                     if not any(s == w or s.startswith(w + " ") for w in _skipped_ids)]
+        imp["reused"]=[f"{w}（{'/'.join(ff)}）" for w, ff in skipped if ff]
+        if reuse and fps:
+            # 只记录本次自动导入的通过项（人工放行是覆盖判定，不记）；
+            # 入库成功才记，入库失败不记。
+            _okf=imp.get("ok_files") or {}
+            for w, flist in _okf.items():
+                for f, _dest in flist:
+                    fp=fps.get((w, f))
+                    if fp:
+                        _vc.record_pass(rpath, w, f, fp, {"product": _dest})
         import html as _html
         def _dirlink(p):
             from PySide6.QtCore import QUrl as _QU
@@ -5361,13 +5438,19 @@ class MainWindow(QMainWindow):
         def _warn(s):
             return f'<span style="color:#c62828;">{_html.escape(s)}</span>'
         summary=[f"校验完成 {result['ok']}/{total}"]
+        if skipped:
+            summary.append(f"跳过已通过 {len(skipped)} 部（源未变）")
+        if reuse_wanted and not reuse:
+            summary.append("上游未提供校验指纹，本次全部重验（复用未生效）")
         summary.append("验证输出目录：" + _dirlink(vdir))          # 目录可点开
-        _sum_path=_b.write_verify_summary(vdir, d.get("name"))
+        _sum_path=_b.write_verify_summary(vdir, d.get("name"), works=works_to_verify)
         if _sum_path is not None:
             summary.append("总验证报告：" + _flink(_sum_path))
         if result["failed"]:
             summary.append(_warn(f"未通过 {len(result['failed'])}：{', '.join(result['failed'][:10])}"))
         summary.append(f"已自动导入 {len(imp['ok'])} 部 → " + _dirlink(base))
+        if regen_failed:
+            summary.append(_warn(f"重生成失败（环境） {len(regen_failed)}：{', '.join(regen_failed[:10])}"))
         if imp["fail"]:
             summary.append(_warn(f"未入库 {len(imp['fail'])}：{', '.join(imp['fail'][:10])}"))
         if imp["undet"]:
@@ -5415,6 +5498,9 @@ class MainWindow(QMainWindow):
                     _tail = "；未入 " + x.split("；未入 ", 1)[1]
                 _mark = "（人工放行）" if _work in _manual else ""
                 parts.append(f"・{_html.escape(_work)}（{_links}）{_html.escape(_tail)}{_mark}")
+        if imp.get("reused"):
+            parts.append(f"<b>已通过（跳过） {len(imp['reused'])} 部</b>")
+            parts += [f"・{_html.escape(x)}" for x in imp["reused"]]
         if imp["fail"]:
             parts += [WARN % f"未入库 {len(imp['fail'])} 部："]
             parts += [WARN % f"・{_html.escape(x)}" for x in imp["fail"]]
@@ -5451,7 +5537,9 @@ class MainWindow(QMainWindow):
                     cands = [cand] if cand.is_file() else []
                 else:
                     cands=[p for p in Path(vdir).glob(f"{stem}*{ext}")
-                           if p.is_file() and not p.name.endswith(("_verify_report.txt","_ids.txt"))]
+                           if p.is_file() and not p.name.endswith(
+                               ("_verify_report.txt", "_校验报告.txt", "_ids.txt"))
+                           and "转换报告" not in p.name]
             except Exception:
                 cands=[]
             if cands:
@@ -5488,7 +5576,7 @@ class MainWindow(QMainWindow):
             _es="?" if _ex is None else str(_ex)
             return f"{_f} 缺{_ms}/多{_es}"
         for rp, stem in reports:
-            hit=next((w for w in works if stem==w or (stem and stem.startswith(w+" "))),
+            hit=next((w for w in works if _b._verify_stem_matches(stem, w)),
                      None)
             done_label=f"{stem or rp.name}"
             if hit is None:
@@ -5729,7 +5817,7 @@ class MainWindow(QMainWindow):
             _root=_b.verify_dir(self.config)
             start=str(_root if _root.is_dir() else _root.parent)
         sel=QFileDialog.getExistingDirectory(
-            self, "选择要导入的校验目录（含 *_verify_report.txt 或 report.txt）", start)
+            self, "选择要导入的校验目录（含 *_verify_report.txt / *_校验报告.txt / report.txt）", start)
         if not sel:
             self.detail.setText("已取消导入校验E书")
             return
@@ -5738,7 +5826,7 @@ class MainWindow(QMainWindow):
         if not reports:
             self._wrap_box(QMessageBox.Information, "暂无校验报告",
                            f"该目录下未找到校验报告：\n{vdir}\n"
-                           f"（需要 `*_verify_report.txt` 或 `（验证）/report.txt`）")
+                           f"（需要 `*_verify_report.txt`、`*_校验报告.txt` 或 `（验证）/report.txt`）")
             return
         base=_b.xml_books_dir(self.config)
         allow_delete=self._is_managed_verify_dir(vdir)
@@ -6326,8 +6414,26 @@ class MainWindow(QMainWindow):
             update(0, f"来源：自制｜生成：{'全部重新生成' if regen_all else '仅生成缺少'}"
                       f"｜预设：{(Path(preset).name if preset else '出厂默认')}{_ptag}")
         cancelled=False
-        for fmt in fmts:
+        # pdf+docx 同跑且开启复用时：pdf 管线的伴生 docx 直接认领为 docx 产物，
+        # 省一次完整 docx 渲染（上游 docx2pdf 管线在 pdf 成功时必附同名 docx）。
+        _reuse_companion=bool((self.config.get("xml2pdf", {}) or {}).get(
+            "reuse_pdf_companion", True))
+        _adopted_docx={}   # work -> [docx Path]（本轮由 pdf 伴生认领）
+        # pdf 必须先处理（docx 认领依赖本轮 pdf 产物）
+        _fmts_ordered=sorted(fmts, key=lambda f: 0 if f == "pdf" else 1)
+        for fmt in _fmts_ordered:
             for w in works:
+                if (fmt == "docx" and _reuse_companion and _adopted_docx.get(w)):
+                    _adopted=[p for p in _adopted_docx[w] if p.exists()]
+                    # 重制要求认领齐全才省渲染，否则回退正常重渲（防漏文件）
+                    if _adopted and (not regen_all or len(_adopted) >= expected[w]):
+                        ok_map[fmt][w]=_adopted
+                        names=", ".join(p.name for p in _adopted)
+                        done[0]+=expected[w]
+                        if not update(done[0], f"[{fmt}] 省渲染（pdf伴生） {names}"):
+                            cancelled=True
+                            break
+                        continue
                 _was_newer=xml2pdf_bridge.sources_newer(
                     self.config, w,
                     xml2pdf_bridge.find_all_built(w, fmt, xml_out))
@@ -6339,6 +6445,12 @@ class MainWindow(QMainWindow):
                     ok_map[fmt][w]=outs
                 else:
                     failed.append(f"{w}.{fmt} XML转换失败")
+                if (fmt == "pdf" and _reuse_companion and not reused and outs
+                        and "docx" in fmts):
+                    adopted=xml2pdf_bridge.adopt_pdf_companions(
+                        w, outs, xml_out, drop_stale=regen_all)
+                    if adopted:
+                        _adopted_docx[w]=adopted
                 if reused:
                     verb="复用"
                 elif _was_newer:

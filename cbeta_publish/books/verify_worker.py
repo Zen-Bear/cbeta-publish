@@ -10,10 +10,13 @@ class VerifyWorker(QThread):
     progress = Signal(int, str, str)
     finished_all = Signal(int, int, list)   # ok, total, failed list
 
-    def __init__(self, works, fmts, out_dir, config, preset=None):
+    def __init__(self, works, fmts, out_dir, config, preset=None,
+                 works_fmts=None):
         super().__init__()
         self.works = list(works or [])
         self.fmts = list(fmts or [])
+        # 逐书待验格式（跳过复用时只验 stale 格式）；缺省=全书统一 fmts
+        self.works_fmts = dict(works_fmts or {})
         self.out_dir = Path(out_dir)
         self.config = config
         self.preset = preset
@@ -33,7 +36,8 @@ class VerifyWorker(QThread):
                 if self._stop:
                     break
                 self.progress.emit(i - 1, f"生成并校验 {w} ...", "run")
-                report = b.verify_work(w, self.fmts, self.out_dir, self.config,
+                wf = self.works_fmts.get(w, self.fmts) if self.works_fmts else self.fmts
+                report = b.verify_work(w, wf, self.out_dir, self.config,
                                        preset=self.preset, stop=lambda: self._stop)
                 # 同一 work 可能有多个语义产物（如 TX0011 上/中下）：聚合全部相关报告，
                 # 避免只看最新一份而漏判另一份。

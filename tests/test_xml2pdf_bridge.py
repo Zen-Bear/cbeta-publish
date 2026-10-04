@@ -886,6 +886,41 @@ class BridgeBuiltNamingTest(unittest.TestCase):
         self.assertTrue((base / "pdf" / "T9999 全名.pdf").is_file())
         self.assertFalse((base / "pdf" / "T9999 指定名.pdf").exists())
 
+    def test_adopt_pdf_companions_moves_and_cleans(self):
+        # 认领 pdf 伴生 docx：搬进 docx/，并按需清理同 work 过期异名残留
+        import cbeta_publish.books.xml2pdf_bridge as b
+        base = self.dir / "adopt"
+        pdfdir = base / "pdf"
+        pdfdir.mkdir(parents=True)
+        p1 = pdfdir / "TX0011 上.pdf"
+        p1.write_bytes(b"P")
+        (pdfdir / "TX0011 上.docx").write_bytes(b"D")     # 伴生
+        p2 = pdfdir / "TX0011 中下.pdf"
+        p2.write_bytes(b"P")                              # 无伴生
+        (base / "docx").mkdir(parents=True)
+        stale = base / "docx" / "TX0011 旧名.docx"
+        stale.write_bytes(b"OLD")
+        adopted = b.adopt_pdf_companions("TX0011", [p1, p2], base, drop_stale=True)
+        self.assertEqual([p.name for p in adopted], ["TX0011 上.docx"])
+        self.assertTrue((base / "docx" / "TX0011 上.docx").is_file())
+        self.assertFalse((pdfdir / "TX0011 上.docx").exists())   # 已搬走
+        self.assertFalse(stale.exists())                         # 重制清理
+
+    def test_adopt_pdf_companions_no_drop_stale_keeps_old(self):
+        import cbeta_publish.books.xml2pdf_bridge as b
+        base = self.dir / "adopt2"
+        pdfdir = base / "pdf"
+        pdfdir.mkdir(parents=True)
+        p1 = pdfdir / "T1.pdf"
+        p1.write_bytes(b"P")
+        (pdfdir / "T1.docx").write_bytes(b"D")
+        (base / "docx").mkdir(parents=True)
+        keep = base / "docx" / "T1 旧名.docx"
+        keep.write_bytes(b"OLD")
+        adopted = b.adopt_pdf_companions("T1", [p1], base, drop_stale=False)
+        self.assertEqual([p.name for p in adopted], ["T1.docx"])
+        self.assertTrue(keep.exists())                           # 仅缺模式不清理
+
     def test_ensure_one_regens_when_source_newer(self):
         # 源 XML 比产物新 → 仅缺模式也重制并覆盖原路径；源旧/无源仍复用
         import cbeta_publish.books.xml2pdf_bridge as b
