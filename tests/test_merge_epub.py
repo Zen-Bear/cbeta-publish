@@ -370,6 +370,16 @@ class MergeEpubEditNoteTest(unittest.TestCase):
         finally:
             shutil.rmtree(d, ignore_errors=True)
 
+    def test_cover_organizer_by_source(self):
+        from cbeta_publish.books.ebook_merger import cover_organizer
+        cover = {"organizer_official": "官方版", "organizer_xml": "自制版"}
+        self.assertEqual(cover_organizer(cover, "official"), "官方版")
+        self.assertEqual(cover_organizer(cover, "xml"), "自制版")
+        # 键存在即使为空也用它（=不绘制）
+        self.assertEqual(cover_organizer({"organizer_official": ""}, "official"), "")
+        # 缺键回退旧 organizer（兼容旧配置）
+        self.assertEqual(cover_organizer({"organizer": "旧"}, "xml"), "旧")
+
     def test_parse_editnote_relative_path(self):
         # 说明路径支持相对数据根；空路径无效；随包 sample.txt 可解析
         from cbeta_publish.books.ebook_merger import (parse_editnote_file,

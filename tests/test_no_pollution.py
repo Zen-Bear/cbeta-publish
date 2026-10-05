@@ -70,7 +70,7 @@ class NoRealConfigPollutionTest(unittest.TestCase):
             win._save_config()
             # 设置对话框仅应用（不保存）不应写盘
             dlg = SettingsDialog(copy.deepcopy(DEFAULT_CONFIG), None)
-            dlg.ed_organizer.setText("临时")
+            dlg.ed_organizer_official.setText("临时")
             dlg._apply()
         finally:
             shutil.rmtree(tmp, ignore_errors=True)

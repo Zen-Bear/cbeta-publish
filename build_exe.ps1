@@ -106,7 +106,7 @@ New-Item -ItemType Directory -Force -Path (Join-Path $Dist "config") | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $Dist "mulu") | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $Dist "assets\images") | Out-Null
 
-Copy-Item (Join-Path $Repo "config\app.json") (Join-Path $Dist "config\app.json") -Force
+Copy-Item (Join-Path $Repo "config\app.default.json") (Join-Path $Dist "config\app.default.json") -Force
 
 # mulu 数据（整目录，排除 cache；含 backup/original、backup/last 以支持「恢复」）
 robocopy (Join-Path $Repo "mulu") (Join-Path $Dist "mulu") /E /XD cache /NFL /NDL /NJH /NJS /NP | Out-Null
@@ -155,9 +155,9 @@ foreach ($d in @("collections_books", "cbeta_ebooks",
     New-Item -ItemType Directory -Force -Path (Join-Path $Dist $d) | Out-Null
 }
 
-# ---------- 6. 改写 config 为「便携相对路径」----------
-Info "改写 config/app.json 为便携相对路径 …"
-$cfgPath = Join-Path $Dist "config\app.json"
+# ---------- 6. 改写出厂模板为「便携相对路径」（首启生成 config/app.json）----------
+Info "改写 config/app.default.json 为便携相对路径 …"
+$cfgPath = Join-Path $Dist "config\app.default.json"
 $cfg = Get-Content $cfgPath -Raw -Encoding UTF8 | ConvertFrom-Json
 
 function Set-Prop($obj, $name, $value) {

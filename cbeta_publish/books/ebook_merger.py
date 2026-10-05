@@ -219,7 +219,8 @@ def _register_font(name, path):
 
 def _resolve_cover_date(cfg, today=None):
     """封面日期行文本：`cover.date_text` 缺省 `{date}`（=今天，保持旧行为）；
-    其中的 `{date}` 替换为今天；留空则返回 ""（调用方跳过绘制）。"""
+    其中的 `{date}` 替换为今天；留空则返回 ""（调用方跳过绘制）。
+    该行也可写任意文字（如制作者名字）。"""
     import datetime as _dt
     raw = (cfg or {}).get("date_text", "{date}")
     if raw is None:
@@ -228,6 +229,23 @@ def _resolve_cover_date(cfg, today=None):
     if "{date}" in raw:
         raw = raw.replace("{date}", today or _dt.date.today().isoformat())
     return raw.strip()
+
+
+#: 封面「书籍版本/来源」行默认文字（按来源二选一）
+ORGANIZER_DEFAULT_OFFICIAL = "CBETA 官方電子書"
+ORGANIZER_DEFAULT_XML = "依 CBETA XML 自製"
+
+
+def cover_organizer(cover, source):
+    """封面「书籍版本/来源」行文本：按来源取对应键。
+
+    `source`="xml" → `cover.organizer_xml`；否则 `cover.organizer_official`。
+    键存在（即使为空=不绘制）就用它；键缺失则回退旧的 `cover.organizer`（兼容旧配置）。"""
+    cover = cover or {}
+    key = "organizer_xml" if str(source) == "xml" else "organizer_official"
+    if key in cover:
+        return str(cover.get(key) or "").strip()
+    return str(cover.get("organizer") or "").strip()
 
 
 def _cover_pdf(first_src: Path, title: str, out_path: Path, organizer: str="", config: dict=None):

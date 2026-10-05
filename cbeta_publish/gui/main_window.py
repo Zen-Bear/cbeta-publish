@@ -6649,7 +6649,8 @@ class MainWindow(QMainWindow):
             if _tpl:
                 self.config.setdefault("merge", {})["name_template"] = _tpl
             self._set_merge_ask_last(merge_mode, merge_depth)
-        from cbeta_publish.books.ebook_merger import merge_pdfs, merge_epubs, MergeCancelled
+        from cbeta_publish.books.ebook_merger import (merge_pdfs, merge_epubs,
+                                                      MergeCancelled, cover_organizer)
         from cbeta_publish.books import xml2pdf_bridge
         from cbeta_publish.books import official_ebook_source
         dest_dir=official_ebook_source.official_books_dir(self.config)
@@ -6797,7 +6798,7 @@ class MainWindow(QMainWindow):
             split_pages = 0 if _sp is None else max(0, int(_sp))
             _si = self.config.get("epub", {}).get("split_items", 0)
             split_items = 0 if _si is None else max(0, int(_si))
-            organizer=cover_cfg.get("organizer","")
+            organizer=cover_organizer(cover_cfg, run_source)
             groups=self._group_works(d, ok, ok_titles, ok_works,
                                      mode=merge_mode, depth=merge_depth)
             # 编辑说明：前置已解析；仅第一分册传入

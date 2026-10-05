@@ -14,7 +14,7 @@
     "app_font_size": 10,
     "supplement_ttf": "E:\\dev\\cbeta\\xml2pdf\\cbeta\\CBETA 補充字型\\CBETASupplement.ttf"
   },
-  "default_source": "xml",
+  "default_source": "official",
   "default_formats": {
     "merge": [
       "pdf",
@@ -43,16 +43,20 @@
     "depth": 2,
     "by_volume": false,
     "ask_last": {
-      "mode": "none",
-      "depth": 1
+      "mode": "catalog",
+      "depth": 3
     },
-    "name_template": "{coll}（{count}部）"
+    "name_template": "{coll}.{seg3}（{count}部）"
   },
   "xml2pdf": {
     "path": "E:\\dev\\cbeta\\xml2pdf",
-    "preset": "A5 校验带框",
+    "preset": "A5 霞鹜文楷",
     "cbeta_ebook": "E:\\dev\\cbeta\\publish\\cbeta_xml",
-    "verify_build": true
+    "verify_build": false,
+    "verify_max_diff": 5,
+    "verify_diff_lines": 5,
+    "verify_reuse": true,
+    "reuse_pdf_companion": true
   },
   "catalog": {
     "filters": {
@@ -89,7 +93,7 @@
       }
     },
     "sizes": {
-      "body_a5": 16,
+      "body_a5": 14,
       "body_a4": 16,
       "body_16k": 16,
       "body_32k": 16,
@@ -138,7 +142,7 @@
         "ratio": 1.0
       },
       "title": {
-        "font": "assets/fonts/朝華標題B.ttf",
+        "font": "assets\\fonts\\朝華標題B.ttf",
         "color": [
           0,
           0,
@@ -233,8 +237,8 @@
       "group_y_ratio": 0.3
     },
     "edit_note": {
-      "file": "E:/dev/cbeta/publish/collections_books/《大乘起信论》解题.txt",
-      "enabled": true
+      "file": "collections_books\\《大乘起信论》解题.txt",
+      "enabled": false
     },
     "date_text": "制作日期：{date}",
     "bulei": {
@@ -244,7 +248,9 @@
       "sep": "·",
       "show_num": false,
       "titles": "none"
-    }
+    },
+    "organizer_official": "版本：CBETA 2026r2",
+    "organizer_xml": "版本：CBETA 2026r2"
   },
   "xml_to_ebooks_dir": "E:\\dev\\cbeta\\publish\\cbeta_xml_ebooks",
   "official_library": {

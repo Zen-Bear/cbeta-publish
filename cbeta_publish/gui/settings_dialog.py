@@ -57,6 +57,8 @@ DEFAULT_CONFIG = {
     "catalog": {"filters": {"tripitaka": {"hidden": []}, "dynasty": {"hidden": []}, "vol": {"hidden": []}}},
     "cover": {
         "organizer": "CBETA 整理",
+        "organizer_official": "CBETA 官方電子書",
+        "organizer_xml": "依 CBETA XML 自製",
         "imprint": "CBETA 電子佛典自選叢書",
         "date_text": "{date}",
         "mode": "print",
@@ -618,11 +620,21 @@ class SettingsDialog(QDialog):
         cover = self._cfg.setdefault("cover", {})
         self._migrate_series_imprint(cover)
         # 通用项（书籍署名/开关），版式细节见下方子页签
-        self.ed_organizer = QLineEdit(cover.get("organizer", "CBETA 整理"))
+        from cbeta_publish.books.ebook_merger import (ORGANIZER_DEFAULT_OFFICIAL,
+                                                      ORGANIZER_DEFAULT_XML)
+        _org_fallback = str(cover.get("organizer") or "")
+        self.ed_organizer_official = QLineEdit(
+            cover.get("organizer_official", _org_fallback or ORGANIZER_DEFAULT_OFFICIAL))
+        self.ed_organizer_official.setToolTip(
+            "来源=官方时，封面此行的文字（如版本号/来源说明）；留空则不绘制")
+        self.ed_organizer_xml = QLineEdit(
+            cover.get("organizer_xml", _org_fallback or ORGANIZER_DEFAULT_XML))
+        self.ed_organizer_xml.setToolTip(
+            "来源=自制时，封面此行的文字（如版本号/来源说明）；留空则不绘制")
         self.ed_imprint = QLineEdit(cover.get("imprint", "CBETA 電子佛典自選叢書"))
         self.ed_imprint.setToolTip("封面左上角文字；可填系列名（如太虛大師全書）或落款；留空则不绘制")
         self.ed_date = QLineEdit(cover.get("date_text", "{date}"))
-        self.ed_date.setToolTip("封面日期行（整理者之后）；{date}=今天，可直接写任意文字；留空则不绘制")
+        self.ed_date.setToolTip("封面此行：可填日期（{date}=今天）或制作者名字等任意文字；留空则不绘制")
         # PDF 合并模式：打印模式（补空白页）/ 阅读模式（去空白）
         self.cb_mode = QWidget()
         _mh = QHBoxLayout(self.cb_mode)
@@ -638,17 +650,24 @@ class SettingsDialog(QDialog):
         _mh.addWidget(self.rb_reading)
         _mh.addStretch()
         self._set_mode(cover.get("mode", "print"))
-        form.addRow("左上角系列名", self.ed_imprint)
-        form.addRow("整理者署名", self.ed_organizer)
-        form.addRow("日期", self.ed_date)
-        form.addRow("PDF 合并模式", self.cb_mode)
-        # 以下行组进 Tab 首项「封面/说明」：合并开关/编辑说明/说明页/部类行
-        _cpage = QWidget()
-        cform = QFormLayout(_cpage)
+        # 顶部行（脱离子页签）：总开关 + PDF 合并模式（同属全局）
         self.chk_cover_enabled = QCheckBox("合并时加封面封底、说明（以下所有内容）")
         self.chk_cover_enabled.setToolTip("关闭后直接拼接原文件，仅生成书签（原书签降一级归入对应书下）")
         self.chk_cover_enabled.setChecked(bool(cover.get("enabled", True)))
-        cform.addRow(self.chk_cover_enabled)
+        # 顶部两行（脱离子页签）：先 PDF 合并模式，再总开关
+        form.addRow("PDF 合并模式", self.cb_mode)
+        form.addRow(self.chk_cover_enabled)
+        # 子页签①「署名/版本」：封面文字行（系列名/版本来源/日期署名）
+        _sigpage = QWidget()
+        _sigform = QFormLayout(_sigpage)
+        self._cover_sig_form = _sigform
+        _sigform.addRow("左上角系列名", self.ed_imprint)
+        _sigform.addRow("书籍版本/来源（官方）", self.ed_organizer_official)
+        _sigform.addRow("书籍版本/来源（自制）", self.ed_organizer_xml)
+        _sigform.addRow("日期/署名", self.ed_date)
+        # 子页签②「封面/说明」：编辑说明/说明页/部类行（总开关已上移）
+        _cpage = QWidget()
+        cform = QFormLayout(_cpage)
         # 编辑说明（TXT 转排版，插在说明页之前、仅第一分册；默认关闭）：
         # 复选框＋选择/导入按钮＋输入框同一行（说明 TXT 统一托管 assets/notes/）
         _en = cover.setdefault("edit_note", {"file": "", "enabled": False})
@@ -776,15 +795,20 @@ class SettingsDialog(QDialog):
         _bh2.addStretch()
         cform.addRow(_brow2)
         outer.addLayout(form)
-        # 版式子页签（按使用顺序）：封面/说明 → 封面/封底图、背景色 → 字体 → 基准字号 → 边距
+        # 版式子页签（按使用顺序）：署名/版本 → 封面/说明 → 封面/封底图、背景色 →
+        # 字体 → 基准字号 → 边距
         sub = QTabWidget()
         self._cover_subtabs = sub
         sub.setStyleSheet(SUBTAB_QSS)
+        sub.addTab(_sigpage, "署名/版本")
         sub.addTab(_cpage, "封面/说明")
         sub.addTab(self._cover_tab_images(cover), "封面/封底图、背景色")
         sub.addTab(self._cover_tab_fonts(cover), "字体")
         sub.addTab(self._cover_tab_sizes(cover), "基准字号")
         sub.addTab(self._cover_tab_margins(cover), "边距")
+        # 总开关关闭：子页签置灰（以下内容不生效）
+        sub.setEnabled(self.chk_cover_enabled.isChecked())
+        self.chk_cover_enabled.toggled.connect(sub.setEnabled)
         outer.addWidget(sub)
         # 面板过长：套卷动窗
         from PySide6.QtWidgets import QScrollArea
@@ -872,8 +896,8 @@ class SettingsDialog(QDialog):
         styles = cover.setdefault("styles", {})
         self.font_rows = {}
         font_labels = [
-            ("cbeta", "左上角系列名"), ("title", "封面标题"), ("organizer", "整理者"),
-            ("date", "日期"), ("toc_title", "目录/说明标题"),
+            ("cbeta", "左上角系列名"), ("title", "封面标题"), ("organizer", "版本/来源"),
+            ("date", "日期/署名"), ("toc_title", "目录/说明标题"),
             ("toc_item", "目录/说明条目"), ("toc_page", "目录页码"),
             ("intro_summary", "说明页简介"),
             ("editnote_title", "编辑说明标题"), ("editnote_body", "编辑说明正文"),
@@ -1018,7 +1042,13 @@ class SettingsDialog(QDialog):
         self.chk_reuse_pdf_docx.setChecked(bool(x2p.get("reuse_pdf_companion", True)))
         cover = c.setdefault("cover", {})
         self._migrate_series_imprint(cover)
-        self.ed_organizer.setText(cover.get("organizer", "CBETA 整理"))
+        from cbeta_publish.books.ebook_merger import (ORGANIZER_DEFAULT_OFFICIAL,
+                                                      ORGANIZER_DEFAULT_XML)
+        _org = str(cover.get("organizer") or "")
+        self.ed_organizer_official.setText(
+            cover.get("organizer_official", _org or ORGANIZER_DEFAULT_OFFICIAL))
+        self.ed_organizer_xml.setText(
+            cover.get("organizer_xml", _org or ORGANIZER_DEFAULT_XML))
         self.ed_imprint.setText(cover.get("imprint", "CBETA 電子佛典自選叢書"))
         self.ed_date.setText(cover.get("date_text", "{date}"))
         self._set_mode(cover.get("mode", "print"))
@@ -1142,7 +1172,7 @@ class SettingsDialog(QDialog):
         _vh.setContentsMargins(0, 0, 0, 0)
         self._verify_records_lbl = QLabel("…")
         self._verify_records_lbl.setMinimumWidth(150)
-        _vr_btn = QPushButton("清理通过记录")
+        _vr_btn = QPushButton("清理")
         _vr_btn.clicked.connect(self._clean_verify_records)
         _vh.addWidget(self._verify_records_lbl, 1)
         _vh.addWidget(_vr_btn)
@@ -1720,7 +1750,10 @@ class SettingsDialog(QDialog):
         })
         # 封面/版式
         cover = c.setdefault("cover", {})
-        cover["organizer"] = self.ed_organizer.text().strip()
+        cover["organizer_official"] = self.ed_organizer_official.text().strip()
+        cover["organizer_xml"] = self.ed_organizer_xml.text().strip()
+        # 旧键保留（=官方值），兼容旧读取方
+        cover["organizer"] = cover["organizer_official"]
         cover["imprint"] = self.ed_imprint.text().strip()
         cover["date_text"] = self.ed_date.text().strip()
         cover["edit_note"] = {"file": self.ed_editnote.text().strip(),

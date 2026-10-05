@@ -19,7 +19,14 @@ my_books/
 _tmp_cover/
 _export/
 
-# 说明：assets/（含高分辨率扫描件与字体）、mulu/backup/ 已按需纳入版本控制。
+# 说明：assets/（含高分辨率扫描件与字体）已按需纳入版本控制。
+
+# ---- 用户运行期配置（不进版本库；出厂模板见 config/app.default.json）----
+# 程序运行期会改写 app.json，跟踪它会被 `git checkout` 覆盖用户设置，故永不跟踪。
+config/app.json
+
+# ---- 备份目录：全部为运行期数据快照，不进版本库 ----
+mulu/backup/
 
 # ---- 本地 UI 状态（不进版本库）----
 config/ui_state.json

@@ -4,7 +4,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from PySide6.QtWidgets import QApplication
 from cbeta_publish.gui.main_window import MainWindow, apply_ui_fonts
-from cbeta_publish.paths import app_root
+from cbeta_publish.paths import ensure_user_config
 from cbeta_publish import APP_NAME, APP_ID, __version__
 
 def main():
@@ -13,7 +13,8 @@ def main():
         _browsers = Path(sys.executable).resolve().parent / "ms-playwright"
         if _browsers.is_dir():
             os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", str(_browsers))
-    cfg_path=app_root()/"config/app.json"
+    # 首启：用户配置缺失时从出厂模板 config/app.default.json 复制
+    cfg_path=ensure_user_config()
     cfg=json.loads(cfg_path.read_text(encoding="utf-8-sig"))
     ui=cfg.get("ui",{}) or {}
     from cbeta_publish.qt_diag import install as _install_diag

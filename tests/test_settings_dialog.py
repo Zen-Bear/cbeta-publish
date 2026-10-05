@@ -70,22 +70,38 @@ class SettingsDialogTest(unittest.TestCase):
             dlg.close()
 
     def test_cover_subtabs_order(self):
-        # 封面/版式 5 个子页签，首项 封面/说明（含合并开关/编辑说明/说明页/部类行），
-        # 随后 封面/封底图、背景色 → 字体 → 基准字号 → 边距
+        # 封面/版式 6 个子页签：署名/版本 → 封面/说明 → 封面/封底图、背景色 →
+        # 字体 → 基准字号 → 边距
         dlg = self._dlg()
         sub = dlg._cover_subtabs
         names = [sub.tabText(i) for i in range(sub.count())]
-        self.assertEqual(names, ["封面/说明", "封面/封底图、背景色", "字体", "基准字号", "边距"])
-        # 控件归属：首项含合并开关/编辑说明/部类行；背景色在页签2、字体页签3、
-        # 基准字号页签4、边距页签5
-        self.assertTrue(sub.widget(0).isAncestorOf(dlg.chk_cover_enabled))
-        self.assertTrue(sub.widget(0).isAncestorOf(dlg.chk_editnote_enabled))
-        self.assertTrue(sub.widget(0).isAncestorOf(dlg.chk_intro_enabled))
-        self.assertTrue(sub.widget(0).isAncestorOf(dlg.chk_bulei_num))
-        self.assertTrue(sub.widget(1).isAncestorOf(dlg.btn_bg))
-        self.assertTrue(sub.widget(2).isAncestorOf(dlg.font_rows["title"]))
-        self.assertTrue(sub.widget(3).isAncestorOf(dlg.sp_body["a5"]))
-        self.assertTrue(sub.widget(4).isAncestorOf(dlg.sp_margins["a5"]["left"]))
+        self.assertEqual(names, ["署名/版本", "封面/说明", "封面/封底图、背景色",
+                                 "字体", "基准字号", "边距"])
+        # 署名/版本（页签1）：系列名/版本来源/日期
+        self.assertTrue(sub.widget(0).isAncestorOf(dlg.ed_imprint))
+        self.assertTrue(sub.widget(0).isAncestorOf(dlg.ed_organizer_official))
+        self.assertTrue(sub.widget(0).isAncestorOf(dlg.ed_organizer_xml))
+        self.assertTrue(sub.widget(0).isAncestorOf(dlg.ed_date))
+        # 封面/说明（页签2）：编辑说明/说明页/部类行；总开关已上移
+        self.assertTrue(sub.widget(1).isAncestorOf(dlg.chk_editnote_enabled))
+        self.assertTrue(sub.widget(1).isAncestorOf(dlg.chk_intro_enabled))
+        self.assertTrue(sub.widget(1).isAncestorOf(dlg.chk_bulei_num))
+        self.assertFalse(sub.widget(1).isAncestorOf(dlg.chk_cover_enabled))
+        self.assertTrue(sub.widget(2).isAncestorOf(dlg.btn_bg))
+        self.assertTrue(sub.widget(3).isAncestorOf(dlg.font_rows["title"]))
+        self.assertTrue(sub.widget(4).isAncestorOf(dlg.sp_body["a5"]))
+        self.assertTrue(sub.widget(5).isAncestorOf(dlg.sp_margins["a5"]["left"]))
+
+    def test_cover_master_toggle_disables_subtabs(self):
+        # 总开关关闭 → 子页签置灰；开启 → 恢复
+        dlg = self._dlg()
+        try:
+            dlg.chk_cover_enabled.setChecked(False)
+            self.assertFalse(dlg._cover_subtabs.isEnabled())
+            dlg.chk_cover_enabled.setChecked(True)
+            self.assertTrue(dlg._cover_subtabs.isEnabled())
+        finally:
+            dlg.close()
 
     def test_subtabs_styled(self):
         # 设置顶层页签与嵌套子页签统一强调样式（加粗 + 选中下划线）
@@ -245,18 +261,43 @@ class SettingsDialogTest(unittest.TestCase):
         self.assertIn("恢复上一次（目录数据）", texts)
         self.assertFalse([t for t in texts if "mulu" in t], texts)
 
+    def test_cover_organizer_fields(self):
+        # 书籍版本/来源分官方/自制两栏 + tooltip；日期/署名 tooltip
+        dlg = self._dlg()
+        try:
+            self.assertTrue(dlg.ed_organizer_official.text())
+            self.assertTrue(dlg.ed_organizer_xml.text())
+            self.assertIn("官方", dlg.ed_organizer_official.toolTip())
+            self.assertIn("自制", dlg.ed_organizer_xml.toolTip())
+            self.assertIn("{date}", dlg.ed_date.toolTip())
+            dlg.ed_organizer_official.setText("官A")
+            dlg.ed_organizer_xml.setText("自B")
+            out = dlg._collect()["cover"]
+            self.assertEqual((out["organizer_official"], out["organizer_xml"]),
+                             ("官A", "自B"))
+        finally:
+            dlg.close()
+        # 旧配置只有 organizer → 两栏都回退该值
+        cfg = copy.deepcopy(DEFAULT_CONFIG)
+        cfg["cover"].pop("organizer_official", None)
+        cfg["cover"].pop("organizer_xml", None)
+        cfg["cover"]["organizer"] = "旧署名"
+        d2 = SettingsDialog(cfg, None)
+        self.assertEqual(d2.ed_organizer_official.text(), "旧署名")
+        self.assertEqual(d2.ed_organizer_xml.text(), "旧署名")
+
     def test_apply_does_not_write(self):
         dlg = self._dlg()
         # 记录磁盘内容，确认「确定」不写盘
         from cbeta_publish.gui import settings_dialog as sd
         before = sd.CONFIG_PATH.read_bytes() if sd.CONFIG_PATH.exists() else None
-        dlg.ed_organizer.setText("测试整理")
+        dlg.ed_organizer_official.setText("测试整理")
         dlg._apply()
         after = sd.CONFIG_PATH.read_bytes() if sd.CONFIG_PATH.exists() else None
         self.assertEqual(before, after)
         self.assertFalse(dlg._did_save)
         self.assertIsInstance(dlg.result_config(), dict)
-        self.assertEqual(dlg.result_config()["cover"]["organizer"], "测试整理")
+        self.assertEqual(dlg.result_config()["cover"]["organizer_official"], "测试整理")
 
     def test_apply_button_labelled_ok(self):
         dlg = self._dlg()
@@ -359,16 +400,27 @@ class SettingsDialogTest(unittest.TestCase):
                          "{coll}.{nn}.{seg}")
 
     def test_cover_labels_renamed(self):
-        # 「发布模式」→「PDF 合并模式」
+        # 顶部两行：PDF 合并模式（独立行，在上）＋ 总开关；不再有「发布模式」
+        from PySide6.QtWidgets import QFormLayout
         dlg = self._dlg()
         labels = []
-        form = dlg._cover_form
-        for i in range(form.rowCount()):
-            it = form.itemAt(i, QFormLayout.LabelRole)
+        for i in range(dlg._cover_form.rowCount()):
+            it = dlg._cover_form.itemAt(i, QFormLayout.LabelRole)
             if it is not None and it.widget() is not None and hasattr(it.widget(), "text"):
                 labels.append(it.widget().text())
         self.assertIn("PDF 合并模式", labels)
         self.assertNotIn("发布模式", labels)
+
+        def _row_of(widget):
+            for i in range(dlg._cover_form.rowCount()):
+                for role in (QFormLayout.LabelRole, QFormLayout.FieldRole):
+                    it = dlg._cover_form.itemAt(i, role)
+                    if it is not None and it.widget() is widget:
+                        return i
+            return -1
+        self.assertGreaterEqual(_row_of(dlg.cb_mode), 0)
+        self.assertGreaterEqual(_row_of(dlg.chk_cover_enabled), 0)
+        self.assertLess(_row_of(dlg.cb_mode), _row_of(dlg.chk_cover_enabled))
 
     def test_default_source_is_radio(self):
         # 默认来源=单选（官方/自制），存值 official/xml
@@ -455,12 +507,16 @@ class SettingsDialogTest(unittest.TestCase):
         from PySide6.QtWidgets import QFormLayout
         dlg = self._dlg()
         labels = []
-        for i in range(dlg._cover_form.rowCount()):
-            it = dlg._cover_form.itemAt(i, QFormLayout.LabelRole)
+        for i in range(dlg._cover_sig_form.rowCount()):
+            it = dlg._cover_sig_form.itemAt(i, QFormLayout.LabelRole)
             if it is not None and it.widget() is not None:
                 labels.append(it.widget().text())
-        self.assertLess(labels.index("左上角系列名"), labels.index("整理者署名"))
-        self.assertLess(labels.index("整理者署名"), labels.index("日期"))
+        self.assertLess(labels.index("左上角系列名"),
+                        labels.index("书籍版本/来源（官方）"))
+        self.assertLess(labels.index("书籍版本/来源（官方）"),
+                        labels.index("书籍版本/来源（自制）"))
+        self.assertLess(labels.index("书籍版本/来源（自制）"),
+                        labels.index("日期/署名"))
         self.assertEqual(dlg.ed_date.text(), "{date}")  # 缺省自动今天
         dlg.ed_date.setText("丙午年秋")
         out = dlg._collect()
@@ -607,10 +663,11 @@ class SettingsDialogTest(unittest.TestCase):
         cfg["cover"]["styles"]["background"] = {"color": [1, 2, 3]}
         cfg["cover"]["images"]["buddha"]["enabled"] = False
         dlg = SettingsDialog(cfg, None)
-        dlg.ed_organizer.setText("某某整理")
+        dlg.ed_organizer_official.setText("某某整理")
         out = dlg._collect()
         cv = out["cover"]
-        self.assertEqual(cv["organizer"], "某某整理")
+        self.assertEqual(cv["organizer_official"], "某某整理")
+        self.assertEqual(cv["organizer"], "某某整理")   # 旧键=官方值（兼容）
         self.assertEqual(cv["sizes"]["body_a5"], 13)
         self.assertEqual(cv["sizes"]["margins"]["a5"],
                          {"left": 21, "right": 22, "top": 23, "bottom": 24})
@@ -640,9 +697,9 @@ class SettingsDialogTest(unittest.TestCase):
                          dlg._bg_color.getRgb()[:3])
         self.assertEqual(dlg._bg_colors["toc_background"].getRgb()[:3],
                          dlg._bg_color.getRgb()[:3])
-        self.assertTrue(dlg._cover_subtabs.widget(1).isAncestorOf(
+        self.assertTrue(dlg._cover_subtabs.widget(2).isAncestorOf(
             dlg._bg_btns["intro_background"]))
-        self.assertTrue(dlg._cover_subtabs.widget(1).isAncestorOf(
+        self.assertTrue(dlg._cover_subtabs.widget(2).isAncestorOf(
             dlg._bg_btns["toc_background"]))
         out0 = dlg._collect()["cover"]["styles"]
         self.assertNotIn("intro_background", out0)
@@ -790,6 +847,18 @@ class SettingsDialogTest(unittest.TestCase):
         self.assertTrue(getter())
         self.assertEqual(lbl.text(), "（未配置）" if not getter() else lbl.text())
         self.assertNotEqual(lbl.text(), "（未配置）")
+
+    def test_cache_records_clean_button_label(self):
+        # 「校验通过记录」行清理按钮文案「清理」（不再叫「清理通过记录」）
+        from PySide6.QtWidgets import QPushButton
+        dlg = self._dlg()
+        try:
+            parent = dlg._verify_records_lbl.parent()
+            texts = [b.text() for b in parent.findChildren(QPushButton)]
+            self.assertIn("清理", texts)
+            self.assertNotIn("清理通过记录", texts)
+        finally:
+            dlg.close()
 
     def test_cache_verify_row_wired(self):
         # 缓存页新增「校验目录」：getter 用 bridge.verify_dir（未配置也有默认）

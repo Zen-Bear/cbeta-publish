@@ -2,7 +2,17 @@
 
 > 设计文档：`docs/设计总案.md`（总方案）、`docs/UI设计.md`（UI）、
 > `docs/链路B-设计契约.md`（与 xml2pdf 的跨仓调用契约）。
-> 测试：`python -m unittest discover tests`（当前 566 项通过）。
+> 测试：`python -m unittest discover tests`（当前 573 项通过）。
+
+## 约定（务必遵守）
+
+- **绝不回退真实用户数据**：不要对 `config/app.json`、`mulu/backup/`、`collections/`
+  执行 `git checkout` / `git restore` / `git clean`。这些是运行期数据，回退会**覆盖用户设置**。
+- `config/app.json` **不进版本库**（见 `.gitignore`）；出厂默认值在跟踪的
+  `config/app.default.json`，首启由 `paths.ensure_user_config()` 复制生成。
+- `mulu/backup/`（配置与源数据快照）不进版本库；`collections/` 保留跟踪但**永不 clean**。
+- 测试必须把 `_config_path`/`collections_dir` 指向临时目录（护栏 `tests/test_no_pollution.py`）；
+  若发现真实文件被写脏，**修具体用例**，不要整体回退。
 
 ## 已完成（里程碑）
 
