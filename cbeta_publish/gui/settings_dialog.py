@@ -63,7 +63,7 @@ DEFAULT_CONFIG = {
         "date_text": "{date}",
         "mode": "print",
         "enabled": True,
-        "intro": {"enabled": True, "title": "说明", "note": "依 CBETA XML 自制", "list": True},
+        "intro": {"enabled": True, "title": "说明", "note": "依 CBETA XML 自制"},
         "bulei": {"enabled": True, "depth": 0, "layout": "lines", "sep": "·",
                   "show_num": False, "titles": "none"},
         "edit_note": {"file": "", "enabled": False},
@@ -93,7 +93,6 @@ DEFAULT_CONFIG = {
             "background": {"color": [250, 245, 230]},
         },
         "positions": {
-            "cbeta_left_mm": 18, "cbeta_top_mm": 12,
             "title_y_ratio": 0.25, "group_y_ratio": 0.30,
             "organizer_y_ratio": 0.84, "date_y_ratio": 0.89,
             "toc_y_ratio": 0.15, "toc_item_y_ratio": 0.25,
@@ -728,7 +727,7 @@ class SettingsDialog(QDialog):
             self.chk_editnote_coll_enabled.setToolTip("未选择丛书（该设置随丛书保存）")
         # 说明页（部类统计 + 完整清单，自动从书单推导；仅封面模式生效）：
         # 标题标签＋输入框并到复选框同一行右侧
-        intro = cover.setdefault("intro", {"enabled": True, "title": "说明", "note": "依 CBETA XML 自制", "list": True})
+        intro = cover.setdefault("intro", {"enabled": True, "title": "说明", "note": "依 CBETA XML 自制"})
         _inrow = QWidget()
         _inh = QHBoxLayout(_inrow)
         _inh.setContentsMargins(0, 0, 0, 0)
@@ -1764,6 +1763,11 @@ class SettingsDialog(QDialog):
         cover.setdefault("intro", {})["enabled"] = self.chk_intro_enabled.isChecked()
         cover["intro"]["title"] = self.ed_intro_title.text().strip() or "说明"
         cover["intro"]["note"] = self.ed_intro_note.text().strip()
+        # 死键清理（渲染与设置均不读取）：保存时顺手去掉旧配置里的残留
+        cover["intro"].pop("list", None)
+        _pos = cover.setdefault("positions", {})
+        _pos.pop("cbeta_left_mm", None)
+        _pos.pop("cbeta_top_mm", None)
         cover["bulei"] = {"enabled": self.chk_bulei_show.isChecked(),
                           "depth": int(self.sp_bulei_depth.value()),
                           "layout": self.cb_bulei_layout.currentData() or "lines",

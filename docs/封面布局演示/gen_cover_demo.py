@@ -68,7 +68,7 @@ CFG = {
         "toc_background": {"color": [250, 248, 240]},
     },
     "intro": {
-        "enabled": True, "title": "说明", "note": "依 CBETA XML 自制", "list": True,
+        "enabled": True, "title": "说明", "note": "依 CBETA XML 自制",
         "summary": ["本丛书共收录 3 部", "三藏分布：经 3"],
         "sections": [
             ("01 寶積部類（2 部）", ["T0310 大寶積經", "T0220 大般若波羅蜜多經"]),

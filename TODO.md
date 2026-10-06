@@ -2,7 +2,7 @@
 
 > 设计文档：`docs/设计总案.md`（总方案）、`docs/UI设计.md`（UI）、
 > `docs/链路B-设计契约.md`（与 xml2pdf 的跨仓调用契约）。
-> 测试：`python -m unittest discover tests`（当前 632 项通过）。
+> 测试：`python -m unittest discover tests`（当前 633 项通过）。
 
 ## 约定（务必遵守）
 
@@ -58,7 +58,7 @@
   （自制/重制都跳；重制对跳过项仍重生成但不校验）＋设置开关 `xml2pdf.verify_reuse`（默认开）＋
   缓存页计数/独立清理；无指纹一律重验。`tests/test_verify_reuse.py`。
 
-### P1 — 批量合并（含 ZIP）＋批量更新素材＋官方书刷新（已完成，630 测试通过；设计与步骤见 `docs/批量合并-设计与实施.md`）
+### P1 — 批量合并（含 ZIP）＋批量更新素材＋官方书刷新（已完成，633 测试通过；设计与步骤见 `docs/批量合并-设计与实施.md`）
 - 入口：菜单「制作书籍 → 批量处理…」（`BatchDialog(mode="combined")`，窗口内单选
   「更新素材 / 合并丛书」；**不新开一级菜单、单一入口**）；两者共用备齐实现。
 - 批量合并：复选丛书（默认全选非空；全选/全不选）；☑合并 ☑ZIP 打包（格式沿用 `default_formats`）
@@ -91,7 +91,7 @@
   `tests/test_by_author_dynasty.py`。
 - [x] 模板变量 `{source}`/`{src}`（来源）/`{date}`/`{date8}`（今天）；不分册 ZIP 也走模板。
 - [x] 自制书源新重制：源 XML（工作根 `{work} {书名}/*.xml` 最新 mtime）比产物新则「仅缺」也重制；
-  官方书不推断过期。`tests/test_xml2pdf_bridge.py`。
+  官方书按备齐水位判过期（缺失/源较水位新/本地库版本名变化，见 P1）。`tests/test_xml2pdf_bridge.py`。
 - [x] 缓存页增加「校验目录」（`verify_dir`）统计与清理。
 
 ### P2 — 校验可配置阈值（已完成）

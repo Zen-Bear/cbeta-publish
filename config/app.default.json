@@ -79,7 +79,6 @@
     "intro": {
       "enabled": false,
       "title": "说明",
-      "list": true,
       "note": "依 CBETA XML 自制"
     },
     "images": {
@@ -227,8 +226,6 @@
       }
     },
     "positions": {
-      "cbeta_left_mm": 18,
-      "cbeta_top_mm": 12,
       "title_y_ratio": 0.25,
       "organizer_y_ratio": 0.84,
       "date_y_ratio": 0.89,

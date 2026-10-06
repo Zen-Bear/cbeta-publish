@@ -320,6 +320,22 @@ class SettingsDialogTest(unittest.TestCase):
         self.assertEqual(dlg.ed_imprint.text(), "太虛大師全書")
         self.assertNotIn("series", dlg._cfg["cover"])
 
+    def test_dead_cover_keys_dropped(self):
+        # 死键清理：intro.list / positions.cbeta_left_mm/top_mm 无人读取，
+        # 出厂默认不带；旧配置经 _collect 保存时一并去掉
+        self.assertNotIn("list", DEFAULT_CONFIG["cover"]["intro"])
+        self.assertNotIn("cbeta_left_mm", DEFAULT_CONFIG["cover"]["positions"])
+        self.assertNotIn("cbeta_top_mm", DEFAULT_CONFIG["cover"]["positions"])
+        cfg = copy.deepcopy(DEFAULT_CONFIG)
+        cfg["cover"]["intro"]["list"] = True
+        cfg["cover"]["positions"]["cbeta_left_mm"] = 18
+        cfg["cover"]["positions"]["cbeta_top_mm"] = 12
+        dlg = SettingsDialog(cfg, None)
+        out = dlg._collect()
+        self.assertNotIn("list", out["cover"]["intro"])
+        self.assertNotIn("cbeta_left_mm", out["cover"]["positions"])
+        self.assertNotIn("cbeta_top_mm", out["cover"]["positions"])
+
     def test_mode_is_radio_buttons(self):
         # PDF 合并模式：单选按钮（打印模式/阅读模式），round-trip 到 cover.mode
         cfg = copy.deepcopy(DEFAULT_CONFIG)
