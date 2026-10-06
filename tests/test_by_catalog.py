@@ -37,6 +37,7 @@ def _make_window():
     cfg["mulu_dir"] = str(ROOT / "mulu")           # 用真实目录树
     cfg["collections_dir"] = str(tmp / "collections")
     cfg["update_interval"] = "manual"
+    cfg.setdefault("xml2pdf", {})["cbeta_ebook"] = str(tmp / "xml")  # 隔离：无真实 XML 源
     cfg["_config_path"] = str(tmp / "app.json")
     return MainWindow(cfg), tmp
 

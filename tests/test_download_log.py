@@ -39,6 +39,7 @@ def _make_window():
     cfg["mulu_dir"] = str(ROOT / "mulu")
     cfg["collections_dir"] = str(tmp / "collections")
     cfg["update_interval"] = "manual"
+    cfg.setdefault("xml2pdf", {})["cbeta_ebook"] = str(tmp / "xml")  # 隔离：无真实 XML 源
     cfg.setdefault("merge", {})["mode"] = "none"   # 测试确定性：不随实时配置弹合并框
     cfg.setdefault("cover", {})["enabled"] = True
     cfg["cover"]["edit_note"] = {"file": "", "enabled": False}  # 同上：不弹编辑说明守卫框
@@ -174,7 +175,7 @@ class DownloadMissingTest(unittest.TestCase):
         from cbeta_publish.books import official_ebook_source as oes
         real = oes.download_ebook
 
-        def fake(w, fmt, dest_dir, config=None):
+        def fake(w, fmt, dest_dir, config=None, force=False):
             if w not in ok_works:
                 return None
             p = oes.dest_path(w, fmt, dest_dir)

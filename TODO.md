@@ -2,7 +2,7 @@
 
 > 设计文档：`docs/设计总案.md`（总方案）、`docs/UI设计.md`（UI）、
 > `docs/链路B-设计契约.md`（与 xml2pdf 的跨仓调用契约）。
-> 测试：`python -m unittest discover tests`（当前 573 项通过）。
+> 测试：`python -m unittest discover tests`（当前 630 项通过）。
 
 ## 约定（务必遵守）
 
@@ -58,20 +58,29 @@
   （自制/重制都跳；重制对跳过项仍重生成但不校验）＋设置开关 `xml2pdf.verify_reuse`（默认开）＋
   缓存页计数/独立清理；无指纹一律重验。`tests/test_verify_reuse.py`。
 
-### P1 — 批处理合并（所有丛书重新自动合并）
-- 入口：菜单「制作书籍 → 批量合并丛书…」，弹选择框（复选丛书，默认全选非空；全选/全不选；
-  「报告落盘」复选默认开 → `output_dir/批量合并报告.txt` 固定名覆盖写；说明行写明来源/格式/分册取当前设置）。
-- 分册配置：丛书 JSON 新增可选 `merge{mode/depth/name_template}`（缺省跟随全局；读入规范化，不改磁盘）；
-  批量按每部丛书的有效配置合并；选择框可看每部有效配置并设单书配置（含“跟随全局”）。
+### P1 — 批量合并（含 ZIP）＋批量更新素材＋官方书刷新（已完成，630 测试通过；设计与步骤见 `docs/批量合并-设计与实施.md`）
+- 入口：菜单「制作书籍 → 批量处理…」（`BatchDialog(mode="combined")`，窗口内单选
+  「更新素材 / 合并丛书」；**不新开一级菜单、单一入口**）；两者共用备齐实现。
+- 批量合并：复选丛书（默认全选非空；全选/全不选）；☑合并 ☑ZIP 打包（格式沿用 `default_formats`）
+  ☑合并前自动备齐（默认开，关=只用现有素材）☑报告落盘 → `output_dir/批量合并报告.txt` 覆盖写；
+  输出 `output_dir/{丛书名}/`。
+- 批量更新素材：只跑备齐（官方缺/过期重下 + 自制源新重制），不合并、不写 `last_publish`；
+  报告 `output_dir/批量更新报告.txt`。
+- 官方刷新协调：官方书过期判据 = 缺失 ∨ 工作根 XML 源较新 ∨ 本地库版本名（`official_library.root`
+  目录名）变化；水位记 `config/official_state.json`（gitignored，按 `(work, fmt)`）。批量默认
+  「XML较新则重下」；自制沿用 `sources_newer` 自动重制；单部 合并/ZIP/导出 同步升级。
+- 分册配置：丛书 JSON 新增可选 `merge{mode/depth/name_template}`（缺省跟随全局；读入规范化）；
+  批量按每部丛书的有效配置合并/ZIP；对话框可设单书配置（含「跟随全局」，确定即落盘）。
   `ask`（全局或单书）不弹框，用 `merge.ask_last`，无记忆回退 `none`。
 - 来源/预设/格式整批统一（右栏当前选择；丛书不绑定来源）；设置「制作书籍=校验」时批量仍只普通合并。
-- 两阶段：备齐（官方源批量开始前统一先下载，自制源恒仅缺；备不齐的丛书记失败）→
-  逐部合并（空书/空白名/编辑说明有问题记失败；中途失败不影响其余丛书；取消即停，已完成的保留）。
-- 报告：进度窗总结＋丛书信息页签逐部清单（成功文件可点开）；`last_publish` 照写，不切右栏选择、不弹保存提示。
-- 实现：`_merge` 拆出参数化 `_merge_one_coll`（失败记入返回、不弹框）；`_merge_basename`/预览显式传模板；
-  `VerifyWorker` 不动。
-- 测试：`tests/test_batch_merge.py`（选择默认/失败不弹框/ask 回退/缺书隔离/取消/报告落盘/右栏选择不变/
-  单书配置生效与回退跟随全局）。
+- 两阶段：备齐（官方缺/过期对一次下载；自制一次生成；备不齐的丛书记失败）→
+  逐部 合并+ZIP（空书/空白名/编辑说明有问题记失败；中途失败不影响其余丛书；取消即停，已完成的保留）。
+- 报告：进度窗总结（批量合并单窗贯穿，`_Prog` 适配器）＋丛书信息页签逐部清单（成功文件可点开）；
+  有产物的部才写 `last_publish`；不切右栏选择、不弹保存提示。
+- 实现：`_prepare_official`（水位/force）、`_merge_one_coll`/`_zip_one_coll`（行为保持抽取）、
+  `_run_batch_update`/`_run_batch_merge`、`_write_batch_*_report`、`gui/batch_dialogs.py`。
+- 测试：`tests/test_official_state.py`（16）、`tests/test_prepare_official.py`（8）、
+  `tests/test_batch_update.py`（3）、`tests/test_batch_merge.py`（11）、`tests/test_coll_merge_cfg.py`（7）。
 
 ### 分册扩展（已完成）
 - [x] ZIP/导出 也按分册模式（`none` 保持单 zip／平铺；其余按可用书分组，命名同合并模板）；

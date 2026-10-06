@@ -42,6 +42,7 @@ def _make_window(name_template="{coll}.{nn}.{seg}"):
     cfg["cbeta_ebooks_dir"] = str(tmp / "eb")
     cfg["update_interval"] = "manual"
     cfg["default_source"] = "official"
+    cfg.setdefault("xml2pdf", {})["cbeta_ebook"] = str(tmp / "xml")  # 隔离：无真实 XML 源
     cfg["_config_path"] = str(tmp / "app.json")
     cfg["merge"] = {"mode": "none", "depth": 2, "name_template": name_template}
     win = MainWindow(cfg)

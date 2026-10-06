@@ -204,7 +204,7 @@ class DownloadWorkerTest(unittest.TestCase):
                 return {"url": "u", "size": 999, "mtime": 2.0, "etag": None}
             return None
 
-        def fake_dl(work, fmt, dest_dir, config=None):
+        def fake_dl(work, fmt, dest_dir, config=None, force=False):
             if work in ("T0002", "T0003"):
                 p = oes.dest_path(work, fmt, dest_dir)
                 p.parent.mkdir(parents=True, exist_ok=True)
@@ -234,7 +234,7 @@ class DownloadWorkerTest(unittest.TestCase):
         w = DownloadWorker(["T0001", "T0002"], ["pdf"], self.dir)
         oes.remote_info = lambda work, fmt: None
 
-        def fake_dl(work, fmt, dest_dir, config=None):
+        def fake_dl(work, fmt, dest_dir, config=None, force=False):
             if work == "T0002":
                 raise RemoteNotFound("http://x/T0002.pdf")
             p = oes.dest_path(work, fmt, dest_dir)
@@ -259,7 +259,7 @@ class DownloadWorkerTest(unittest.TestCase):
         w = DownloadWorker(["T0001", "T0002"], ["pdf"], self.dir)
         oes.remote_info = lambda work, fmt: None
 
-        def fake_dl(work, fmt, dest_dir, config=None):
+        def fake_dl(work, fmt, dest_dir, config=None, force=False):
             attempted.append(work)
             w._stop = True
             return None
@@ -278,7 +278,7 @@ class DownloadWorkerTest(unittest.TestCase):
         from cbeta_publish.books.download_worker import DownloadWorker
         oes.remote_info = lambda work, fmt: None
 
-        def boom(work, fmt, dest_dir, config=None):
+        def boom(work, fmt, dest_dir, config=None, force=False):
             raise SystemExit(2)
 
         oes.download_ebook = boom
@@ -294,7 +294,7 @@ class DownloadWorkerTest(unittest.TestCase):
         oes.remote_info = lambda work, fmt: None
         tried = []
 
-        def fake_dl(work, fmt, dest_dir, config=None):
+        def fake_dl(work, fmt, dest_dir, config=None, force=False):
             tried.append((work, fmt))
             p = oes.dest_path(work, fmt, dest_dir)
             p.parent.mkdir(parents=True, exist_ok=True)
@@ -387,6 +387,30 @@ class OfficialLibraryTest(unittest.TestCase):
         # 幂等：已存在同大小跳过
         self.assertEqual(oes.copy_from_library("T0001", "epub", dest, self.cfg), e)
         self.assertIsNone(oes.copy_from_library("T9999", "epub", dest, self.cfg))
+
+    def test_copy_from_library_force_overwrites_same_size(self):
+        dest = self.dir / "cacheF"
+        e = oes.copy_from_library("T0001", "epub", dest, self.cfg)
+        self.assertEqual(e.read_bytes(), b"E" * 10)
+        # 换库内容：同大小不同内容
+        (self.lib / "cbeta_epub_2026r2" / "T" / "T0001.epub").write_bytes(b"Z" * 10)
+        # 非 force：同大小跳过 → 仍旧内容
+        oes.copy_from_library("T0001", "epub", dest, self.cfg)
+        self.assertEqual((dest / "epub" / "T0001.epub").read_bytes(), b"E" * 10)
+        # force：强制覆盖
+        oes.copy_from_library("T0001", "epub", dest, self.cfg, force=True)
+        self.assertEqual((dest / "epub" / "T0001.epub").read_bytes(), b"Z" * 10)
+
+    def test_copy_from_library_force_overwrites_dir_same_size(self):
+        dest = self.dir / "cacheFD"
+        oes.copy_from_library("T0001", "docx", dest, self.cfg)
+        f = dest / "docx" / "T0001" / "T0001_001.docx"
+        self.assertEqual(f.read_bytes(), b"D" * 20)
+        (self.lib / "cbeta_docx_2026r2" / "T" / "T0001" / "T0001_001.docx").write_bytes(b"W" * 20)
+        oes.copy_from_library("T0001", "docx", dest, self.cfg)
+        self.assertEqual(f.read_bytes(), b"D" * 20)
+        oes.copy_from_library("T0001", "docx", dest, self.cfg, force=True)
+        self.assertEqual(f.read_bytes(), b"W" * 20)
 
     def test_download_prefers_library_without_network(self):
         real = oes.cf.download

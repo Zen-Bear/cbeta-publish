@@ -25,6 +25,7 @@ ROOT = Path(__file__).resolve().parents[1]
 REAL_FILES = [
     ROOT / "config" / "app.json",
     ROOT / "config" / "verify_records.json",
+    ROOT / "config" / "official_state.json",
     ROOT / "mulu" / "backup" / "last" / "app.json",
     ROOT / "mulu" / "backup" / "original" / "app.json",
 ] + sorted((ROOT / "collections").rglob("*.json"))

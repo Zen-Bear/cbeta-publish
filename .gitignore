@@ -31,6 +31,7 @@ mulu/backup/
 # ---- 本地 UI 状态（不进版本库）----
 config/ui_state.json
 config/verify_records.json
+config/official_state.json
 
 # ---- 说明文件：用户私有，仅随包示例 sample.txt 进库 ----
 assets/notes/*

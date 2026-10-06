@@ -80,6 +80,46 @@ def local_size_kb(path) -> int:
         return 0
 
 
+def library_version(config=None) -> str:
+    """本地官方库版本名（`official_library.root` 目录名，如 `2026r2`）；空→""。
+
+    用于官方书过期判据：换库版本（目录名变化）时视为全部过期。
+    """
+    try:
+        root = ((config or {}).get("official_library") or {}).get("root") or ""
+    except Exception:
+        root = ""
+    root = str(root).strip().rstrip("/\\")
+    if not root:
+        return ""
+    try:
+        return Path(root).name
+    except Exception:
+        return ""
+
+
+def product_mtime(path) -> float:
+    """产物时间戳：文件→mtime；目录→递归文件最大 mtime；空目录/缺失→0.0。"""
+    try:
+        p = Path(path)
+        if p.is_file():
+            return p.stat().st_mtime
+        if p.is_dir():
+            latest = 0.0
+            for f in p.rglob("*"):
+                try:
+                    if f.is_file():
+                        m = f.stat().st_mtime
+                        if m > latest:
+                            latest = m
+                except OSError:
+                    continue
+            return latest
+    except OSError:
+        pass
+    return 0.0
+
+
 def remote_info(work: str, fmt: str) -> dict | None:
     """HEAD 探针（复用共享层），返回 {url,size,mtime,etag}；失败/zip 型返回 None。"""
     if fmt in _ZIP_FORMATS:
@@ -118,9 +158,9 @@ def is_unchanged(info: dict | None, dest) -> bool:
     return True
 
 
-def download_ebook(work: str, fmt: str, dest_dir, config=None) -> Path | None:
+def download_ebook(work: str, fmt: str, dest_dir, config=None, *, force=False) -> Path | None:
     work = canonical(work)
-    got = copy_from_library(work, fmt, dest_dir, config)
+    got = copy_from_library(work, fmt, dest_dir, config, force=force)
     if got is not None:
         return got
     url = ebook_url(fmt, canon_of(work), work)
@@ -502,10 +542,11 @@ def _nonempty(p: Path) -> bool:
 
 
 def copy_from_library(work: str, fmt: str, dest_dir, config=None, *, root=None,
-                      libmap=None):
+                      libmap=None, force=False):
     """从本地库拷贝进缓存 → 目标 Path（单文件/目录）；无则 None。
 
-    只读源、只写缓存。目标已存在且同大小则跳过（幂等，不 churn）。
+    只读源、只写缓存。目标已存在且同大小则跳过（幂等，不 churn）；
+    force=True 时忽略同大小跳过、强制覆盖（换库但同大小文件也能更新）。
     """
     files = find_in_library(work, fmt, config, root=root, libmap=libmap)
     if not files:
@@ -518,7 +559,7 @@ def copy_from_library(work: str, fmt: str, dest_dir, config=None, *, root=None,
         if len(files) == 1 and _LIB_SINGLE_RE.match(files[0].name):
             dest = dest_path(w, fmt, dest_dir)
             dest.parent.mkdir(parents=True, exist_ok=True)
-            if dest.exists():
+            if dest.exists() and not force:
                 try:
                     if dest.is_file() and dest.stat().st_size == files[0].stat().st_size:
                         return dest
@@ -530,11 +571,12 @@ def copy_from_library(work: str, fmt: str, dest_dir, config=None, *, root=None,
         out.mkdir(parents=True, exist_ok=True)
         for f in files:
             dst = out / f.name
-            try:
-                if dst.is_file() and dst.stat().st_size == f.stat().st_size:
-                    continue
-            except OSError:
-                pass
+            if not force:
+                try:
+                    if dst.is_file() and dst.stat().st_size == f.stat().st_size:
+                        continue
+                except OSError:
+                    pass
             shutil.copy2(str(f), str(dst))
         return out if any(p.is_file() for p in out.iterdir()) else None
     except OSError:

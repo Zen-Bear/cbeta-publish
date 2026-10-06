@@ -10,9 +10,11 @@ class DownloadWorker(QThread):
     progress = Signal(str)
     finished_all = Signal(int, int, list)  # ok, total, failed list
 
-    def __init__(self, works=None, fmts=None, dest_dir=".", pairs=None, config=None):
+    def __init__(self, works=None, fmts=None, dest_dir=".", pairs=None, config=None,
+                 force=False):
         """pairs: 明确的 [(work, fmt), ...]；不传则由 works × fmts 组合。
-        config: 透传给 official_ebook_source（本地库），缺省=无本地库（纯下载）。"""
+        config: 透传给 official_ebook_source（本地库），缺省=无本地库（纯下载）。
+        force: True 时忽略「未更新」判断与本地库同大小跳过，强制下载/覆盖。"""
         super().__init__()
         if pairs is None:
             pairs = [(w, fmt) for fmt in (fmts or []) for w in (works or [])]
@@ -21,6 +23,7 @@ class DownloadWorker(QThread):
         self.fmts = fmts if fmts is not None else sorted({f for _, f in self.pairs})
         self.dest_dir = Path(dest_dir)
         self._config = config
+        self.force = bool(force)
         self._stop = False
 
     def stop(self):
@@ -40,7 +43,7 @@ class DownloadWorker(QThread):
                     break
                 dest = local_path(w, fmt, self.dest_dir)
                 existed = dest.exists()
-                if existed:
+                if existed and not self.force:
                     # 文件存在：先 HEAD 比对，无更新则跳过
                     info = remote_info(w, fmt)
                     if info is not None and is_unchanged(info, dest):
@@ -48,11 +51,13 @@ class DownloadWorker(QThread):
                         self.progress.emit(f"跳过 {w}.{fmt}（已是最新）")
                         continue
                 self.progress.emit(f"下载 {w}.{fmt} ...")
-                got = copy_from_library(w, fmt, self.dest_dir, self._config)
+                got = copy_from_library(w, fmt, self.dest_dir, self._config,
+                                        force=self.force)
                 kind = "本地库" if got is not None else None
                 if got is None:
                     try:
-                        got = download_ebook(w, fmt, self.dest_dir, self._config)
+                        got = download_ebook(w, fmt, self.dest_dir, self._config,
+                                             force=self.force)
                     except RemoteNotFound:
                         failed.append(f"{w}.{fmt} 不存在")
                         self.progress.emit(f"{REPLACE_LAST}下载 {w}.{fmt} ...不存在")

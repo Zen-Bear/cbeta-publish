@@ -57,6 +57,17 @@ def normalize_collection(d: dict) -> dict:
         _en = d["edit_note"]
         d["edit_note"] = {"file": str(_en.get("file", "") or ""),
                           "enabled": bool(_en.get("enabled", False))}
+    if isinstance(d.get("merge"), dict):
+        # 丛书独立分册配置（批量/单部共用）；缺省无此键 = 跟随全局。
+        _m = d["merge"]
+        _mode = _m.get("mode") if _m.get("mode") in (
+            "none", "volume", "catalog", "manual", "author", "dynasty", "ask") else "none"
+        try:
+            _depth = int(_m.get("depth", 2))
+        except Exception:
+            _depth = 2
+        d["merge"] = {"mode": _mode, "depth": max(1, min(5, _depth)),
+                      "name_template": str(_m.get("name_template", "") or "")}
     if isinstance(d.get("works"), list):
         norm = []
         for x in d["works"]:
@@ -103,7 +114,7 @@ def write_index(collections, index_path: Path) -> Path:
 
 
 class Collection:
-    def __init__(self, cid: str, name: str, category: str, tags=None, works=None, source: str="official", work_groups=None, manual_volumes=None):
+    def __init__(self, cid: str, name: str, category: str, tags=None, works=None, source: str="official", work_groups=None, manual_volumes=None, merge=None):
         self.id = cid
         self.name = name
         self.category = category
@@ -117,6 +128,7 @@ class Collection:
              "work_ids": [canonical_work(w) for w in (v.get("work_ids") or []) if w]}
             for v in (manual_volumes or []) if isinstance(v, dict)
         ]
+        self.merge = dict(merge) if isinstance(merge, dict) else None  # 独立分册配置；None=跟随全局
         self.xml_options = {}                  # 链路B选项 {page,font_lang,engine}
         self.created_at = datetime.utcnow().isoformat()+"Z"
         self.updated_at = self.created_at
@@ -124,7 +136,7 @@ class Collection:
         self.last_publish_dir = None
 
     def to_dict(self):
-        return {
+        d = {
             "id": self.id, "slug": self.id, "name": self.name,
             "category": self.category, "tags": self.tags,
             "work_ids": self.work_ids,
@@ -137,6 +149,9 @@ class Collection:
             "last_publish_at": self.last_publish_at,
             "last_publish_dir": self.last_publish_dir
         }
+        if self.merge:
+            d["merge"] = self.merge
+        return d
 
     @staticmethod
     def load(path: Path):

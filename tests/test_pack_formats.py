@@ -36,6 +36,7 @@ def _make_window():
     cfg["mulu_dir"] = str(ROOT / "mulu")
     cfg["collections_dir"] = str(tmp / "collections")
     cfg["update_interval"] = "manual"
+    cfg.setdefault("xml2pdf", {})["cbeta_ebook"] = str(tmp / "xml")  # 隔离：无真实 XML 源
     cfg["_config_path"] = str(tmp / "app.json")
     # 打包分册默认 none（避免 ask 弹框）；分册测试自行覆盖。
     # 用缺省模板 {coll}.{nn}.{seg}：不分册展开即丛书名，ZIP 名与旧一致。
@@ -507,6 +508,70 @@ class PackMissingSkipTest(unittest.TestCase):
         target.mkdir(exist_ok=True)
         self._run(self.win._export, QMessageBox.Cancel, target)
         self.assertEqual(list(target.iterdir()), [])  # 无产物
+
+
+class PackStalePromptTest(unittest.TestCase):
+    """官方书源 XML 较新（即使产物已存在）也提示「未下载/需更新」（S3 单部接入）。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.win, cls.tmp = _make_window()
+        win = cls.win
+        win.config["default_source"] = "official"
+        win.config["cbeta_ebooks_dir"] = str(cls.tmp / "eb")
+        col = Path(win.config["collections_dir"]) / "custom" / "过期测.json"
+        col.write_text(json.dumps({"id": "s", "name": "过期测", "category": "custom",
+                                   "tags": [], "work_ids": ["T0001"]},
+                                  ensure_ascii=False), encoding="utf-8")
+        win._load_collections()
+        for i in range(win.coll_combo.count()):
+            if str(win.coll_combo.itemData(i)).endswith("过期测.json"):
+                win.coll_combo.setCurrentIndex(i)
+                break
+        _ensure_app().processEvents()
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def _capture_question(self, fn):
+        from PySide6.QtWidgets import QMessageBox
+        win = self.win
+        real_choose = win._choose_pack_fmts
+        real_box = win._wrap_box
+        real_q = QMessageBox.question
+        real_dir = QFileDialog.getExistingDirectory
+        texts = []
+        win._choose_pack_fmts = lambda *a, **k: ["pdf"]
+        win._wrap_box = lambda *a, **k: None
+        QMessageBox.question = staticmethod(
+            lambda *a, **k: texts.append(a[2]) or QMessageBox.No)
+        QFileDialog.getExistingDirectory = staticmethod(lambda *a, **k: "")
+        try:
+            fn()
+        finally:
+            win._choose_pack_fmts = real_choose
+            win._wrap_box = real_box
+            QMessageBox.question = real_q
+            QFileDialog.getExistingDirectory = real_dir
+        return texts
+
+    def test_source_newer_triggers_prompt(self):
+        eb = self.tmp / "eb" / "pdf"
+        eb.mkdir(parents=True, exist_ok=True)
+        p = eb / "T0001.pdf"
+        p.write_bytes(b"PDF")
+        os.utime(p, (1000.0, 1000.0))
+        xroot = Path(self.win.config["xml2pdf"]["cbeta_ebook"])
+        d = xroot / "T0001 經"
+        d.mkdir(parents=True, exist_ok=True)
+        xf = d / "T0001.xml"
+        xf.write_text("<x/>", encoding="utf-8")
+        os.utime(xf, (2000.0, 2000.0))
+        texts = self._capture_question(self.win._zip)
+        self.assertTrue(texts)
+        self.assertIn("需更新", texts[0])
+        self.assertIn("pdf 缺 1 部", texts[0])
 
 
 if __name__ == "__main__":

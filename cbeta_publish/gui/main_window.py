@@ -674,6 +674,10 @@ class MainWindow(QMainWindow):
         hb.addWidget(self.btn_up); hb.addWidget(self.btn_down)
         hb.addWidget(self.btn_coll_sel_all); hb.addWidget(self.btn_coll_sel_none)
         hb.addStretch()
+        self.btn_coll_merge=QPushButton("分册…")
+        self.btn_coll_merge.setToolTip("设置当前丛书的分册（跟随全局/自定义），确定即保存到该丛书")
+        self.btn_coll_merge.clicked.connect(self._edit_coll_merge)
+        hb.addWidget(self.btn_coll_merge)
         self.coll_view_combo=QComboBox()
         self.coll_view_combo.addItem("平铺", "flat")
         self.coll_view_combo.addItem("按刊本册", "volume")
@@ -4849,6 +4853,12 @@ class MainWindow(QMainWindow):
         pairs=[(w, f) for w in works for f in fmts]
         ok=self._download_missing(pairs, dest_dir, title="下载/更新")
         st=getattr(self, "_dl_stats", {}) or {}
+        # 记备齐水位：成功（含跳过未变）的 (work, fmt) 更新水位，避免批量重复下载
+        from cbeta_publish.books import official_state as _ost
+        _failed=list(st.get("failed") or [])
+        for _w, _f in pairs:
+            if not any(str(x).startswith(f"{_w}.{_f}") for x in _failed):
+                _ost.mark_checked(self.config, _w, _f)
         entries=[(w, f, official_ebook_source.local_path(w, f, dest_dir))
                  for w, f in pairs
                  if official_ebook_source.local_path(w, f, dest_dir).exists()]
@@ -4910,13 +4920,14 @@ class MainWindow(QMainWindow):
     def _on_download_button(self):
         self._download()
 
-    def _download_missing(self, pairs, dest_dir, title="下载", autoclose_ok=False):
-        """下载缺失书籍并弹进度窗（合并/ZIP/导出 前置调用）。
+    def _download_missing(self, pairs, dest_dir, title="下载", autoclose_ok=False, force=False):
+        """下载缺失/过期书籍并弹进度窗（合并/ZIP/导出/更新 前置调用）。
 
         pairs: [(work, fmt), ...]。下载在 DownloadWorker 线程里跑，用嵌套事件循环
         保持窗口可响应（否则下载期间界面会“无响应”）。返回 True 表示全部下载成功。
         autoclose_ok=True（合并/ZIP/导出 前置）时，若没有失败也没有取消，
         提示 3 秒后自动关闭窗口并继续后续步骤。
+        force=True 时忽略「未更新」判断与本地库同大小跳过（全部重下）。
         """
         from cbeta_publish.books.download_worker import DownloadWorker, REPLACE_LAST
         from PySide6.QtCore import QEventLoop
@@ -4934,7 +4945,8 @@ class MainWindow(QMainWindow):
         def on_done(ok, tot, failed):
             result["ok"]=ok
             result["failed"]=list(failed)
-        worker=DownloadWorker(dest_dir=dest_dir, pairs=list(pairs), config=self.config)
+        worker=DownloadWorker(dest_dir=dest_dir, pairs=list(pairs), config=self.config,
+                              force=force)
         worker.progress.connect(on_progress)
         worker.finished_all.connect(on_done)
         pstate["oncancel"]=worker.stop
@@ -4974,6 +4986,39 @@ class MainWindow(QMainWindow):
                         "cancel": bool(pstate["cancel"])}
         self._load_coll_works()
         return (not failed) and (not pstate["cancel"])
+
+    def _prepare_official(self, works, fmts, dest_dir, policy="stale"):
+        """官方源备齐：按 policy 生成 pairs → 下载/更新 → 记备齐水位。
+
+        policy: "missing"（仅缺）｜"stale"（缺/过期，默认）｜"all"（全部重下，force）。
+        返回 (src_map, failed)：src_map = {fmt: {work: local_path}}；failed 为失败项字符串。
+        下载成功/确认未变的 (work, fmt) 写 official_state 水位（失败不写）。
+        """
+        from cbeta_publish.books import official_ebook_source as _oes
+        from cbeta_publish.books import official_state as _ost
+        pairs=[]
+        for fmt in fmts:
+            for w in works:
+                if policy == "missing":
+                    need = not _oes.local_path(w, fmt, dest_dir).exists()
+                elif policy == "all":
+                    need = True
+                else:
+                    need = _ost.stale(self.config, w, fmt, dest_dir)
+                if need:
+                    pairs.append((w, fmt))
+        if pairs:
+            title = "下载官方书" if policy == "missing" else "更新官方书"
+            self._download_missing(pairs, dest_dir, title=title,
+                                   autoclose_ok=False, force=(policy == "all"))
+        failed = list((getattr(self, "_dl_stats", {}) or {}).get("failed") or [])
+        for w, fmt in pairs:
+            tag = f"{w}.{fmt}"
+            if not any(str(x).startswith(tag) for x in failed):
+                _ost.mark_checked(self.config, w, fmt)
+        src_map = {fmt: {w: _oes.local_path(w, fmt, dest_dir) for w in works}
+                   for fmt in fmts}
+        return src_map, failed
 
     def _commit_publish_meta(self, data, d):
         # 发布元数据：丛书已有未保存改动则并入脏状态（保存时一起落盘）；
@@ -5176,6 +5221,9 @@ class MainWindow(QMainWindow):
         act_settings.setShortcut("Ctrl+,")
         act_settings.triggered.connect(self._open_settings)
         m_tools=bar.addMenu("制作书籍")
+        act_batch=m_tools.addAction("批量处理…")
+        act_batch.setToolTip("对所选丛书批量更新素材或合并（含 ZIP），逐部报告")
+        act_batch.triggered.connect(self._batch_open)
         act_xml2pdf=m_tools.addAction("运行 xml2pdf 制作书籍…")
         act_xml2pdf.setToolTip("打开独立窗并带入当前丛书书单（可再编辑；输出建议落校验目录以便导入）")
         act_xml2pdf.triggered.connect(self._open_xml2pdf_window)
@@ -6069,6 +6117,21 @@ class MainWindow(QMainWindow):
             "mode": mode, "depth": int(depth)}
         self._save_config()
 
+    _MERGE_MODES = ("none", "volume", "catalog", "manual", "author", "dynasty", "ask")
+
+    def _coll_merge_cfg(self, d):
+        """丛书有效分册配置 (mode, depth, template)：单书 merge 优先，缺省跟随全局。"""
+        m = (d or {}).get("merge") if isinstance(d, dict) else None
+        if isinstance(m, dict):
+            mode = m.get("mode") if m.get("mode") in self._MERGE_MODES else "none"
+            try:
+                depth = int(m.get("depth", self._merge_depth()))
+            except Exception:
+                depth = self._merge_depth()
+            tpl = m.get("name_template") or self._merge_name_template()
+            return mode, max(1, min(5, depth)), tpl
+        return self._merge_mode(), self._merge_depth(), self._merge_name_template()
+
     def _catalog_bulei_map(self):
         if getattr(self, "_catalog_bulei_cache", None) is None:
             from cbeta_publish.catalog import catalog_path as _cp
@@ -6592,6 +6655,175 @@ class MainWindow(QMainWindow):
                           + (f"，失败 {len(failed)}" if failed else "")])
         return ok_map, failed, cancelled
 
+    def _resolve_editnotes(self, d, cover_cfg):
+        """解析全局「加编辑说明页」+ 丛书「加丛书说明页」→ (editnotes, problems)。
+
+        顺序：全局→丛书（可多页）。problems 非空=已启用但无效（未选文件/文件无效/封面关闭），
+        由调用方决定询问（单部）或记失败（批量）。
+        """
+        from cbeta_publish.books.ebook_merger import parse_editnote_file
+        editnotes=[]
+        problems=[]
+        def _load(_cfg, _who):
+            if not (_cfg and _cfg.get("enabled", False)):
+                return
+            _f=(_cfg.get("file") or "").strip()
+            if not _f:
+                problems.append(f"已勾选{_who}，但未选择说明文件")
+                return
+            _p=parse_editnote_file(_f)
+            if _p is None:
+                problems.append(f"{_who}文件缺失或无有效内容：{_f}")
+            else:
+                editnotes.append(_p)
+        _load(cover_cfg.get("edit_note"), "加编辑说明页")
+        _load((d or {}).get("edit_note"), "加丛书说明页")
+        if editnotes and not cover_cfg.get("enabled", True):
+            problems.append("封面总开关已关闭（合并时不加封面封底），说明页需要封面区")
+        return editnotes, problems
+
+    def _merge_one_coll(self, data, d, works, *, fmts, mode, depth, template,
+                        run_source, run_preset, dest_dir, xml_out,
+                        update=None, editnotes=None, regen_all=False,
+                        skip_missing=False):
+        """单部丛书合并（无弹框/无页签/无保存提示）。
+
+        update(percent,label,append=False)->bool；None=无进度。
+        返回 {"success","skipped","failed","cancelled","out_dir"}。
+        last_publish 元数据由调用方写（单部 wrapper / 批量）。
+        """
+        from cbeta_publish.books.ebook_merger import (merge_pdfs, merge_epubs,
+                                                      MergeCancelled, cover_organizer)
+        from cbeta_publish.books import xml2pdf_bridge
+        from cbeta_publish.books import official_ebook_source
+        import html as _html
+        from PySide6.QtCore import QUrl as _QU
+        if update is None:
+            update = lambda *a, **k: True
+        success=[]; skipped=[]; failed=[]
+        cover_cfg=self._cover_config()
+        out_dir=self._out_dir()/d["name"]
+        _made_counts={}
+        for w in works:
+            if run_source == "xml":
+                try:
+                    found = xml2pdf_bridge.work_source_files(self.config, w)
+                except Exception:
+                    found = []
+                _made_counts[self._normalize_work(w)] = max(1, len(found))
+            else:
+                _made_counts[self._normalize_work(w)] = 1
+        prep_total=max(1, sum(_made_counts.values())*len(fmts))
+        total_units=prep_total*2
+        done_units=0
+        cancelled=False
+        def _official_dest(fmt, w):
+            return official_ebook_source.local_path(w, fmt, dest_dir)
+        def bump(label=""):
+            nonlocal done_units
+            done_units+=1
+            return update(100*done_units/total_units, label)
+        for fmt in fmts:
+            ok=[]
+            ok_titles=[]
+            ok_works=[]
+            made_paths={}
+            format_inputs=0
+            for w in works:
+                if run_source=="xml":
+                    # 只传 work id：XML 源解析归 xml2pdf（本地候选源→官方下载）。
+                    _hit = xml2pdf_bridge.find_all_built(w, fmt, xml_out)
+                    _srcnew = xml2pdf_bridge.sources_newer(self.config, w, _hit)
+                    outs, reused = xml2pdf_bridge.ensure_products(
+                        w, fmt, xml_out, self.config, preset=run_preset, regen_all=regen_all,
+                        name=xml2pdf_bridge.built_name(self.config, w))
+                    outs=[p for p in outs if p.exists()]
+                    if outs:
+                        made_paths[w]=outs
+                        ok.append(outs[0]); ok_titles.append(self.sutra.title_of(w)); ok_works.append(w)
+                        format_inputs+=len(outs)
+                    else:
+                        failed.append(f"{w}.{fmt} XML转换失败")
+                    _verb = "复用" if reused else ("重制（源更新）" if _srcnew else "生成")
+                    _names=", ".join(p.name for p in outs) if outs else f"{w}.{fmt}"
+                    if not bump(f"[{fmt}] {_verb} {_names}"):
+                        cancelled=True
+                        break
+                    continue
+                dest=_official_dest(fmt, w)
+                if dest.exists():
+                    ok.append(dest); ok_titles.append(self.sutra.title_of(w)); ok_works.append(w)
+                    format_inputs+=1
+                elif skip_missing:
+                    skipped.append(f"{w}.{fmt}")
+                else:
+                    failed.append(f"{w}.{fmt} 未下载")
+                if not bump():
+                    cancelled=True
+                    break
+            if cancelled:
+                break
+            if not ok:
+                failed.append(f"{fmt} 无文件")
+                continue
+            out_dir.mkdir(parents=True, exist_ok=True)
+            _sp = self.config.get("pdf", {}).get("split_pages", 0)
+            split_pages = 0 if _sp is None else max(0, int(_sp))
+            _si = self.config.get("epub", {}).get("split_items", 0)
+            split_items = 0 if _si is None else max(0, int(_si))
+            organizer=cover_organizer(cover_cfg, run_source)
+            groups=self._group_works(d, ok, ok_titles, ok_works,
+                                     mode=mode, depth=depth)
+            merge_base=done_units
+            group_offset=0
+            try:
+                for gindex, g in enumerate(groups, 1):
+                    g=self._expand_group_files(g, made_paths)
+                    glabel=g["label"]; gok=g["ok"]; gtitles=g["titles"]; gworks=g["works"]
+                    gbase=merge_base+group_offset
+                    def gprog(dd, nn, ll, _gbase=gbase, _n=len(gok)):
+                        return update(100*(_gbase+_n*(dd/max(1,nn)))/total_units, ll)
+                    if glabel is None:
+                        cname=d["name"]
+                        out=out_dir/f"{self._merge_basename(d, g, None, template=template, total=1)}.{fmt}"
+                        update(100*gbase/total_units, f"[{fmt}] 不分册 → {out.name}（{len(gok)} 部）")
+                    else:
+                        _disp = self._cover_group_label(g, gtitles)
+                        cname = f"{d['name']}｜{_disp}" if _disp else d["name"]
+                        out=out_dir/f"{self._merge_basename(d, g, gindex, template=template, total=len(groups))}.{fmt}"
+                        update(100*gbase/total_units, f"[{fmt}] 分册「{glabel}」 → {out.name}（{len(gok)} 部）")
+                    intro=self._intro_for(gworks, cover_cfg, made_by_xml=(run_source=="xml"))
+                    # 编辑说明仅第一分册；全局→丛书特定顺序传入（可多页）
+                    _en_one=(editnotes or None) if gindex==1 else None
+                    gfiles=[]
+                    if fmt=="pdf":
+                        parts=merge_pdfs(gok, out, titles=gtitles, collection_name=cname, organizer=organizer, cover_config=cover_cfg, intro=intro, progress=gprog, split_pages=split_pages, editnote=_en_one)
+                        gfiles=[str(pt.resolve()) for pt in parts] if parts else [str(out.resolve())]
+                    else:
+                        parts=merge_epubs(gok, out, collection_name=cname,
+                                          organizer=organizer,
+                                          titles=gtitles, cover_config=cover_cfg, intro=intro,
+                                          progress=gprog,
+                                          split_items=split_items, editnote=_en_one)
+                        gfiles=[str(pt.resolve()) for pt in parts]
+                    for s in gfiles:
+                        success.append(s)
+                    _gdone=100*(gbase+len(gok))/total_units
+                    for s in gfiles:
+                        # 进度行仅纯文本（不加链接）；链接只在最终「合并成功」清单里
+                        update(_gdone, f"  → 已生成 {_html.escape(Path(s).name)}", True)
+                    group_offset+=len(gok)
+            except MergeCancelled:
+                cancelled=True
+                break
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                failed.append(f"{fmt} 合成失败: {e}")
+            done_units=merge_base+format_inputs
+        return {"success":success, "skipped":skipped, "failed":failed,
+                "cancelled":cancelled, "out_dir":out_dir}
+
     def _merge(self):
         fmts=[f for f in self._checked_fmts() if f in ("pdf", "epub")]
         if not fmts:
@@ -6627,15 +6859,14 @@ class MainWindow(QMainWindow):
             if not works:
                 QMessageBox.warning(self,"失败","丛书为空")
                 return
-        # 分册模式：设置固定则不弹；「合并时选择」每次弹框（记住上次选择）
-        merge_mode=self._merge_mode()
-        merge_depth=self._merge_depth()
+        # 分册模式：单书配置优先（缺省跟随全局）；「合并时选择」每次弹框（记住上次选择）
+        merge_mode, merge_depth, coll_tpl = self._coll_merge_cfg(d)
         if merge_mode=="ask":
             from PySide6.QtWidgets import QDialog as _QD
             from cbeta_publish.gui.merge_dialog import MergeDialog
             last=self._merge_ask_last()
             dlg=MergeDialog(self, default_mode=last["mode"], default_depth=last["depth"],
-                            default_template=self._merge_name_template(),
+                            default_template=coll_tpl,
                             preview=None)
             dlg._preview = lambda m, dep: self._merge_preview(
                 works, m, dep, coll=d["name"], name_template=dlg.template(), d=d)
@@ -6648,9 +6879,8 @@ class MainWindow(QMainWindow):
             _tpl = dlg.template()
             if _tpl:
                 self.config.setdefault("merge", {})["name_template"] = _tpl
+                coll_tpl = _tpl
             self._set_merge_ask_last(merge_mode, merge_depth)
-        from cbeta_publish.books.ebook_merger import (merge_pdfs, merge_epubs,
-                                                      MergeCancelled, cover_organizer)
         from cbeta_publish.books import xml2pdf_bridge
         from cbeta_publish.books import official_ebook_source
         dest_dir=official_ebook_source.official_books_dir(self.config)
@@ -6662,218 +6892,74 @@ class MainWindow(QMainWindow):
             xml_out.mkdir(parents=True, exist_ok=True)
         except Exception:
             pass
-        def _src(w):
-            return run_source
-        def _official_dest(fmt, w):
-            return official_ebook_source.dest_path(w, fmt, dest_dir)
-        # 官方源缺书检查（xml 源不走此提示）
-        missing=[]
-        for fmt in fmts:
-            for w in works:
-                if _src(w)!="official":
-                    continue
-                if not _official_dest(fmt, w).exists():
-                    missing.append(f"{w}.{fmt}")
-        if missing:
-            _pre=", ".join(missing[:3]) + ("..." if len(missing)>3 else "")
+        # 官方源缺/过期检查（xml 源不走此提示）
+        from cbeta_publish.books import official_state as _ost
+        need=[]
+        if run_source == "official":
+            for fmt in fmts:
+                for w in works:
+                    if _ost.stale(self.config, w, fmt, dest_dir):
+                        need.append(f"{w}.{fmt}")
+        if need:
+            _pre=", ".join(need[:3]) + ("..." if len(need)>3 else "")
             ret=QMessageBox.question(self, "下载确认",
-                f"有 {len(missing)} 部未下载（{_pre}）。\n是否先下载？（「否」= 跳过未下载继续合并）",
+                f"有 {len(need)} 部未下载/需更新（{_pre}）。\n是否先下载/更新？（「否」= 跳过继续合并）",
                 QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel)
             if ret==QMessageBox.Cancel:
                 return
             if ret==QMessageBox.Yes:
-                pairs=[(w, fmt) for fmt in fmts for w in works
-                       if _src(w)=="official" and not _official_dest(fmt, w).exists()]
-                self._download_missing(pairs, dest_dir, title="下载（合并前）", autoclose_ok=True)
-                missing=[f"{w}.{fmt}" for fmt in fmts for w in works
-                         if _src(w)=="official" and not _official_dest(fmt, w).exists()]
-        skip_missing = (ret == QMessageBox.No) if missing else False
+                self._prepare_official(works, fmts, dest_dir, policy="stale")
+                need=[f"{w}.{fmt}" for fmt in fmts for w in works
+                      if _ost.stale(self.config, w, fmt, dest_dir)]
+        skip_missing = (ret == QMessageBox.No) if need else False
         # 合并默认仅缺；「调整…」临时预设必须重生成才算生效
         regen_all = (run_source=="xml" and getattr(self, "_tmp_preset", None) is not None)
-        self.btn_merge.setEnabled(False)
-        success=[]
-        skipped=[]
-        failed=[]
+        # 编辑说明前置检查（一次）：全局「加编辑说明页」+ 丛书「加丛书说明页」
         cover_cfg=self._cover_config()
-        _made_counts = {}
-        for w in works:
-            if run_source == "xml":
-                try:
-                    found = xml2pdf_bridge.work_source_files(self.config, w)
-                except Exception:
-                    found = []
-                _made_counts[self._normalize_work(w)] = max(1, len(found))
-            else:
-                _made_counts[self._normalize_work(w)] = 1
-        prep_total=max(1, sum(_made_counts.values())*len(fmts))
-        total_units=prep_total*2
-        done_units=0
-        cancelled=False
-        dlg, update, pstate = self._make_progress("合成", 100)
-        # 编辑说明前置检查（一次）：全局「加编辑说明页」与「加丛书说明页」
-        # （后者存于当前丛书 JSON）；启用但未选文件 / 文件无效 / 封面总开关关闭
-        # 都会导致不插说明页——弹框问是否继续，避免静默跳过。顺序：全局→丛书特定。
-        from cbeta_publish.books.ebook_merger import parse_editnote_file
-        _editnotes=[]      # 已解析说明页（全局在前，丛书特定在后）
-        _en_problems=[]
-        def _load_note(_cfg, _who):
-            if not (_cfg and _cfg.get("enabled", False)):
-                return
-            _f=(_cfg.get("file") or "").strip()
-            if not _f:
-                _en_problems.append(f"已勾选{_who}，但未选择说明文件")
-                return
-            _p=parse_editnote_file(_f)
-            if _p is None:
-                _en_problems.append(f"{_who}文件缺失或无有效内容：{_f}")
-            else:
-                _editnotes.append(_p)
-        _load_note(cover_cfg.get("edit_note"), "加编辑说明页")
-        _load_note(d.get("edit_note"), "加丛书说明页")
-        if _editnotes and not cover_cfg.get("enabled", True):
-            _en_problems.append("封面总开关已关闭（合并时不加封面封底），说明页需要封面区")
+        editnotes, _en_problems = self._resolve_editnotes(d, cover_cfg)
         if _en_problems:
             _ret=self._wrap_box(QMessageBox.Question, "编辑说明",
                 "；".join(_en_problems) + "。\n是否继续合并（不插说明页）？",
                 QMessageBox.Yes | QMessageBox.No)
             if _ret!=QMessageBox.Yes:
-                self.btn_merge.setEnabled(True)
-                pstate["finish"](["已取消合成（本次不输出/未完成）。"])
-                self._load_coll_works()
                 self.detail.setText("已取消合成")
                 return
-            _editnotes=[]
-        def bump(label=""):
-            nonlocal done_units
-            done_units+=1
-            return update(100*done_units/total_units, label)
-        for fmt in fmts:
-            ok=[]
-            ok_titles=[]
-            ok_works=[]
-            made_paths={}
-            format_inputs=0
-            for w in works:
-                if _src(w)=="xml":
-                    # 只传 work id：XML 源解析归 xml2pdf（本地候选源→官方下载）。
-                    # 注意 CBReader 书库是 P5a（按卷切分），不是 xml2pdf 要的
-                    # P5（整部经），publish 侧不再自行定位 XML 文件。
-                    _hit = xml2pdf_bridge.find_all_built(w, fmt, xml_out)
-                    _srcnew = xml2pdf_bridge.sources_newer(self.config, w, _hit)
-                    outs, reused = xml2pdf_bridge.ensure_products(
-                        w, fmt, xml_out, self.config, preset=run_preset, regen_all=regen_all,
-                        name=xml2pdf_bridge.built_name(self.config, w))
-                    outs=[p for p in outs if p.exists()]
-                    if outs:
-                        made_paths[w]=outs
-                        ok.append(outs[0]); ok_titles.append(self.sutra.title_of(w)); ok_works.append(w)
-                        format_inputs+=len(outs)
-                    else:
-                        failed.append(f"{w}.{fmt} XML转换失败")
-                    _verb = "复用" if reused else ("重制（源更新）" if _srcnew else "生成")
-                    _names=", ".join(p.name for p in outs) if outs else f"{w}.{fmt}"
-                    if not bump(f"[{fmt}] {_verb} {_names}"):
-                        cancelled=True
-                        break
-                    continue
-                dest=_official_dest(fmt, w)
-                if dest.exists():
-                    ok.append(dest); ok_titles.append(self.sutra.title_of(w)); ok_works.append(w)
-                    format_inputs+=1
-                elif skip_missing:
-                    skipped.append(f"{w}.{fmt}")
-                else:
-                    failed.append(f"{w}.{fmt} 未下载")
-                if not bump():
-                    cancelled=True
-                    break
-            if cancelled:
-                break
-            if not ok:
-                failed.append(f"{fmt} 无文件")
-                continue
-            out_dir=self._out_dir()/d["name"]
-            out_dir.mkdir(parents=True, exist_ok=True)
-            _sp = self.config.get("pdf", {}).get("split_pages", 0)
-            split_pages = 0 if _sp is None else max(0, int(_sp))
-            _si = self.config.get("epub", {}).get("split_items", 0)
-            split_items = 0 if _si is None else max(0, int(_si))
-            organizer=cover_organizer(cover_cfg, run_source)
-            groups=self._group_works(d, ok, ok_titles, ok_works,
-                                     mode=merge_mode, depth=merge_depth)
-            # 编辑说明：前置已解析；仅第一分册传入
-            import html as _html
-            from PySide6.QtCore import QUrl as _QU
-            def _flink(path):
-                # 产物文件蓝色链接（点击打开）
-                return f'<a href="{_QU.fromLocalFile(str(Path(path).resolve())).toString()}">{_html.escape(Path(path).name)}</a>'
-            def _dlink(path):
-                return f'<a href="{_QU.fromLocalFile(str(Path(path).resolve())).toString()}">{_html.escape(str(path))}</a>'
-            merge_base=done_units
-            group_offset=0
-            try:
-                for gindex, g in enumerate(groups, 1):
-                    g=self._expand_group_files(g, made_paths)
-                    glabel=g["label"]; gok=g["ok"]; gtitles=g["titles"]; gworks=g["works"]; stem=g["stem"]
-                    gbase=merge_base+group_offset
-                    def gprog(dd, nn, ll, _gbase=gbase, _n=len(gok)):
-                        return update(100*(_gbase+_n*(dd/max(1,nn)))/total_units, ll)
-                    if glabel is None:
-                        cname=d["name"]
-                        out=out_dir/f"{self._merge_basename(d, g, None, total=1)}.{fmt}"
-                        update(100*gbase/total_units, f"[{fmt}] 不分册 → {out.name}（{len(gok)} 部）")
-                    else:
-                        _disp = self._cover_group_label(g, gtitles)
-                        cname = f"{d['name']}｜{_disp}" if _disp else d["name"]
-                        out=out_dir/f"{self._merge_basename(d, g, gindex, total=len(groups))}.{fmt}"
-                        update(100*gbase/total_units, f"[{fmt}] 分册「{glabel}」 → {out.name}（{len(gok)} 部）")
-                    intro=self._intro_for(gworks, cover_cfg, made_by_xml=(run_source=="xml"))
-                    # 编辑说明仅第一分册；全局→丛书特定顺序传入（可多页）
-                    _en_one=(_editnotes or None) if gindex==1 else None
-                    gfiles=[]
-                    if fmt=="pdf":
-                        parts=merge_pdfs(gok, out, titles=gtitles, collection_name=cname, organizer=organizer, cover_config=cover_cfg, intro=intro, progress=gprog, split_pages=split_pages, editnote=_en_one)
-                        gfiles=[str(pt.resolve()) for pt in parts] if parts else [str(out.resolve())]
-                    else:
-                        parts=merge_epubs(gok, out, collection_name=cname,
-                                          organizer=organizer,
-                                          titles=gtitles, cover_config=cover_cfg, intro=intro,
-                                          progress=gprog,
-                                          split_items=split_items, editnote=_en_one)
-                        gfiles=[str(pt.resolve()) for pt in parts]
-                    for s in gfiles:
-                        success.append(s)
-                    _gdone=100*(gbase+len(gok))/total_units
-                    for s in gfiles:
-                        # 进度行仅纯文本（不加链接）；链接只在最终「合并成功」清单里
-                        update(_gdone, f"  → 已生成 {_html.escape(Path(s).name)}", True)
-                    group_offset+=len(gok)
-            except MergeCancelled:
-                cancelled=True
-                break
-            except Exception as e:
-                import traceback
-                traceback.print_exc()
-                failed.append(f"{fmt} 合成失败: {e}")
-            done_units=merge_base+format_inputs
+            editnotes=[]
+        self.btn_merge.setEnabled(False)
+        dlg, update, pstate = self._make_progress("合成", 100)
+        result=self._merge_one_coll(data, d, works, fmts=fmts, mode=merge_mode,
+                                    depth=merge_depth, template=coll_tpl,
+                                    run_source=run_source, run_preset=run_preset,
+                                    dest_dir=dest_dir, xml_out=xml_out,
+                                    update=update, editnotes=editnotes,
+                                    regen_all=regen_all, skip_missing=skip_missing)
         self.btn_merge.setEnabled(True)
-        if cancelled:
+        success=result["success"]; skipped=result["skipped"]; failed=result["failed"]
+        out_dir=result["out_dir"]
+        if result["cancelled"]:
             pstate["finish"](["已取消合成（本次不输出/未完成）。"])
             self._load_coll_works()
             self.detail.setText("已取消合成")
             return
         import datetime
         d["last_publish_at"]=datetime.datetime.utcnow().isoformat()+"Z"
-        d["last_publish_dir"]=str(self._out_dir()/d["name"])
+        d["last_publish_dir"]=str(out_dir)
         self._commit_publish_meta(str(data), d)
         if success:
             # 各产物文件链接（丛书信息页可点开）；输出目录已在上面「最后发布」行显示
             self._last_publish[str(data)]=[(Path(s).name, s) for s in success]
+        import html as _html
+        from PySide6.QtCore import QUrl as _QU
+        def _flink(path):
+            # 产物文件蓝色链接（点击打开）
+            return f'<a href="{_QU.fromLocalFile(str(Path(path).resolve())).toString()}">{_html.escape(Path(path).name)}</a>'
+        def _dlink(path):
+            return f'<a href="{_QU.fromLocalFile(str(Path(path).resolve())).toString()}">{_html.escape(str(path))}</a>'
         _sum=[]
         if success:
             _sum.append(f"合并成功 {len(success)} 个文件：")
             _sum += [f"  {_flink(s)}" for s in success]
-            _sum.append(f"输出目录：{_dlink(self._out_dir()/d['name'])}")
+            _sum.append(f"输出目录：{_dlink(out_dir)}")
         if skipped:
             _sum.append(_html.escape(f"跳过未下载 {len(skipped)}："))
             _sum += [_html.escape(f"  {x}") for x in skipped[:10]]
@@ -6890,12 +6976,400 @@ class MainWindow(QMainWindow):
         self._load_coll_works()
         self.tab_bottom.setCurrentIndex(1)   # 合并完成：切到「丛书信息」显示产物与链接
         if success:
-            self.detail.setText(f"合并成功 {len(success)} 个文件 → {self._out_dir()/d['name']}"
+            self.detail.setText(f"合并成功 {len(success)} 个文件 → {out_dir}"
                                 + (f"（跳过 {len(skipped)}）" if skipped else "")
                                 + (f"（失败 {len(failed)}）" if failed else ""))
             self._prompt_save_collection("合并完成，", str(data))
         else:
             QMessageBox.warning(self,"失败", "合并失败:\n" + "\n".join(failed))
+
+    # ---------- 批量更新素材 / 批量合并 ----------
+    def _batch_items(self):
+        return [(p, d) for p, d in self._collections if (d.get("work_ids") or [])]
+
+    def _batch_side_fmts(self):
+        """当前来源下 ZIP 默认格式（受可用格式限制）。"""
+        df = (self.config.get("default_formats", {}) or {})
+        side = "xml" if self._run_source() == "xml" else "official"
+        return [f for f in (df.get(side) or []) if f in self._pack_avail_fmts()]
+
+    @staticmethod
+    def _batch_failed_works(works, failed):
+        """失败串（如 T0001.pdf / T0001.pdf XML转换失败）→ 命中的 work 集合。"""
+        works = list(works)
+        hit = set()
+        for f in failed or []:
+            s = str(f)
+            for w in works:
+                if s.startswith(w + ".") or s.startswith(w + " "):
+                    hit.add(w)
+                    break
+        return hit
+
+    @classmethod
+    def _batch_status_for(cls, works, failed):
+        works = list(works)
+        if not works:
+            return "skipped"
+        hit = cls._batch_failed_works(works, failed)
+        if not hit:
+            return "ok"
+        if len(hit) >= len(works):
+            return "failed"
+        return "partial"
+
+    def _save_coll_merge(self, key, merge):
+        """保存某丛书的分册配置：None=跟随全局（删键）；非空白名立即落盘。"""
+        d = self._coll_dict(key)
+        if d is None:
+            return
+        if merge is None:
+            d.pop("merge", None)
+        else:
+            d["merge"] = dict(merge)
+        if self._is_blank_name(d.get("name", "")):
+            self._mark_coll_changed(str(key))
+        else:
+            self._save_one_collection(str(key))
+
+    def _edit_coll_merge(self):
+        """右栏「分册…」：编辑当前丛书分册（跟随全局/自定义），确定即落盘。"""
+        data = self.coll_combo.currentData()
+        if self._is_coll_placeholder(data):
+            QMessageBox.warning(self, "失败", "请先选择一个丛书")
+            return
+        d = self._coll_dict(data)
+        if d is None:
+            try:
+                d = self._read_coll(Path(data))
+            except Exception as e:
+                QMessageBox.warning(self, "失败", f"读取丛书失败 {e}")
+                return
+        from cbeta_publish.gui.merge_dialog import MergeDialog
+        m = d.get("merge") if isinstance(d.get("merge"), dict) else None
+        gmc = self._coll_merge_cfg({})
+        dlg = MergeDialog(self,
+                          default_mode=(m or {}).get("mode", "none"),
+                          default_depth=int((m or {}).get("depth", gmc[1]) or gmc[1]),
+                          default_template=(m or {}).get("name_template", gmc[2]) or "",
+                          preview=None, allow_follow=True, allow_ask=True,
+                          follow=(m is None), global_cfg=gmc)
+        works = d.get("work_ids") or []
+        dlg._preview = lambda mm, dep: self._merge_preview(
+            works, mm, dep, coll=d.get("name", ""), name_template=dlg.template(), d=d)
+        dlg._refresh()
+        from PySide6.QtWidgets import QDialog
+        if dlg.exec() != QDialog.Accepted:
+            return
+        self._save_coll_merge(str(data), dlg.result_merge())
+        self._load_coll_works()
+        self.detail.setText(f"已保存「{d.get('name','')}」分册配置")
+
+    def _batch_open(self):
+        """菜单「批量处理…」：一个窗口内选「更新素材」或「合并丛书」。"""
+        items = self._batch_items()
+        if not items:
+            QMessageBox.warning(self, "失败", "没有非空丛书")
+            return
+        run_source = self._run_source()
+        merge_fmts = [f for f in self._checked_fmts() if f in ("pdf", "epub")]
+        zip_fmts = self._batch_side_fmts()
+        gmc = self._coll_merge_cfg({})
+        from PySide6.QtWidgets import QDialog
+        from cbeta_publish.gui.batch_dialogs import BatchDialog
+        dlg = BatchDialog(items, self._coll_merge_cfg, self, mode="combined",
+                          merge_fmts=merge_fmts, zip_fmts=zip_fmts,
+                          can_merge=bool(merge_fmts),
+                          save_merge_fn=self._save_coll_merge,
+                          preview_fn=lambda d, mm, dep, tpl: self._merge_preview(
+                              d.get("work_ids") or [], mm, dep,
+                              coll=d.get("name", ""), name_template=tpl, d=d),
+                          global_cfg=gmc)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        selected = dlg.selected_items()
+        if not selected:
+            QMessageBox.warning(self, "失败", "未选择丛书")
+            return
+        if dlg.effective_mode() == "update":
+            self._run_batch_update(selected, dlg.official_policy(), dlg.self_policy(),
+                                   dlg.save_report())
+            return
+        if not dlg.merge_enabled() and not dlg.zip_enabled():
+            QMessageBox.warning(self, "失败", "请至少勾选「合并」或「ZIP 打包」")
+            return
+        self._run_batch_merge(selected, {
+            "merge": dlg.merge_enabled(), "zip": dlg.zip_enabled(),
+            "auto_prepare": dlg.auto_prepare(),
+            "official_policy": dlg.official_policy(), "self_policy": dlg.self_policy(),
+            "save_report": dlg.save_report(),
+            "merge_fmts": merge_fmts, "zip_fmts": zip_fmts, "run_source": run_source,
+        })
+
+    def _run_batch_update(self, selected, official_policy, self_policy, save_report):
+        from cbeta_publish.books import official_ebook_source
+        run_source = self._run_source()
+        merge_fmts = [f for f in self._checked_fmts() if f in ("pdf", "epub")]
+        fmts = list(dict.fromkeys(merge_fmts + self._batch_side_fmts())) or ["pdf"]
+        dest_dir = official_ebook_source.official_books_dir(self.config)
+        all_works = []
+        for _p, d in selected:
+            all_works.extend(d.get("work_ids") or [])
+        failed = []
+        if run_source == "official":
+            _sm, failed = self._prepare_official(all_works, fmts, dest_dir,
+                                                 policy=official_policy)
+        else:
+            _ok, failed, cancelled = self._ensure_xml_batch(
+                all_works, fmts, title="生成（批量更新）",
+                regen_all=(self_policy == "all"))
+            if cancelled:
+                self.detail.setText("已取消批量更新")
+                return
+        self._load_coll_works()
+        results = []
+        for path, d in selected:
+            st = self._batch_status_for(d.get("work_ids") or [], failed)
+            fs = [str(f) for f in failed
+                  if any(str(f).startswith(w + ".") or str(f).startswith(w + " ")
+                         for w in (d.get("work_ids") or []))]
+            results.append({"path": str(path), "name": d.get("name", ""),
+                            "status": st, "failed": fs})
+        if save_report:
+            self._write_batch_update_report(results, fmts, official_policy, self_policy)
+        self._show_batch_summary("批量更新完成", results, key="update")
+        self.detail.setText(f"批量更新完成：成功 {sum(1 for r in results if r['status']=='ok')}"
+                            f" / 共 {len(results)}")
+
+    def _write_batch_update_report(self, results, fmts, official_policy, self_policy):
+        import datetime
+        out = self._out_dir()
+        try:
+            out.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+        n_ok = sum(1 for r in results if r["status"] == "ok")
+        n_part = sum(1 for r in results if r["status"] == "partial")
+        n_fail = sum(1 for r in results if r["status"] == "failed")
+        n_skip = sum(1 for r in results if r["status"] == "skipped")
+        lines = ["批量更新报告",
+                 f"时间：{datetime.datetime.now().isoformat(timespec='seconds')}",
+                 f"来源：{self._run_source()} | 预设：{self._run_preset() or ''}",
+                 f"格式：{', '.join(fmts)}",
+                 f"官方策略：{official_policy} | 自制策略：{self_policy}",
+                 f"结果：成功 {n_ok} / 部分 {n_part} / 失败 {n_fail} / 跳过 {n_skip}", ""]
+        for i, r in enumerate(results, 1):
+            lines.append(f"[{i}] {r['name']}  {r['status']}")
+            for f in r["failed"][:20]:
+                lines.append(f"    失败：{f}")
+        path = out / "批量更新报告.txt"
+        try:
+            path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        except Exception as e:
+            QMessageBox.warning(self, "报告", f"报告写入失败：{e}")
+
+    def _run_batch_merge(self, selected, opts):
+        from cbeta_publish.books import official_ebook_source, xml2pdf_bridge
+        run_source = opts["run_source"]
+        run_preset = self._run_preset() if run_source == "xml" else None
+        dest_dir = official_ebook_source.official_books_dir(self.config)
+        xml_out = xml2pdf_bridge.xml_books_dir(self.config)
+        try:
+            xml_out.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+        merge_fmts = opts["merge_fmts"]
+        zip_fmts = opts["zip_fmts"]
+        prepare_fmts = list(dict.fromkeys(merge_fmts + zip_fmts))
+        prep_failed = []
+        # 阶段一 备齐
+        if opts["auto_prepare"] and prepare_fmts:
+            all_works = []
+            for _p, d in selected:
+                all_works.extend(d.get("work_ids") or [])
+            if run_source == "official":
+                _sm, prep_failed = self._prepare_official(
+                    all_works, prepare_fmts, dest_dir, policy=opts["official_policy"])
+            else:
+                _ok, prep_failed, cancelled = self._ensure_xml_batch(
+                    all_works, prepare_fmts, title="生成（批量备齐）",
+                    regen_all=(opts["self_policy"] == "all"))
+                if cancelled:
+                    self.detail.setText("已取消批量合并（备齐阶段）")
+                    return
+        self._load_coll_works()
+
+        class _Prog:
+            def __init__(self, update, n):
+                self._u = update
+                self._n = max(1, n)
+                self._i = 0
+                self._lo = 0.0
+                self._hi = 100.0
+            def step(self, i, lo, hi):
+                self._i = i
+                self._lo = lo
+                self._hi = hi
+            def __call__(self, percent, label="", append=False):
+                try:
+                    p = float(percent)
+                except Exception:
+                    p = 0.0
+                p = max(0.0, min(100.0, p))
+                frac = (self._lo + (self._hi - self._lo) * p / 100.0) / 100.0
+                overall = (self._i + frac) / self._n * 100.0
+                return self._u(overall, label, append)
+
+        n = len(selected)
+        dlg, update, pstate = self._make_progress("批量合并", 100)
+        prog = _Prog(update, n)
+        out_root = self._out_dir()
+        results = []
+        cancelled = False
+        for i, (path, d) in enumerate(selected):
+            name = d.get("name", "")
+            out_dir = out_root / name
+            r = {"name": name, "status": "ok", "failed": [], "merge": [], "zip": [],
+                 "reason": "", "out_dir": str(out_dir)}
+            works = d.get("work_ids") or []
+            if not works:
+                r["status"] = "skipped"; r["reason"] = "丛书为空"
+                results.append(r); continue
+            if self._is_blank_name(name):
+                r["status"] = "skipped"; r["reason"] = "空白丛书名（未保存）"
+                results.append(r); continue
+            mode, depth, tpl = self._coll_merge_cfg(d)
+            if mode == "ask":
+                al = self._merge_ask_last()
+                mode, depth = al["mode"], al["depth"]
+            # 合并
+            if opts["merge"] and merge_fmts:
+                cover_cfg = self._cover_config()
+                editnotes, problems = self._resolve_editnotes(d, cover_cfg)
+                if problems:
+                    r["failed"].append("编辑说明：" + "；".join(problems))
+                    r["status"] = "failed"
+                else:
+                    prog.step(i, 0, 70 if (opts["zip"] and zip_fmts) else 100)
+                    res = self._merge_one_coll(
+                        path, d, works, fmts=merge_fmts, mode=mode, depth=depth,
+                        template=tpl, run_source=run_source, run_preset=run_preset,
+                        dest_dir=dest_dir, xml_out=xml_out, update=prog,
+                        editnotes=editnotes,
+                        regen_all=(run_source == "xml" and opts["self_policy"] == "all"),
+                        skip_missing=True)
+                    if res["cancelled"]:
+                        cancelled = True
+                    r["merge"] = list(res["success"])
+                    r["failed"].extend(res["failed"])
+                    if res["success"]:
+                        r["status"] = "partial" if (res["failed"] or res["skipped"]) else "ok"
+                    elif res["failed"]:
+                        r["status"] = "failed"
+            # ZIP
+            if not cancelled and opts["zip"] and zip_fmts:
+                src_map = {f: {} for f in zip_fmts}
+                for f in zip_fmts:
+                    for w in works:
+                        if run_source == "xml":
+                            src_map[f][w] = xml2pdf_bridge.find_all_built(w, f, xml_out)
+                        else:
+                            src_map[f][w] = official_ebook_source.local_path(w, f, dest_dir)
+                prog.step(i, 70 if (opts["merge"] and merge_fmts) else 0, 100)
+                try:
+                    out_dir.mkdir(parents=True, exist_ok=True)
+                except Exception:
+                    pass
+                zres = self._zip_one_coll(d, works, fmts=zip_fmts, src_map=src_map,
+                                          out_dir=out_dir, mode=mode, depth=depth,
+                                          template=tpl, update=prog)
+                if zres["cancelled"]:
+                    cancelled = True
+                r["zip"] = list(zres["success"])
+                r["failed"].extend(zres["failed"])
+                if zres["success"] and r["status"] == "ok":
+                    r["status"] = "partial" if zres["failed"] else "ok"
+                elif zres["failed"] and r["status"] == "ok":
+                    r["status"] = "failed"
+            # last_publish 仅有产物
+            if r["merge"] or r["zip"]:
+                import datetime
+                d["last_publish_at"] = datetime.datetime.utcnow().isoformat() + "Z"
+                d["last_publish_dir"] = str(out_dir)
+                self._commit_publish_meta(str(path), d)
+            results.append(r)
+            if cancelled:
+                for pj, dj in selected[i + 1:]:
+                    results.append({"name": dj.get("name", ""), "status": "cancelled",
+                                    "failed": [], "merge": [], "zip": [],
+                                    "reason": "用户取消", "out_dir": ""})
+                break
+        try:
+            dlg.close()
+        except Exception:
+            pass
+        if cancelled:
+            pstate["finish"](["已取消批量合并（已完成部保留）。"])
+        if opts["save_report"]:
+            self._write_batch_merge_report(results, opts, prep_failed)
+        self._load_coll_works()
+        self._show_batch_summary("批量合并完成", results, key="merge")
+        self.tab_bottom.setCurrentIndex(1)
+        self.detail.setText(f"批量合并完成：成功 {sum(1 for r in results if r['status']=='ok')}"
+                            f" / 共 {len(results)}")
+
+    def _write_batch_merge_report(self, results, opts, prep_failed):
+        import datetime
+        out = self._out_dir()
+        try:
+            out.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+        cnt = {k: sum(1 for r in results if r["status"] == k)
+               for k in ("ok", "partial", "failed", "skipped", "cancelled")}
+        lines = ["批量合并报告",
+                 f"时间：{datetime.datetime.now().isoformat(timespec='seconds')}",
+                 f"来源：{opts['run_source']} | 预设：{self._run_preset() or ''}",
+                 f"合并格式：{', '.join(opts['merge_fmts']) or '（不合并）'} | "
+                 f"ZIP 格式：{', '.join(opts['zip_fmts']) or '（不打包）'}",
+                 f"官方策略：{opts['official_policy']} | 自制策略：{opts['self_policy']}"
+                 f" | 自动备齐：{'是' if opts['auto_prepare'] else '否'}",
+                 f"输出目录：{out}",
+                 f"结果：成功 {cnt['ok']} / 部分 {cnt['partial']} / 失败 {cnt['failed']}"
+                 f" / 跳过 {cnt['skipped']} / 取消 {cnt['cancelled']}", ""]
+        if prep_failed:
+            lines.append("备齐失败：" + "；".join(str(x) for x in prep_failed[:20]))
+            lines.append("")
+        for i, r in enumerate(results, 1):
+            lines.append(f"[{i}] {r['name']}  {r['status']}"
+                         + (f"  原因：{r['reason']}" if r.get("reason") else ""))
+            if r["merge"]:
+                lines.append(f"    合并: {len(r['merge'])} 个文件")
+            if r["zip"]:
+                lines.append(f"    ZIP: {len(r['zip'])} 个文件")
+            for f in r["failed"][:20]:
+                lines.append(f"    失败：{f}")
+        path = out / "批量合并报告.txt"
+        try:
+            path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        except Exception as e:
+            QMessageBox.warning(self, "报告", f"报告写入失败：{e}")
+
+    def _show_batch_summary(self, title, results, key="merge"):
+        import html as _html
+        from PySide6.QtCore import QUrl as _QU
+        rows = []
+        for r in results:
+            files = (r.get("merge") or []) + (r.get("zip") or [])
+            links = ", ".join(
+                f'<a href="{_QU.fromLocalFile(str(Path(f).resolve())).toString()}">'
+                f'{_html.escape(Path(f).name)}</a>' for f in files[:5])
+            more = f" …共 {len(files)} 个" if len(files) > 5 else ""
+            extra = f"  原因：{_html.escape(r['reason'])}" if r.get("reason") else ""
+            rows.append(f"[{r['status']}] {_html.escape(r['name'])}："
+                        f"产物 {len(files)}{('：' + links + more) if links else ''}{extra}")
+        self.lbl_coll_info.setText("<br>".join(rows) or "无内容")
+        self.tab_bottom.setCurrentIndex(1)
 
     def _pack_avail_fmts(self):
         """打包（ZIP/导出）可选格式：官方源 7 种，自制源 pdf/epub/docx。"""
@@ -6947,16 +7421,16 @@ class MainWindow(QMainWindow):
         return [f"{f} 缺 {counts[f]} 部" for f in order]
 
     def _pack_split_params(self, d, works):
-        """ZIP/导出 的分册参数：返回 (mode, depth) 或 None（取消）。
-        mode=ask 时弹「打包/导出设置（分册）」，与合并共享 merge.ask_last / name_template。"""
-        mode=self._merge_mode()
-        depth=self._merge_depth()
+        """ZIP/导出 的分册参数：返回 (mode, depth, template) 或 None（取消）。
+        单书配置优先（缺省跟随全局）；mode=ask 时弹「打包/导出设置（分册）」，
+        与合并共享 merge.ask_last / name_template。"""
+        mode, depth, tpl = self._coll_merge_cfg(d)
         if mode=="ask":
             from PySide6.QtWidgets import QDialog as _QD
             from cbeta_publish.gui.merge_dialog import MergeDialog
             last=self._merge_ask_last()
             dlg=MergeDialog(self, default_mode=last["mode"], default_depth=last["depth"],
-                            default_template=self._merge_name_template(), preview=None)
+                            default_template=tpl, preview=None)
             dlg.setWindowTitle("打包/导出设置（分册）")
             dlg._preview = lambda m, dep: self._merge_preview(
                 works, m, dep, coll=d.get("name",""), name_template=dlg.template(), d=d)
@@ -6967,112 +7441,38 @@ class MainWindow(QMainWindow):
             _tpl=dlg.template()
             if _tpl:
                 self.config.setdefault("merge", {})["name_template"]=_tpl
+                tpl = _tpl
             self._set_merge_ask_last(mode, depth)
-        return mode, depth
+        return mode, depth, tpl
 
-    def _pack_group_works(self, d, avail_works, fmt, mode, depth):
+    def _pack_group_works(self, d, avail_works, fmt, mode, depth, template=None):
         """某格式「可用 works」→ 分册组（[(g, gidx, base)...]）；none 返回单组。
         base=组产物基名（none 用 d['name']，分册用 _merge_basename）。"""
         if mode=="none":
             g={"label": None, "stem": None, "segments": [], "full_segments": [],
                "works": list(avail_works)}
-            return [(g, None, self._merge_basename(d, g, None, total=1))]
+            return [(g, None, self._merge_basename(d, g, None, template=template, total=1))]
         titles=[self.sutra.title_of(w) for w in avail_works]
         groups=self._group_works(d, avail_works, titles, avail_works, mode=mode, depth=depth)
         out=[]
         for gidx, g in enumerate(groups, 1):
-            base=self._merge_basename(d, g, gidx, total=len(groups))
+            base=self._merge_basename(d, g, gidx, template=template, total=len(groups))
             out.append((g, gidx, base))
         return out
 
-    def _zip(self):
-        fmts = self._choose_pack_fmts()
-        if fmts is None:
-            return
-        if not fmts:
-            QMessageBox.warning(self, "失败", "请选择格式")
-            return
-        data=self.coll_combo.currentData()
-        if self._is_coll_placeholder(data):
-            QMessageBox.warning(self,"失败","请选择丛书")
-            return
-        p=Path(data)
-        d=self._coll_dict(data)
-        if d is None:
-            try:
-                d=self._read_coll(p)
-            except Exception as e:
-                QMessageBox.warning(self,"失败", f"读取丛书失败 {e}")
-                return
-        works=d.get("work_ids",[])
-        if not works:
-            QMessageBox.warning(self,"失败","丛书为空")
-            return
+    def _zip_one_coll(self, d, works, *, fmts, src_map, out_dir, mode, depth,
+                      template=None, update=None):
+        """单部丛书 ZIP 打包（无弹框/无目录选择/无备齐）。
+
+        update(done,label)->bool；None=无进度。返回 {"success","failed","cancelled"}。
+        """
         import zipfile
-        from cbeta_publish.books import official_ebook_source
-        dest_dir=official_ebook_source.official_books_dir(self.config)
-        # 按来源准备素材：官方=缺则下载；自制=缺则生成（改过预设可选全部重生成）
-        if self._run_source()=="xml":
-            ok_map, gen_failed, gen_cancelled = self._ensure_xml_batch(works, fmts, title="生成（ZIP 前）")
-            if gen_cancelled:
-                self._wrap_box(QMessageBox.Warning, "已取消", "已取消生成，未打包。")
-                return
-            if gen_failed:
-                self._wrap_box(QMessageBox.Warning, "未全部生成",
-                               "有 %d 部生成失败，已取消打包：\n%s" % (len(gen_failed), "\n".join(gen_failed[:5])))
-                return
-            src_map = {fmt: dict(ok_map.get(fmt) or {}) for fmt in fmts}
-        else:
-            missing=[]
-            for fmt in fmts:
-                for w in works:
-                    dest=official_ebook_source.local_path(w, fmt, dest_dir)
-                    if not dest.exists():
-                        missing.append(f"{w}.{fmt}")
-            if missing:
-                _miss_text = "、".join(self._missing_by_fmt(missing))
-                ret=QMessageBox.question(self, "下载确认",
-                    f"缺书：{_miss_text}。\n是否先下载？（「否」= 跳过缺书继续打包）",
-                    QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel)
-                if ret==QMessageBox.Cancel:
-                    return
-                if ret==QMessageBox.Yes:
-                    pairs=[(w, fmt) for fmt in fmts for w in works
-                            if not official_ebook_source.local_path(w, fmt, dest_dir).exists()]
-                    self._download_missing(pairs, dest_dir, title="下载（ZIP 前）", autoclose_ok=True)
-                    missing=[f"{w}.{fmt}" for fmt in fmts for w in works
-                              if not official_ebook_source.local_path(w, fmt, dest_dir).exists()]
-                    if missing:
-                        _miss2 = "、".join(self._missing_by_fmt(missing))
-                        r2=QMessageBox.question(self, "仍缺书",
-                            f"仍缺书：{_miss2}。\n是否继续打包（仅打已有）？",
-                            QMessageBox.Yes | QMessageBox.No)
-                        if r2!=QMessageBox.Yes:
-                            self._wrap_box(QMessageBox.Warning, "未全部下载", f"仍缺书：{_miss2}，已取消打包。")
-                            return
-            src_map = {fmt: {w: official_ebook_source.local_path(w, fmt, dest_dir) for w in works}
-                       for fmt in fmts}
-        from PySide6.QtWidgets import QFileDialog
-        sel=QFileDialog.getExistingDirectory(self, "选择ZIP输出目录", str(self._out_dir()))
-        if not sel:
-            return
-        out_dir=Path(sel)
-        if not out_dir.exists():
-            return
-        params=self._pack_split_params(d, works)
-        if params is None:
-            self.detail.setText("已取消打包（未选择分册模式）")
-            return
-        mode, depth = params
+        if update is None:
+            update = lambda *a, **k: True
         success=[]
         failed=[]
         cancelled=False
-        # 同一 work 可能有多个自制产物：按实际文件数计算进度。
-        _pack_files=sum(len(self._made_paths((src_map.get(f) or {}).get(w)))
-                        for f in fmts for w in works)
-        total=max(1, _pack_files*2)   # 收集文件 + 写入压缩 各占一半
         done=0
-        dlg, update, pstate = self._make_progress("ZIP 打包", total)
         used_zips=set()   # 分册：zip 文件名去重 guard
         for fmt in fmts:
             # 收集本格式可用文件（保持 works 顺序）
@@ -7093,7 +7493,7 @@ class MainWindow(QMainWindow):
             if not avail:
                 failed.append(f"{fmt} 无文件")
                 continue
-            for g, gidx, base in self._pack_group_works(d, avail, fmt, mode, depth):
+            for g, gidx, base in self._pack_group_works(d, avail, fmt, mode, depth, template=template):
                 gworks=list(g.get("works") or [])
                 if not gworks:
                     continue
@@ -7138,11 +7538,94 @@ class MainWindow(QMainWindow):
                     failed.append(f"{fmt} ZIP 失败: {e}")
             if cancelled:
                 break
+        return {"success":success, "failed":failed, "cancelled":cancelled}
+
+    def _zip(self):
+        fmts = self._choose_pack_fmts()
+        if fmts is None:
+            return
+        if not fmts:
+            QMessageBox.warning(self, "失败", "请选择格式")
+            return
+        data=self.coll_combo.currentData()
+        if self._is_coll_placeholder(data):
+            QMessageBox.warning(self,"失败","请选择丛书")
+            return
+        p=Path(data)
+        d=self._coll_dict(data)
+        if d is None:
+            try:
+                d=self._read_coll(p)
+            except Exception as e:
+                QMessageBox.warning(self,"失败", f"读取丛书失败 {e}")
+                return
+        works=d.get("work_ids",[])
+        if not works:
+            QMessageBox.warning(self,"失败","丛书为空")
+            return
+        from cbeta_publish.books import official_ebook_source
+        dest_dir=official_ebook_source.official_books_dir(self.config)
+        # 按来源准备素材：官方=缺则下载；自制=缺则生成（改过预设可选全部重生成）
+        if self._run_source()=="xml":
+            ok_map, gen_failed, gen_cancelled = self._ensure_xml_batch(works, fmts, title="生成（ZIP 前）")
+            if gen_cancelled:
+                self._wrap_box(QMessageBox.Warning, "已取消", "已取消生成，未打包。")
+                return
+            if gen_failed:
+                self._wrap_box(QMessageBox.Warning, "未全部生成",
+                               "有 %d 部生成失败，已取消打包：\n%s" % (len(gen_failed), "\n".join(gen_failed[:5])))
+                return
+            src_map = {fmt: dict(ok_map.get(fmt) or {}) for fmt in fmts}
+        else:
+            from cbeta_publish.books import official_state as _ost
+            need=[f"{w}.{fmt}" for fmt in fmts for w in works
+                  if _ost.stale(self.config, w, fmt, dest_dir)]
+            if need:
+                _miss_text = "、".join(self._missing_by_fmt(need))
+                ret=QMessageBox.question(self, "下载确认",
+                    f"未下载/需更新：{_miss_text}。\n是否先下载/更新？（「否」= 跳过继续打包）",
+                    QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel)
+                if ret==QMessageBox.Cancel:
+                    return
+                if ret==QMessageBox.Yes:
+                    self._prepare_official(works, fmts, dest_dir, policy="stale")
+                    still=[f"{w}.{fmt}" for fmt in fmts for w in works
+                           if not official_ebook_source.local_path(w, fmt, dest_dir).exists()]
+                    if still:
+                        _miss2 = "、".join(self._missing_by_fmt(still))
+                        r2=QMessageBox.question(self, "仍缺书",
+                            f"仍缺书：{_miss2}。\n是否继续打包（仅打已有）？",
+                            QMessageBox.Yes | QMessageBox.No)
+                        if r2!=QMessageBox.Yes:
+                            self._wrap_box(QMessageBox.Warning, "未全部下载", f"仍缺书：{_miss2}，已取消打包。")
+                            return
+            src_map = {fmt: {w: official_ebook_source.local_path(w, fmt, dest_dir) for w in works}
+                       for fmt in fmts}
+        from PySide6.QtWidgets import QFileDialog
+        sel=QFileDialog.getExistingDirectory(self, "选择ZIP输出目录", str(self._out_dir()))
+        if not sel:
+            return
+        out_dir=Path(sel)
+        if not out_dir.exists():
+            return
+        params=self._pack_split_params(d, works)
+        if params is None:
+            self.detail.setText("已取消打包（未选择分册模式）")
+            return
+        mode, depth, _tpl = params
+        _pack_files=sum(len(self._made_paths((src_map.get(f) or {}).get(w)))
+                        for f in fmts for w in works)
+        total=max(1, _pack_files*2)   # 收集文件 + 写入压缩 各占一半
+        dlg, update, pstate = self._make_progress("ZIP 打包", total)
+        result=self._zip_one_coll(d, works, fmts=fmts, src_map=src_map,
+                                  out_dir=out_dir, mode=mode, depth=depth,
+                                  template=_tpl, update=update)
         try:
             dlg.close()
         except Exception:
             pass
-        if cancelled:
+        success=result["success"]; failed=result["failed"]
+        if result["cancelled"]:
             self.detail.setText("已取消 ZIP")
             QMessageBox.information(self, "已取消", "已取消 ZIP 打包。")
             return
@@ -7219,27 +7702,22 @@ class MainWindow(QMainWindow):
                 return
             src_map = {fmt: dict(ok_map.get(fmt) or {}) for fmt in fmts}
         else:
-            missing=[]
-            for fmt in fmts:
-                for w in works:
-                    dest=official_ebook_source.local_path(w, fmt, dest_dir)
-                    if not dest.exists():
-                        missing.append(f"{w}.{fmt}")
-            if missing:
-                _miss_text = "、".join(self._missing_by_fmt(missing))
+            from cbeta_publish.books import official_state as _ost
+            need=[f"{w}.{fmt}" for fmt in fmts for w in works
+                  if _ost.stale(self.config, w, fmt, dest_dir)]
+            if need:
+                _miss_text = "、".join(self._missing_by_fmt(need))
                 ret=QMessageBox.question(self, "下载确认",
-                    f"缺书：{_miss_text}。\n是否先下载？（「否」= 跳过缺书继续导出）",
+                    f"未下载/需更新：{_miss_text}。\n是否先下载/更新？（「否」= 跳过继续导出）",
                     QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel)
                 if ret==QMessageBox.Cancel:
                     return
                 if ret==QMessageBox.Yes:
-                    pairs=[(w, fmt) for fmt in fmts for w in works
+                    self._prepare_official(works, fmts, dest_dir, policy="stale")
+                    still=[f"{w}.{fmt}" for fmt in fmts for w in works
                            if not official_ebook_source.local_path(w, fmt, dest_dir).exists()]
-                    self._download_missing(pairs, dest_dir, title="下载（导出前）", autoclose_ok=True)
-                    missing=[f"{w}.{fmt}" for fmt in fmts for w in works
-                             if not official_ebook_source.local_path(w, fmt, dest_dir).exists()]
-                    if missing:
-                        _miss2 = "、".join(self._missing_by_fmt(missing))
+                    if still:
+                        _miss2 = "、".join(self._missing_by_fmt(still))
                         r2=QMessageBox.question(self, "仍缺书",
                             f"仍缺书：{_miss2}。\n是否继续导出（仅导已有）？",
                             QMessageBox.Yes | QMessageBox.No)
@@ -7256,7 +7734,7 @@ class MainWindow(QMainWindow):
         if params is None:
             self.detail.setText("已取消导出（未选择分册模式）")
             return
-        mode, depth = params
+        mode, depth, _tpl = params
         success=[]
         failed=[]
         cancelled=False
@@ -7324,7 +7802,7 @@ class MainWindow(QMainWindow):
             if not avail:
                 failed.append(f"{fmt} 无文件")
                 continue
-            for g, gidx, base in self._pack_group_works(d, avail, fmt, mode, depth):
+            for g, gidx, base in self._pack_group_works(d, avail, fmt, mode, depth, template=_tpl):
                 gworks=list(g.get("works") or [])
                 if not gworks:
                     continue
