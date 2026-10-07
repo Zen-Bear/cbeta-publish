@@ -5274,6 +5274,9 @@ class MainWindow(QMainWindow):
                     ids_file=vdir/f"{vdir.name}_ids.txt"
                     ids_file.write_text("\n".join(works)+"\n", encoding="utf-8")
                     argv+=["--ids-file",str(ids_file),"--out",str(vdir)]
+                    # 校验根钉死到 {vdir}/验证（上游 GUI --verify-root 显式优先，
+                    # 与进程内 CLI 路径一致；不受预设 source.verify_root 影响）
+                    argv+=["--verify-root",str(vdir/_b.VERIFY_ROOT_NAME)]
                     preset_name=(self.config.get("xml2pdf",{}) or {}).get("preset","")
                     if preset_name:
                         argv+=["--preset",preset_name]
@@ -5297,6 +5300,21 @@ class MainWindow(QMainWindow):
                                     QMessageBox.Yes | QMessageBox.No)
                                 if _ret==QMessageBox.Yes:
                                     _pd.setdefault("source", {})["cbeta_ebook"]=_mine
+                                    _b.save_preset(self.config, Path(_pp).stem, _pd)
+                            # 校验根一致性：预设 source.verify_root 非空会把独立窗
+                            # 校验产物带出托管区（本次已用 --verify-root 钉死，不受影响；
+                            # 手动运行独立窗时才生效）。提示并可一键清空回落 {输出}/验证。
+                            _vr=str(((_pd.get("source") or {}).get("verify_root") or "")).strip()
+                            if _vr:
+                                _ret2=QMessageBox.question(
+                                    self, "校验根非空",
+                                    f"独立窗预设的校验根：\n{_vr}\n\n"
+                                    "本次已用 --verify-root 钉死到 publish 托管目录，不影响本次；\n"
+                                    "但手动运行独立窗时会把校验产物带出托管区。\n"
+                                    "是否清空该预设校验根（回落 {{输出}}/验证）？",
+                                    QMessageBox.Yes | QMessageBox.No)
+                                if _ret2==QMessageBox.Yes:
+                                    _pd.setdefault("source", {})["verify_root"]=""
                                     _b.save_preset(self.config, Path(_pp).stem, _pd)
                     except Exception as e:
                         print("preset workroot check fail", e)
@@ -5570,12 +5588,13 @@ class MainWindow(QMainWindow):
             pass
 
     @staticmethod
-    def _verify_products(vdir, stem, report=None):
+    def _verify_products(vdir, stem, report=None, fmts=None):
         """找某书的校验正式产物，返回 [(fmt, Path)]；按扩展名识别格式（pdf/epub/docx/odt/md/txt）。
 
         同一 work 可能有多个语义产物（如 TX0011 上/中下）：如果给了报告，
         先按该报告所在 `(验证)` 目录名派生的产物名精确匹配，避免把一份报告
         套到另一份产物上；独立窗等旧命名再回退原来的通配。
+        fmts 非空时只收这些格式（`report.json` 声明的请求集，防旧残留误入）。
         """
         from cbeta_publish.books import xml2pdf_bridge as _b
         ext2fmt={".pdf":"pdf",".epub":"epub",".docx":"docx",
@@ -5583,6 +5602,8 @@ class MainWindow(QMainWindow):
         out=[]
         expected = _b._report_group_identity(report) if report is not None else ""
         for ext, fmt in ext2fmt.items():
+            if fmts is not None and fmt not in fmts:
+                continue
             try:
                 if expected:
                     cand = Path(vdir) / f"{expected}{ext}"
@@ -5641,11 +5662,17 @@ class MainWindow(QMainWindow):
                 fmt_status=_b.apply_verify_coverage(fmt_status, pending)
                 overall=_b.verify_report_pass(rp)
                 nums=_b.verify_report_numbers(rp)
-                products=self._verify_products(vdir, hit, rp)
+                scopes=_b.verify_report_diff_scopes(rp)
+                products=self._verify_products(vdir, hit, rp,
+                                               fmts=_b.verify_json_formats(rp))
                 if not products:
                     fail_list.append(f"{hit} 缺产物")
                 else:
                     moved=[]; bad=[]; undet=[]
+                    def _miss_text(_f):
+                        _t=_num_text(_f, nums)
+                        _sc=_b.diff_scope_text(scopes.get(_f))
+                        return _t+(f"（{_sc}）" if _sc else "")
                     for fmt, src in products:
                         st=fmt_status.get(fmt)
                         if st is None:
@@ -5662,9 +5689,13 @@ class MainWindow(QMainWindow):
                         elif st is False:
                             bad.append(fmt)
                             _mi, _ex=nums.get(fmt, (None, None))
-                            _r="校验未通过"
+                            _bits=[]
                             if _mi is not None or _ex is not None:
-                                _r+=f"（缺{'?' if _mi is None else _mi}/多{'?' if _ex is None else _ex}）"
+                                _bits.append(f"缺{'?' if _mi is None else _mi}/多{'?' if _ex is None else _ex}")
+                            _sc_txt=_b.diff_scope_text(scopes.get(fmt))
+                            if _sc_txt:
+                                _bits.append(_sc_txt)
+                            _r="校验未通过"+(f"（{'；'.join(_bits)}）" if _bits else "")
                             review.append((hit, fmt, str(src), str(rp), _r, _mi, _ex))
                         else:
                             undet.append(fmt)
@@ -5683,10 +5714,10 @@ class MainWindow(QMainWindow):
                     if moved:
                         label=f"{hit}（{'/'.join(moved)}）"
                         if bad or undet:
-                            label+=f"；未入 {'/'.join(_num_text(_f, nums) for _f in bad+undet)}"
+                            label+=f"；未入 {'/'.join(_miss_text(_f) for _f in bad+undet)}"
                         ok_list.append(label)
                     elif bad:
-                        fail_list.append(f"{hit} 校验未通过（{'/'.join(_num_text(_f, nums) for _f in bad)}）")
+                        fail_list.append(f"{hit} 校验未通过（{'/'.join(_miss_text(_f) for _f in bad)}）")
                     else:
                         # 未判定：标注原因（无基线/覆盖源未过等），免得人工逐份翻报告
                         _reasons=[]
@@ -5761,10 +5792,21 @@ class MainWindow(QMainWindow):
             _rp_href = _QU.fromLocalFile(str(Path(_rp).resolve())).toString()
             _vd = str(Path(_rp).resolve().parent)
             _vd_href = _QU.fromLocalFile(_vd).toString()
+            _cmp = ""
+            try:
+                from cbeta_publish.books import xml2pdf_bridge as _b
+                _files = _b.verify_report_comparison_files(_rp).get(_fmt) or []
+            except Exception:
+                _files = []
+            if _files:
+                _lbl = "打开比对档" if len(_files) == 1 else f"打开比对档（共{len(_files)}）"
+                _href = _QU.fromLocalFile(str(_files[0].resolve())).toString()
+                _cmp = f'　<a href="{_href}">{_lbl}</a>'
             links.setText(
                 f'<a href="{_src_href}">打开产物</a>　'
                 f'<a href="{_rp_href}">打开报告</a>　'
-                f'<a href="{_vd_href}">打开校验目录</a>')
+                f'<a href="{_vd_href}">打开校验目录</a>'
+                + _cmp)
 
         left.currentItemChanged.connect(lambda *_: _show_report())
         if left.count():

@@ -121,6 +121,17 @@ class VerifyReportTest(unittest.TestCase):
         self.assertEqual(
             b.find_verify_report(self.dir, "T0002").name, "T0002_校验报告.txt")
 
+    def test_find_verify_report_nested_new_layout(self):
+        # 上游新布局：报告在 `{out}/验证/{id 书名}（验证）/`
+        from cbeta_publish.books import xml2pdf_bridge as b
+        vd = self.dir / b.VERIFY_ROOT_NAME / "T0001 长阿含经（验证）"
+        vd.mkdir(parents=True)
+        (vd / "T0001_长阿含经_校验报告.txt").write_text("x", encoding="utf-8")
+        got = b.find_verify_report(self.dir, "T0001")
+        self.assertIsNotNone(got)
+        self.assertEqual(got.name, "T0001_长阿含经_校验报告.txt")
+        self.assertEqual(got.parent.parent.name, b.VERIFY_ROOT_NAME)
+
     def test_products_exclude_reports(self):
         # 校验报告（新旧命名）与转换报告都不算 txt 产物
         from cbeta_publish.gui.main_window import MainWindow
@@ -134,6 +145,105 @@ class VerifyReportTest(unittest.TestCase):
         (vdir / "T0001 长阿含经_转换报告.txt").write_bytes(b"C")
         got = MainWindow._verify_products(vdir, "T0001")
         self.assertEqual(got, [("txt", prod)])
+
+
+class VerifyReportJsonTest(unittest.TestCase):
+    """`report.json` 优先判读（2026-10-07 统一定名；txt 回退）。"""
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def _mk(self, txt="=== T0001\n  [OK]  docx 缺0 多0\n", body=None,
+            json_name="report.json"):
+        vd = self.dir / "T0001 长阿含经（验证）"
+        vd.mkdir(parents=True, exist_ok=True)
+        rp = vd / "report.txt"
+        rp.write_text(txt, encoding="utf-8")
+        if body is not None:
+            text = body if isinstance(body, str) else json.dumps(
+                body, ensure_ascii=False)
+            (vd / json_name).write_text(text, encoding="utf-8")
+        return rp
+
+    def test_json_verdicts_reading(self):
+        from cbeta_publish.books import xml2pdf_bridge as b
+        rp = self._mk(body={"schema": 1, "fmts": {
+            "docx": {"verdict": "pass", "missing": 0, "extra": 0},
+            "pdf": {"verdict": "undetermined", "reason": "covered:docx"},
+            "epub": {"verdict": "fail", "missing": 48, "extra": 97,
+                     "diff_scope": "body"},
+            "md": {"verdict": "error", "reason": "verify_error"}}})
+        self.assertEqual(b.verify_report_formats(rp),
+                         {"docx": True, "epub": False})
+        self.assertEqual(b.verify_report_pending(rp),
+                         {"pdf": "covered:docx", "md": "verify_error"})
+        self.assertEqual(b.verify_report_numbers(rp),
+                         {"docx": (0, 0), "epub": (48, 97)})
+        self.assertFalse(b.verify_report_pass(rp))
+        self.assertEqual(b.verify_report_diff_scopes(rp), {"epub": "body"})
+        self.assertEqual(b.verify_json_formats(rp),
+                         ["docx", "epub", "md", "pdf"])
+
+    def test_json_wins_over_txt(self):
+        from cbeta_publish.books import xml2pdf_bridge as b
+        rp = self._mk(txt="=== T0001\n  [FAIL] docx 缺3 多1\n",
+                      body={"schema": 1, "fmts": {"docx": {"verdict": "pass"}}})
+        self.assertEqual(b.verify_report_formats(rp), {"docx": True})
+        self.assertTrue(b.verify_report_pass(rp))
+
+    def test_json_corrupt_or_schema_falls_back(self):
+        from cbeta_publish.books import xml2pdf_bridge as b
+        for body in ("{not json",
+                     {"schema": 2, "fmts": {"docx": {"verdict": "fail"}}}):
+            rp = self._mk(txt="=== T0001\n  [OK]  docx 缺0 多0\n", body=body)
+            self.assertTrue(b.verify_report_pass(rp), body)
+            self.assertEqual(b.verify_report_formats(rp), {"docx": True})
+
+    def test_json_coverage_synthesis(self):
+        from cbeta_publish.books import xml2pdf_bridge as b
+        rp = self._mk(body={"schema": 1,
+                            "inputs": {"coverage": {"pdf": "docx"}},
+                            "fmts": {"pdf": {"verdict": "undetermined"},
+                                     "docx": {"verdict": "pass"}}})
+        pending = b.verify_report_pending(rp)
+        self.assertEqual(pending.get("pdf"), "covered:docx")
+        st = b.apply_verify_coverage(b.verify_report_formats(rp), pending)
+        self.assertTrue(st.get("pdf"))
+
+    def test_old_json_name_ignored(self):
+        from cbeta_publish.books import xml2pdf_bridge as b
+        rp = self._mk(txt="=== T0001\n  [FAIL] docx 缺3 多1\n",
+                      body={"schema": 1, "fmts": {"docx": {"verdict": "pass"}}},
+                      json_name="T0001_verify_report.json")
+        self.assertEqual(b.verify_report_formats(rp), {"docx": False})
+        self.assertFalse(b.verify_report_pass(rp))
+
+    def test_comparison_files_exist_filter(self):
+        from cbeta_publish.books import xml2pdf_bridge as b
+        vd = self.dir / "T0001 长阿含经（验证）"
+        vd.mkdir(parents=True)
+        cmp_file = vd / "docx" / "T01n0001.docx"
+        cmp_file.parent.mkdir()
+        cmp_file.write_bytes(b"X")
+        rp = self._mk(body={"schema": 1, "fmts": {"docx": {
+            "verdict": "fail", "missing": 1, "extra": 0,
+            "formal_outputs": [str(cmp_file), str(vd / "docx" / "gone.docx")]}}})
+        self.assertEqual(b.verify_report_comparison_files(rp),
+                         {"docx": [cmp_file]})
+        self.assertEqual(b.verify_report_diff_scopes(rp), {})
+
+    def test_conservative_diff_scope_helpers(self):
+        from cbeta_publish.books import xml2pdf_bridge as b
+        self.assertEqual(
+            b.conservative_diff_scope(["notes_only", "body", "unknown"]), "body")
+        self.assertEqual(
+            b.conservative_diff_scope(["notes_only", "unknown"]), "unknown")
+        self.assertIsNone(b.conservative_diff_scope([None, ""]))
+        self.assertEqual(b.diff_scope_text("notes_only"), "差异仅注释")
+        self.assertEqual(b.diff_scope_text(None), "")
 
 
 class VerifySendImportTest(unittest.TestCase):
@@ -300,6 +410,10 @@ class VerifySendImportTest(unittest.TestCase):
         ids = Path(argv[argv.index("--ids-file") + 1])
         self.assertEqual(ids.read_text(encoding="utf-8").split(), ["T0001", "T0002"])
         self.assertEqual(Path(argv[argv.index("--out") + 1]).name, "v")
+        # 校验根钉死到 {vdir}/验证
+        _vr = Path(argv[argv.index("--verify-root") + 1])
+        self.assertEqual(_vr.name, "验证")
+        self.assertEqual(_vr.parent.name, "v")
 
     def test_send_blocks_on_tmp_preset(self):
         win = self.win
@@ -747,6 +861,38 @@ class VerifySendImportTest(unittest.TestCase):
         self.assertEqual(Path(d["source"]["cbeta_ebook"]).resolve(),
                          _b.xml_work_dir(win.config).resolve())
 
+    def test_open_window_aligns_preset_verify_root(self):
+        # 预设 source.verify_root 非空 → 询问；Yes 则清空（本次已用 --verify-root 钉死）
+        import subprocess
+        from PySide6.QtWidgets import QMessageBox
+        win = self.win
+        pd = Path(win.config["xml2pdf"]["path"]) / "presets"
+        pd.mkdir(parents=True, exist_ok=True)
+        (pd / "校根测.json").write_text(
+            json.dumps({"source": {"verify_root": "E:/other/验证"}}),
+            encoding="utf-8")
+        _old_data = win.cb_preset.currentData()
+        _old_preset = (win.config.get("xml2pdf") or {}).get("preset", "")
+        win._refresh_preset_combo()
+        _idx = win.cb_preset.findData("校根测")
+        self.assertGreaterEqual(_idx, 0)
+        win.cb_preset.setCurrentIndex(_idx)
+        _ensure_app().processEvents()
+        real_popen = subprocess.Popen
+        subprocess.Popen = lambda argv, **k: None
+        real_q = QMessageBox.question
+        QMessageBox.question = staticmethod(lambda *a, **k: QMessageBox.Yes)
+        try:
+            win._open_xml2pdf_window()
+        finally:
+            subprocess.Popen = real_popen
+            QMessageBox.question = real_q
+            _ri = win.cb_preset.findData(_old_data)
+            win.cb_preset.setCurrentIndex(_ri if _ri >= 0 else 0)
+            win.config["xml2pdf"]["preset"] = _old_preset
+        d = json.loads((pd / "校根测.json").read_text(encoding="utf-8"))
+        self.assertEqual(d.get("source", {}).get("verify_root", ""), "")
+
     def _mk_verify_tree(self):
         # 真实上游布局：正式产物在顶层 `{id 书名}.{fmt}`；
         # 报告与对比物在 `{id 书名}（验证）/`，报告名 stem=work id
@@ -807,6 +953,87 @@ class VerifySendImportTest(unittest.TestCase):
         self.assertEqual(len(res["ok"]), 1)
         self.assertEqual(res["fail"], [])
         self.assertIn("未入 epub", res["ok"][0])
+
+    def test_import_json_scope_and_fail_label(self):
+        # report.json：docx 过、epub 未过（差异含正文）→ 只入 docx；"未入"带范围
+        import cbeta_publish.books.xml2pdf_bridge as b
+        win = self.win
+        vdir = self.tmp / "vjson"
+        vdir.mkdir(parents=True, exist_ok=True)
+        (vdir / "T0001 大般若經.docx").write_bytes(b"DOCX")
+        (vdir / "T0001 大般若經.epub").write_bytes(b"EPUB")
+        vd = vdir / "T0001 大般若經（验证）"
+        vd.mkdir(parents=True, exist_ok=True)
+        (vd / "report.txt").write_text("=== T0001\n", encoding="utf-8")
+        (vd / "report.json").write_text(json.dumps({
+            "schema": 1,
+            "fmts": {"docx": {"verdict": "pass", "missing": 0, "extra": 0},
+                     "epub": {"verdict": "fail", "missing": 48, "extra": 97,
+                              "diff_scope": "body"}}}, ensure_ascii=False),
+            encoding="utf-8")
+        base = self.tmp / "jlib"
+        res = win._do_import_verified(["T0001"], vdir, base)
+        self.assertEqual((base / "docx" / "T0001 大般若經.docx").read_bytes(),
+                         b"DOCX")
+        self.assertFalse((base / "epub" / "T0001 大般若經.epub").exists())
+        self.assertEqual(res["fail"], [])
+        self.assertTrue(any("未入 epub" in x for x in res["ok"]))
+        self.assertTrue(any("含正文差异" in x for x in res["ok"]), res["ok"])
+
+    def test_import_json_format_filter_skips_stray(self):
+        # json 声明格式集只含 docx → 顶层残留 odt 不被捡入、也不误报缺产物
+        win = self.win
+        vdir = self.tmp / "vjson2"
+        vdir.mkdir(parents=True, exist_ok=True)
+        (vdir / "T0001 大般若經.docx").write_bytes(b"DOCX")
+        (vdir / "T0001 大般若經.odt").write_bytes(b"ODT")
+        vd = vdir / "T0001 大般若經（验证）"
+        vd.mkdir(parents=True, exist_ok=True)
+        (vd / "report.txt").write_text("=== T0001\n", encoding="utf-8")
+        (vd / "report.json").write_text(json.dumps({
+            "schema": 1,
+            "fmts": {"docx": {"verdict": "pass"}}}, ensure_ascii=False),
+            encoding="utf-8")
+        base = self.tmp / "jlib2"
+        res = win._do_import_verified(["T0001"], vdir, base)
+        self.assertEqual((base / "docx" / "T0001 大般若經.docx").read_bytes(),
+                         b"DOCX")
+        self.assertFalse((base / "odt").exists())
+        self.assertEqual(res["fail"], [])
+        self.assertEqual(res["undet"], [])
+
+    def test_worker_scope_in_progress_label(self):
+        # report.json diff_scope=body → worker 进度行带「含正文差异」
+        from cbeta_publish.books.verify_worker import VerifyWorker
+        import cbeta_publish.books.xml2pdf_bridge as b
+        real = b.verify_work
+
+        def fake(work, fmts, out_dir, config, preset=None, stop=None):
+            out = Path(out_dir)
+            out.mkdir(parents=True, exist_ok=True)
+            vd = out / f"{work} 大般若經（验证）"
+            vd.mkdir(parents=True, exist_ok=True)
+            rp = vd / "report.txt"
+            rp.write_text("[T0001] 2 format: 1[docx=OK(0/0)], 2[epub=FAIL(48/97)]\n",
+                          encoding="utf-8")
+            (vd / "report.json").write_text(json.dumps({
+                "schema": 1,
+                "fmts": {"docx": {"verdict": "pass"},
+                         "epub": {"verdict": "fail", "missing": 48,
+                                  "extra": 97, "diff_scope": "body"}}},
+                ensure_ascii=False), encoding="utf-8")
+            return rp
+
+        b.verify_work = fake
+        msgs = []
+        try:
+            w = VerifyWorker(["T0001"], ["docx", "epub"],
+                             self.tmp / "wscope", self.win.config)
+            w.progress.connect(lambda done, label, level: msgs.append(label))
+            w.run()
+        finally:
+            b.verify_work = real
+        self.assertTrue(any("含正文差异" in m for m in msgs), msgs)
 
     def test_import_same_work_variants(self):
         # 同一 work 的多个语义产物各按自己的报告入库，不互相覆盖/误套。

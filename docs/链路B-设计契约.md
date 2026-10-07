@@ -215,10 +215,13 @@ def convert_outputs(work_id, fmt, out_dir, config, preset=None, stop=None) -> li
   预设经临时 run.json 保主题。**比对档由上游 `generate_formal` 生成**（`verify` 段覆盖
   `output` 段，与 GUI 独立窗一致：`inline_brackets`/`suppress_jhead_dup`/`show_close_juan`
   等生效，`cli.py` `37a864a`），否则会与官方基线误报。正式产物 `{id 书名}.{fmt}` 落校验目录顶层，
-  报告落 `{id 书名}（验证）/`（`verify_dir/<丛书>/`，默认 `<工程>/cbeta_verify`，
-     与自制书目录分离）。跑完自动导入（可手动重试）：报告兼容
+  报告落 **`{校验根}/{id 书名}（验证）/`**（上游 `verify_root` 模型：校验根默认 `{输出}/验证`；
+  publish 的 `{输出}`＝`verify_dir/<丛书>/`，默认 `<工程>/cbeta_verify`，与自制书目录分离）。
+  publish 调用上游校验时**显式钉死 `--verify-root {out_dir}/验证`**，使托管产物恒落
+  `{verify_dir}/{丛书}/验证/{id 书名}（验证）/`，不受预设 `source.verify_root` 劫持；
+  publish 侧按此布局发现/清理（`bridge.VERIFY_ROOT_NAME="验证"`）。跑完自动导入（可手动重试）：报告兼容
    `{stem}_verify_report.txt` / `{id}_{书名}_校验报告.txt` / `report.txt` 三种命名
-   （`bridge.verify_reports`，同一语义产物只取最新；同一 work 的不同语义产物分别保留）。**判读按格式**：优先读每 work 段首的上游总结行
+   （`bridge.verify_reports`，同一语义产物只取最新；同一 work 的不同语义产物分别保留）。**机读优先**：报告同目录的 `report.json`（上游 2026-10-07 统一名，CLI/GUI 一致；旧 JSON 名上游不再发现、publish 同口径不认）经 `bridge._read_verify_json` 归一后优先判读——`verdict` 映射 `pass→True / fail→False`，`undetermined/error` 不入表；缺数/多余数直读 `missing/extra`；未判定原因取 `reason`（`no_baseline`/`covered:<src>`/`gen_not_found`/error 原文；pdf 无 reason 时由 `inputs.coverage` 合成 `covered:<src>`）；无 json／损坏／`schema≠1` 时回退下列 txt 解析。`diff_scope`（`body`/`notes_only`/`unknown`）随失败标签全链路展示（导入标签/人工检验/worker 进度）；`formal_outputs` 为**比对档**，仅供人工检验"打开比对档"链接，不作导入源（比对档命名/配置与正式产物不同）。**判读按格式**：优先读每 work 段首的上游总结行
    （`bridge.parse_work_summary_line`：`[id] N format: 1[docx=OK(0/0)], 2[pdf=1],
    3[epub=FAIL(48/97)]`；`pdf=数字` 为被覆盖、结论跟随同行第 M 条；`COVERED` 无 ref、
    `NO_BASELINE`/`NOGEN`/`ERROR` 为未判定原因；`→` 左侧为产物格式）；
@@ -327,7 +330,9 @@ publish 的「自制/重制（校验）」产物目录天然符合本规范；�
    - `{stem}_verify_report.txt`（独立窗旧命名；`stem` = work id，如 `T0032`）；
    - `report.txt`（CLI 旧命名；work 取父目录名去 `（验证）` 后缀后的首 token，
      如 `T0032 四谛经（验证）` → `T0032`）。
-   另有**转换报告** `{name}_转换报告.txt`（及 `{fmt}/` 下按格式的同名文件，
+   另有**机读结论** `report.json`（与 txt 同目录、每次覆盖写、`fail/undetermined/error`
+   照写；上游 2026-10-07 起 CLI/GUI 统一名，旧 JSON 名不再发现）与**转换报告**
+   `{name}_转换报告.txt`（及 `{fmt}/` 下按格式的同名文件，
    `output.convert_report` 控制，默认开）：只记录渲染特殊处理，**不是校验判据**，
    不参与导入扫描、不算产物。
 3. 同一书多份报告并存时，以 **mtime 最新者**为准（同刻优先 `report.txt`）。
@@ -344,7 +349,9 @@ publish 的「自制/重制（校验）」产物目录天然符合本规范；�
 2. 书单匹配：`stem == work`，或 `stem` 以 `work + " "` / `work + "_"` 开头
   （新命名用下划线分隔，仍要求分隔符对齐，`T185` 不误命中 `T1858`）；
   匹配不上当前丛书书单的跳过。
-3. 判读**按格式**：优先读每 work 段首的上游总结行
+3. 判读**按格式**：报告同目录若有 `report.json`（机读结论），判读以它为准
+   （`bridge.verify_report_formats/pending/numbers/pass` 内部 json 优先、txt 回退；
+   `verdict`/`missing`/`extra`/`reason`/`coverage` 直读）；否则优先读每 work 段首的上游总结行
    （`[id] N format: 1[docx=OK(0/0)], 2[pdf=1], 3[epub=FAIL(48/97)]`；
    `pdf=数字` 为被覆盖、结论跟随同行第 M 条；`COVERED` 无 ref、`NO_BASELINE`/
    `NOGEN`/`ERROR` 为未判定原因；无总结行的老报告回退 trial 解析）。
@@ -354,7 +361,8 @@ publish 的「自制/重制（校验）」产物目录天然符合本规范；�
    ≥1 `[OK]` 无 `[FAIL]`→通过；否则未判定）。缺数/多余数取自总结行
    （`FAIL(48/97)`→`缺48/多97`），用于失败标签与人工检验。
 4. 产物识别（`MainWindow._verify_products`）：有报告时优先用该报告所在
-  `(验证)` 目录名派生的产物名精确匹配；其余只看目录**顶层** `{stem}*.{ext}`，
+   `(验证)` 目录名派生的产物名精确匹配；json 声明格式集（`verify_json_formats`）
+   存在时只收这些格式（防顶层旧残留误入）；其余只看目录**顶层** `{stem}*.{ext}`，
   后缀映射 `pdf/epub/docx/odt/md/txt` → fmt；排除 `*_verify_report.txt`、
   `*_校验报告.txt`、`_ids.txt` 与 `*转换报告*`；
   同一 work 的多个语义产物分别入库。
@@ -392,5 +400,20 @@ publish「运行独立窗」预填 `--out=<丛书校验目录>` 的单次任务�
 - 通过项入库是 **`move` 搬走**，独立窗侧被掏空。
 - 双方都写 `总验证报告.txt`（互相覆盖）；递归扫描"同 work 取最新"会跨来源取到对方旧报告。
 - 缓存页"校验目录"统计虚高、清理不敢下手（与官方缓存/XML 共用目录同构）。
-- 上游面板已有 `verify_root` 行，独立窗侧一设全局 publish 侧无感知；
-  publish 调用上游校验时显式钉死 `--verify-root {vdir}/验证`（见 §5），预设对齐检查同步覆盖。
+- 上游面板已有 `verify_root` 行；publish 调用上游校验（进程内 CLI 与独立窗）均显式钉死
+  `--verify-root {vdir}/验证`（见 §5／§9.5），不受预设 `source.verify_root` 影响；
+  预设对齐检查仍保留，作手动运行独立窗的兜底。
+
+### 9.5 报告布局与 `verify_root`（P7）
+
+- 上游默认校验根 `{输出}/验证`，报告落 `{校验根}/{id 书名}（验证）/{fmt}/`
+  ＋ `{id}_{书名}_校验报告.txt` ＋ `report.json`（JSON 统一名，见 P8）。
+- **managed 流**（`bridge.verify_work`）：`{输出}`＝`verify_dir/<丛书>/`，报告在
+  `{verify_dir}/{丛书}/验证/{id 书名}（验证）/`；argv 显式 `--verify-root {out_dir}/验证` 钉死；
+  发现（`find_verify_report`）**双层兼容**（顶层旧版 ＋ `验证/` 新版，`_newest_report` 取最新）；
+  跑前清理**只清新版** `验证/{work}*（验证）/`（顶层旧目录保留兼容读取）。
+- **独立窗**（GUI）：上游已实现 `--verify-root`（`_pick_verify_root`：显式 ＞ 预设
+  `source.verify_root` ＞ `{输出}/验证`）；`_open_xml2pdf_window` 传
+  `--verify-root {vdir}/验证` 钉死，与进程内 CLI 一致；预设对齐检查覆盖
+  `source.verify_root` 作手动运行的兜底（非空提示可一键清空，与 `cbeta_ebook` 同流程）。
+- 提案归档：`docs/上游-GUI校验根参数提案.md`（**已实现**）。

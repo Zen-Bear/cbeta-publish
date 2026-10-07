@@ -12,6 +12,7 @@ publish 侧不再自行定位 XML：CBReader 书库是 P5a（按卷切分），�
 """
 import contextlib
 import io
+import json
 import sys
 from pathlib import Path
 
@@ -696,10 +697,11 @@ def verify_work(work: str, fmts, out_dir, config: dict, preset=None, stop=None) 
     _ensure_path(str(x2p))
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    # 清掉本书旧的 `（验证）` 目录，避免新旧报告混淆（独立窗旧报告会被误读）
+    # 清新版布局 `{out}/验证/` 下本书旧的 `（验证）` 目录，避免新旧报告混淆
+    # （顶层旧目录保留，供旧报告兼容读取）
     try:
         import shutil as _sh
-        for d in out_dir.glob(f"{work}*（验证）"):
+        for d in (out_dir / VERIFY_ROOT_NAME).glob(f"{work}*（验证）"):
             _sh.rmtree(d, ignore_errors=True)
     except Exception:
         pass
@@ -733,6 +735,9 @@ def verify_work(work: str, fmts, out_dir, config: dict, preset=None, stop=None) 
     _dl = max(0, min(50, _dl))
     argv = ["-i", str(work), "-f", fmt_arg, "-o", str(out_dir), "--verify",
             "--verify-max-diff", str(_maxd), "--verify-diff-lines", str(_dl)]
+    # 校验根钉死到 `{out_dir}/验证`：CLI `--verify-root` 显式优先，预设
+    # `source.verify_root` 劫持不到（报告才能落回 publish 托管区）
+    argv += ["--verify-root", str(out_dir / VERIFY_ROOT_NAME)]
     if run_wrap is not None:
         argv += ["--config", str(run_wrap)]
     elif preset:
@@ -783,7 +788,10 @@ def find_verify_report(out_dir, work: str) -> Path | None:
     if exact2.is_file():
         cands.append(exact2)
     try:
-        for d in out.glob(f"{work}*（验证）"):
+        # 顶层旧布局 ＋ 上游新布局 `{out}/验证/{id 书名}（验证）/`
+        _dirs = list(out.glob(f"{work}*（验证）"))
+        _dirs += list((out / VERIFY_ROOT_NAME).glob(f"{work}*（验证）"))
+        for d in _dirs:
             for name in (f"{work}_verify_report.txt", "report.txt"):
                 p = d / name
                 if p.is_file():
@@ -986,16 +994,153 @@ def _summary_entries(path) -> dict:
     return out
 
 
+#: 机读结论固定名（上游 2026-10-07 起 CLI/GUI 统一；旧 JSON 名不再被发现）
+VERIFY_JSON_FILENAME = "report.json"
+#: 上游校验根目录名（默认校验根 = `{输出}/验证`；publish 钉死到 `{out_dir}/验证`）
+VERIFY_ROOT_NAME = "验证"
+#: diff_scope 文案与保守合并序（上游说明 §3：body > unknown > notes_only）
+_DIFF_SCOPE_TEXT = {"notes_only": "差异仅注释", "body": "含正文差异",
+                    "unknown": "范围未知"}
+_DIFF_SCOPE_RANK = {"body": 2, "unknown": 1, "notes_only": 0}
+
+
+def diff_scope_text(scope) -> str:
+    """diff_scope → 展示文案（空/未知值返回 ""）。"""
+    return _DIFF_SCOPE_TEXT.get(scope or "", "")
+
+
+def conservative_diff_scope(scopes):
+    """多格式/多报告范围取最保守（body > unknown > notes_only）；无则 None。"""
+    best = None
+    for s in scopes or []:
+        if s in _DIFF_SCOPE_RANK and (best is None
+                                      or _DIFF_SCOPE_RANK[s] > _DIFF_SCOPE_RANK[best]):
+            best = s
+    return best
+
+
+def _paired_json(report_path):
+    """报告同目录的机读 `report.json`（不存在返回 None）。
+
+    上游 2026-10-07 起 CLI/GUI 统一此名；旧名 `{id}_{书名}_校验报告.json` /
+    `*_verify_report.json` 上游已不再发现，publish 同口径不认（旧目录走 txt 回退）。
+    """
+    try:
+        p = Path(report_path).parent / VERIFY_JSON_FILENAME
+        return p if p.is_file() else None
+    except Exception:
+        return None
+
+
+def _read_verify_json(report_path):
+    """读配对的 `report.json` → 归一 dict；不可用返回 None（调用方回退 txt）。
+
+    - 容错：utf-8-sig；解析失败／非 dict／`schema != 1`／无 `fmts` → None；
+    - 归一：`{fmts: {fmt: {verdict, missing, extra, reason, diff_scope,
+      formal_outputs}}, coverage}`；未知字段忽略（上游约定）。
+    """
+    jp = _paired_json(report_path)
+    if jp is None:
+        return None
+    try:
+        data = json.loads(jp.read_text(encoding="utf-8-sig"))
+    except Exception:
+        return None
+    if not isinstance(data, dict) or data.get("schema") != 1:
+        return None
+    fmts_raw = data.get("fmts")
+    if not isinstance(fmts_raw, dict):
+        return None
+    out = {"fmts": {}, "coverage": {}}
+    for fmt, info in fmts_raw.items():
+        if not fmt or not isinstance(info, dict):
+            continue
+        _mi = info.get("missing")
+        _ex = info.get("extra")
+        _scope = info.get("diff_scope")
+        out["fmts"][str(fmt)] = {
+            "verdict": str(info.get("verdict") or ""),
+            "missing": _mi if isinstance(_mi, int) else None,
+            "extra": _ex if isinstance(_ex, int) else None,
+            "reason": info.get("reason") if isinstance(info.get("reason"), str) else None,
+            "diff_scope": _scope if _scope in _DIFF_SCOPE_RANK else None,
+            "formal_outputs": [str(p) for p in (info.get("formal_outputs") or [])
+                               if isinstance(p, (str, Path)) and str(p)],
+        }
+    _cov = (data.get("inputs") or {}).get("coverage") \
+        if isinstance(data.get("inputs"), dict) else None
+    if isinstance(_cov, dict):
+        out["coverage"] = {str(k): str(v) for k, v in _cov.items() if k and v}
+    return out
+
+
+def _json_pending_reason(reason):
+    """上游 reason（可能 `; ` 连接多段）→ publish pending 词汇。
+
+    `no_baseline`→"no baseline"；`gen_not_found`→"gen not found"；
+    `covered:*` 原样；其余原文（no_record / error 详情等）。
+    """
+    for tok in [t.strip() for t in str(reason or "").split(";") if t.strip()]:
+        if tok == "no_baseline":
+            return "no baseline"
+        if tok == "gen_not_found":
+            return "gen not found"
+        if tok.startswith("covered:"):
+            return tok
+    return str(reason or "").strip() or "未判定"
+
+
+def verify_json_formats(path):
+    """`report.json` 声明的（请求过并判定的）格式集；无 json 返回 None。"""
+    rj = _read_verify_json(path)
+    return sorted(rj["fmts"]) if rj is not None else None
+
+
+def verify_report_diff_scopes(path) -> dict:
+    """逐格式 diff_scope → `{fmt: notes_only|body|unknown}`（仅 json；txt → {}）。"""
+    rj = _read_verify_json(path)
+    if rj is None:
+        return {}
+    return {f: i["diff_scope"] for f, i in rj["fmts"].items() if i["diff_scope"]}
+
+
+def verify_report_comparison_files(path) -> dict:
+    """逐格式比对档（`formal_outputs` 存在者）→ `{fmt: [Path]}`；txt → {}。
+
+    仅供人工检验"打开比对档"链接（比对档≠正式产物，不可作导入源）。
+    """
+    rj = _read_verify_json(path)
+    if rj is None:
+        return {}
+    out = {}
+    for f, i in rj["fmts"].items():
+        files = [Path(p) for p in i["formal_outputs"]]
+        files = [p for p in files if p.is_file()]
+        if files:
+            out[f] = files
+    return out
+
+
 def verify_report_numbers(path) -> dict:
-    """总结行缺数/多余数 → {fmt: (missing, extra)}（`?`→None）。
-    供导入标签与人工检验显示"缺48/多97"；无总结行返回 {}。"""
+    """缺数/多余数 → {fmt: (missing, extra)}（`?`→None）。
+
+    `report.json` 存在时直读 `missing/extra`；否则按总结行解析。
+    供导入标签与人工检验显示"缺48/多97"；都无返回 {}。
+    """
+    rj = _read_verify_json(path)
+    if rj is not None:
+        return {f: (i["missing"], i["extra"]) for f, i in rj["fmts"].items()
+                if i["missing"] is not None or i["extra"] is not None}
     return {f: (mi, ex) for f, (v, mi, ex, r) in _summary_entries(path).items()
             if mi is not None or ex is not None}
 
 
 def verify_report_pending(path) -> dict:
-    """解析报告中的 `[--]` 行 → {product_fmt: reason}（未判定原因，供展示/导入标注）。
+    """解析未判定项 → {product_fmt: reason}（供展示/导入标注）。
 
+    `report.json` 存在时按其 `undetermined/error` 的 reason 映射；
+    pdf 的 reason 缺失但 `inputs.coverage` 有映射时合成 `covered:<src>`。
+    否则回退 txt `[--]` 行：
     - `[--]  pdf 已覆盖（已由 docx 校验）` → {"pdf": "covered:docx"}
     - `[--]  {disp} no baseline` → {fmt: "no baseline"}（disp 形如 epub 或 pdf→docx，取 → 左侧）
     - `[--]  {disp} gen not found: ...` → {fmt: "gen not found"}
@@ -1005,6 +1150,16 @@ def verify_report_pending(path) -> dict:
     `NO_BASELINE`→"no baseline"、`NOGEN`→"gen not found"、
     `ERROR`等→小写原文、`COVERED`（无 ref）→"covered"。
     """
+    rj = _read_verify_json(path)
+    if rj is not None:
+        out = {}
+        for f, i in rj["fmts"].items():
+            if i["verdict"] in ("undetermined", "error") and (i["reason"] or "").strip():
+                out[f] = _json_pending_reason(i["reason"])
+        _cov = rj.get("coverage") or {}
+        if "pdf" in rj["fmts"] and "pdf" not in out and _cov.get("pdf"):
+            out["pdf"] = f"covered:{_cov['pdf']}"
+        return out
     import re as _re
     summ = _summary_entries(path)
     if summ:
@@ -1065,9 +1220,17 @@ def verify_report_pass(path) -> bool | None:
     """判读上游报告：有 `[FAIL]`→False；
     ≥1 个 `[OK]` 且无 `[FAIL]`→True；否则 None（未判定，需人工看）。
 
-    有上游总结行（`[id] N format: …`）时优先用它：
-    含 FAIL verdict→False；≥1 OK（含消解为通过的被覆盖项）→True；否则 None。
+    `report.json` 存在时按 verdict：任一 `fail`→False；任一 `pass`→True；
+    `undetermined/error` 不计入（否则 None）。
+    回退 txt 总结行（`[id] N format: …`）时：含 FAIL verdict→False；
+    ≥1 OK（含消解为通过的被覆盖项）→True；否则 None。
     """
+    rj = _read_verify_json(path)
+    if rj is not None:
+        vals = [i["verdict"] for i in rj["fmts"].values()]
+        if any(v == "fail" for v in vals):
+            return False
+        return True if any(v == "pass" for v in vals) else None
     summ = _summary_entries(path)
     if summ:
         vals = [v for v, mi, ex, r in summ.values()]
@@ -1100,7 +1263,18 @@ def verify_report_formats(path) -> dict:
     - 独立窗 `{stem}_verify_report.txt`：标记行内直接含 trial 格式
       `[OK] docx …` / `[FAIL] pdf→docx …`。
     只收录明确 `[OK]/[FAIL]` 的格式；`[--]`（覆盖/无基线）不入表。
+    `report.json` 存在时按 verdict：`pass→True、fail→False`；
+    `undetermined/error` 不收录（与 txt 语义一致）。
     """
+    rj = _read_verify_json(path)
+    if rj is not None:
+        out = {}
+        for f, i in rj["fmts"].items():
+            if i["verdict"] == "pass":
+                out[f] = True
+            elif i["verdict"] == "fail":
+                out[f] = False
+        return out
     summ = _summary_entries(path)
     if summ:
         return {f: v for f, (v, mi, ex, r) in summ.items() if v is not None}

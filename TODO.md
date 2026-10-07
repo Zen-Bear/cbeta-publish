@@ -2,7 +2,7 @@
 
 > 设计文档：`docs/设计总案.md`（总方案）、`docs/UI设计.md`（UI）、
 > `docs/链路B-设计契约.md`（与 xml2pdf 的跨仓调用契约）。
-> 测试：`python -m unittest discover tests`（当前 654 项通过）。
+> 测试：`python -m unittest discover tests`（当前 667 项通过）。
 
 ## 约定（务必遵守）
 
@@ -143,19 +143,27 @@
   全量通过后同步测试数。
 - [x] 文档：`docs/批量合并-设计与实施.md`（§3.8 报告示例＋§3.9 归因/停留规则）＋本 P6 打勾。
 
-### P7 — 上游 `verify_root` 适配（待办）
+### P7 — 上游 `verify_root` 适配（已完成，667 测试通过）
 - 背景：上游新增 `source.verify_root`（校验产物总目录，优先级 `--verify-root` ＞ 配置 ＞
-  默认 `{输出}/验证`）；新布局 `{输出}/验证/{id 书名}（验证）/{fmt}/＋report.txt＋report.json`。
-  校验目录分离决策已写入 `docs/链路B-设计契约.md` §9.4。
-- [ ] `bridge.find_verify_report` 改**双层兼容**（顶层旧版＋`{out}/验证/` 新版，递归）；
-  `verify_work` 跑前清理同步清嵌套同 work 目录（只清该 work，不动整个 `验证/`）。
-- [ ] `verify_work` 显式传 `--verify-root {out_dir}/验证`，把布局钉死（不受预设自定义值劫持）。
-- [ ] `_open_xml2pdf_window` 独立窗同样传 `--verify-root {vdir}/验证`；预设对齐检查扩展到
-  `source.verify_root`（设了非空即提示可一键清空，与 `cbeta_ebook` 对齐同口径）。
-- [ ] 测试：bridge 嵌套发现（新旧双布局）＋嵌套清理只清同 work＋两处 argv 钉死断言。
-- [ ] 文档：链路B §5（argv 加 `--verify-root`）＋§9。
+  默认 `{输出}/验证`）；报告落 `{输出}/验证/{id 书名}（验证）/{fmt}/` ＋
+  `{id}_{书名}_校验报告.txt` ＋ `report.json`（JSON 统一名，见 P8）。校验目录分离决策见
+  `docs/链路B-设计契约.md` §9.4。
+- **现况影响**：managed 校验写进 `{vdir}/验证/…`，而 `bridge.find_verify_report` 只扫顶层
+  `{vdir}/{work}*（验证）/` → 返回 None → `work_verify_reports(primary=None)` 为空 →
+  整批判"未判定"不导入。P7 为必须项。
+- [x] `find_verify_report` 双层候选：顶层旧版 ＋ `{out}/验证/{work}*（验证）/` 新版，并入现有
+  候选集由 `_newest_report` 取最新（并存取新）；新增常量 `VERIFY_ROOT_NAME="验证"`。
+- [x] `verify_work` 跑前清理**只清新版** `{out}/验证/{work}*（验证）/`（顶层旧目录保留兼容读取）。
+- [x] `verify_work` 显式传 `--verify-root {out_dir}/验证`，把布局钉死（不受预设自定义值劫持）。
+- [x] **独立窗**：上游已实现 GUI `--verify-root`（提案 `docs/上游-GUI校验根参数提案.md` 已归档）；
+  `_open_xml2pdf_window` 传 `--verify-root {vdir}/验证` 钉死，与进程内 CLI 一致；
+  预设对齐检查扩展到 `source.verify_root`（非空提示可一键清空，作手动运行兜底）。
+- [x] 测试：嵌套发现（新/旧/并存取新）；清理只清新版、顶层旧目录保留；argv 含
+  `--verify-root` 断言；预设 `verify_root` 对齐提示（有/无两态）。
+- [x] 文档：链路B §5/§9（报告布局 `{out}/验证/…`、`report.json`、publish 钉死
+  `--verify-root`、独立窗预设对齐）。
 
-### P8 — 校验判读升级：`report.json` 优先（待办）
+### P8 — 校验判读升级：`report.json` 优先（已完成，664 测试通过）
 - 背景与原则：上游 `report.json`＝机读结论、txt＝人读（同目录、每次覆盖写、`fail/undetermined/error`
   照写）；publish 现在**只读 txt（正则）**，`report.json` 零引用（上游自身也不消费，`find_verify_reports`
   是给下游的发现接口）。改为 **json 优先、txt 回退**（无 json／损坏／`schema≠1` 回退），
@@ -168,24 +176,24 @@
   `*_verify_report.json` 上游 `find_verify_reports` **不再发现**（重跑一次校验即得新名）。
   publish 同口径：**只认 `report.json`**，旧目录 → txt 回退（txt 仍兼容
   `report.txt` / `*_verify_report.txt` / `*_校验报告.txt`）。
-- [ ] `bridge._paired_json(report_txt)`：**同目录只找 `report.json`**（不再认旧 JSON 名）；
+- [x] `bridge._paired_json(report_txt)`：**同目录只找 `report.json`**（不再认旧 JSON 名）；
   `_read_verify_json`：utf-8-sig＋`schema==1`＋`fmts` dict，否则 None；
   归一 `{fmts:{fmt:{verdict,missing,extra,reason,diff_scope,formal_outputs}}, coverage}`。
-- [ ] 四函数 json 优先、txt 回退：`verify_report_formats`（`pass→True、fail→False`，
+- [x] 四函数 json 优先、txt 回退：`verify_report_formats`（`pass→True、fail→False`，
   `undetermined/error` 不收录）、`verify_report_pending`（reason 映射；pdf 的 reason 缺但
   `coverage` 有时合成 `covered:<src>`）、`verify_report_numbers`（直读）、
   `verify_report_pass`（任一 fail→False、任一 pass→True、否则 None）。
-- [ ] 新增展示函数：`verify_report_diff_scopes(path)`、`verify_report_comparison_files(path)`
+- [x] 新增展示函数：`verify_report_diff_scopes(path)`、`verify_report_comparison_files(path)`
   （均 json-only，txt→空）。
-- [ ] diff_scope **全链路显示**：`_do_import_verified` 的未通过标签＋"未入"尾注追加
+- [x] diff_scope **全链路显示**：`_do_import_verified` 的未通过标签＋"未入"尾注追加
   （含正文差异／差异仅注释／范围未知）；`_review_failed_dialog` 理由附范围＋"打开比对档"链接；
   `VerifyWorker` 进度行（过／部分过／未过）追加范围文案，`finished_all` 签名不变。
-- [ ] 产物定位（修正版）：json 存在时用其 `fmts` 键限定产物格式（`_verify_products` 加可选
+- [x] 产物定位（修正版）：json 存在时用其 `fmts` 键限定产物格式（`_verify_products` 加可选
   `fmts` 参数），防顶层旧残留误入；**不用 `formal_outputs` 作导入源**（比对档命名/配置不同）。
-- [ ] 测试（`tests/test_verify_import.py`，临时目录）：混合 verdict→四函数正确；json 与 txt 矛盾→
+- [x] 测试（`tests/test_verify_import.py`，临时目录）：混合 verdict→四函数正确；json 与 txt 矛盾→
   json 胜；损坏／`schema=2`→回退 txt；diff_scope／comparison_files 解析；导入流（pass 入库、
   undet 不入、范围标签上结果页）；格式集过滤；worker 进度含范围；老 txt-only 不回归。
-- [ ] 文档：链路B §5/§9（判读链"json 优先、txt 回退；比对档仅展示不入库"）＋本 P8 打勾。
+- [x] 文档：链路B §5/§9（判读链"json 优先、txt 回退；比对档仅展示不入库"）＋本 P8 打勾。
 - 备注：上游 reason 文案变异→原样透出（同现行为）；schema 升级需人工跟进；不做 json 指纹与
   `verify_records.json` 交叉核对（维度不同）。
 

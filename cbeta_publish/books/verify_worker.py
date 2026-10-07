@@ -44,6 +44,7 @@ class VerifyWorker(QThread):
                 reports = b.work_verify_reports(self.out_dir, w, primary=report)
                 fmts_status = {}
                 pending_all = {}
+                scopes = {}
                 overall = None
                 for rp in reports:
                     one = b.verify_report_formats(rp)
@@ -61,6 +62,9 @@ class VerifyWorker(QThread):
                             fmts_status[fmt] = True
                     for fmt, reason in one_pending.items():
                         pending_all.setdefault(fmt, reason)
+                    # diff_scope（json-only）：多报告同格式取最保守
+                    for fmt, sc in b.verify_report_diff_scopes(rp).items():
+                        scopes[fmt] = b.conservative_diff_scope([scopes.get(fmt), sc])
                     one_verdict = b.verify_report_pass(rp)
                     if one_verdict is False or overall is False:
                         overall = False
@@ -72,6 +76,8 @@ class VerifyWorker(QThread):
                 if fmts_status:
                     passed = [f for f, v in fmts_status.items() if v]
                     failed_f = [f for f, v in fmts_status.items() if not v]
+                    _sc = b.diff_scope_text(b.conservative_diff_scope(
+                        [scopes.get(f) for f in failed_f]))
                     if passed and not failed_f:
                         ok += 1
                         self.progress.emit(i, f"{REPLACE_LAST}生成并校验 {w} ...通过", "ok")
@@ -79,16 +85,22 @@ class VerifyWorker(QThread):
                         ok += 1
                         self.progress.emit(
                             i, f"{REPLACE_LAST}生成并校验 {w} ...部分通过"
-                               f"（{'/'.join(passed)} 过，{'/'.join(failed_f)} 未过）", "ok")
+                               f"（{'/'.join(passed)} 过，{'/'.join(failed_f)} 未过"
+                               + (f"；{_sc}" if _sc else "") + "）", "ok")
                     else:
                         failed.append(w)
-                        self.progress.emit(i, f"{REPLACE_LAST}生成并校验 {w} ...未通过", "fail")
+                        self.progress.emit(
+                            i, f"{REPLACE_LAST}生成并校验 {w} ...未通过"
+                               + (f"（{_sc}）" if _sc else ""), "fail")
                 elif verdict is True:
                     ok += 1
                     self.progress.emit(i, f"{REPLACE_LAST}生成并校验 {w} ...通过", "ok")
                 elif verdict is False:
                     failed.append(w)
-                    self.progress.emit(i, f"{REPLACE_LAST}生成并校验 {w} ...未通过", "fail")
+                    _sc = b.diff_scope_text(b.conservative_diff_scope(scopes.values()))
+                    self.progress.emit(
+                        i, f"{REPLACE_LAST}生成并校验 {w} ...未通过"
+                           + (f"（{_sc}）" if _sc else ""), "fail")
                 else:
                     failed.append(w)
                     note = ""

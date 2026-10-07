@@ -42,6 +42,31 @@ class BridgeConvertLibTest(unittest.TestCase):
         b._run_cli = fake
         return calls, lambda: setattr(b, "_run_cli", real)
 
+    def test_verify_work_pins_verify_root_and_cleans_new_only(self):
+        # verify_work：钉死 --verify-root {out}/验证；跑前只清新版布局下本书目录，
+        # 顶层旧目录保留（兼容读取）
+        import cbeta_publish.books.xml2pdf_bridge as b
+        out = self.dir / "vout"
+        old_top = out / "T0001 x（验证）"          # 顶层旧布局
+        old_top.mkdir(parents=True)
+        (old_top / "old.txt").write_bytes(b"o")
+        nested = out / b.VERIFY_ROOT_NAME / "T0001 x（验证）"   # 新版布局
+        nested.mkdir(parents=True)
+        (nested / "old.txt").write_bytes(b"o")
+        calls = []
+        real = b._run_cli
+        b._run_cli = lambda argv: (calls.append(list(argv)) or 0)
+        try:
+            b.verify_work("T0001", ["pdf"], out, self.cfg)
+        finally:
+            b._run_cli = real
+        self.assertEqual(len(calls), 1)
+        argv = calls[0]
+        self.assertEqual(Path(argv[argv.index("--verify-root") + 1]),
+                         out / b.VERIFY_ROOT_NAME)
+        self.assertFalse(nested.exists())     # 新布局已清
+        self.assertTrue(old_top.exists())     # 顶层旧目录保留
+
     def test_argv_with_xml_and_preset(self):
         import cbeta_publish.books.xml2pdf_bridge as b
         xml = self.dir / "T01n0001.xml"
