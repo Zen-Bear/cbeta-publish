@@ -321,13 +321,13 @@ class BatchDialogTest(unittest.TestCase):
         dlg = BatchDialog(self.items, self.win._coll_merge_cfg, self.win,
                           mode="combined", merge_fmts=["pdf"], zip_fmts=["epub"],
                           can_merge=True)
-        self.assertEqual(dlg.effective_mode(), "merge")   # 默认合并
-        self.assertFalse(dlg.list.isColumnHidden(2))
-        self.assertFalse(dlg.chk_merge.isHidden())
-        dlg.rb_update.setChecked(True)
-        self.assertEqual(dlg.effective_mode(), "update")
+        self.assertEqual(dlg.effective_mode(), "update")   # 默认更新素材
         self.assertTrue(dlg.list.isColumnHidden(2))
         self.assertTrue(dlg.chk_merge.isHidden())
+        dlg.rb_merge.setChecked(True)
+        self.assertEqual(dlg.effective_mode(), "merge")
+        self.assertFalse(dlg.list.isColumnHidden(2))
+        self.assertFalse(dlg.chk_merge.isHidden())
 
     def test_click_merge_column_opens_editor(self):
         from cbeta_publish.gui.batch_dialogs import BatchMergeDialog

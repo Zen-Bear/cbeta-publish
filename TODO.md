@@ -2,7 +2,7 @@
 
 > 设计文档：`docs/设计总案.md`（总方案）、`docs/UI设计.md`（UI）、
 > `docs/链路B-设计契约.md`（与 xml2pdf 的跨仓调用契约）。
-> 测试：`python -m unittest discover tests`（当前 633 项通过）。
+> 测试：`python -m unittest discover tests`（当前 644 项通过）。
 
 ## 约定（务必遵守）
 
@@ -58,7 +58,7 @@
   （自制/重制都跳；重制对跳过项仍重生成但不校验）＋设置开关 `xml2pdf.verify_reuse`（默认开）＋
   缓存页计数/独立清理；无指纹一律重验。`tests/test_verify_reuse.py`。
 
-### P1 — 批量合并（含 ZIP）＋批量更新素材＋官方书刷新（已完成，633 测试通过；设计与步骤见 `docs/批量合并-设计与实施.md`）
+### P1 — 批量合并（含 ZIP）＋批量更新素材＋官方书刷新（已完成，644 测试通过；设计与步骤见 `docs/批量合并-设计与实施.md`）
 - 入口：菜单「制作书籍 → 批量处理…」（`BatchDialog(mode="combined")`，窗口内单选
   「更新素材 / 合并丛书」；**不新开一级菜单、单一入口**）；两者共用备齐实现。
 - 批量合并：复选丛书（默认全选非空；全选/全不选）；☑合并 ☑ZIP 打包（格式沿用 `default_formats`）
@@ -72,7 +72,7 @@
 - 分册配置：丛书 JSON 新增可选 `merge{mode/depth/name_template}`（缺省跟随全局；读入规范化）；
   批量按每部丛书的有效配置合并/ZIP；对话框可设单书配置（含「跟随全局」，确定即落盘）。
   `ask`（全局或单书）不弹框，用 `merge.ask_last`，无记忆回退 `none`。
-- 来源/预设/格式整批统一（右栏当前选择；丛书不绑定来源）；设置「制作书籍=校验」时批量仍只普通合并。
+- 来源/预设/格式整批统一（来源对话框内单选，默认官方；批量对话框默认「更新素材」；丛书不绑定来源；预设/格式取右栏当前）；设置「制作书籍=校验」时批量仍只普通合并。
 - 两阶段：备齐（官方缺/过期对一次下载；自制一次生成；备不齐的丛书记失败）→
   逐部 合并+ZIP（空书/空白名/编辑说明有问题记失败；中途失败不影响其余丛书；取消即停，已完成的保留）。
 - 报告：进度窗总结（批量合并单窗贯穿，`_Prog` 适配器）＋丛书信息页签逐部清单（成功文件可点开）；
@@ -80,7 +80,8 @@
 - 实现：`_prepare_official`（水位/force）、`_merge_one_coll`/`_zip_one_coll`（行为保持抽取）、
   `_run_batch_update`/`_run_batch_merge`、`_write_batch_*_report`、`gui/batch_dialogs.py`。
 - 测试：`tests/test_official_state.py`（16）、`tests/test_prepare_official.py`（8）、
-  `tests/test_batch_update.py`（3）、`tests/test_batch_merge.py`（11）、`tests/test_coll_merge_cfg.py`（7）。
+  `tests/test_batch_update.py`（5）、`tests/test_batch_merge.py`（11）、`tests/test_coll_merge_cfg.py`（7）、
+  `tests/test_batch_dialog.py`（6）。
 
 ### 分册扩展（已完成）
 - [x] ZIP/导出 也按分册模式（`none` 保持单 zip／平铺；其余按可用书分组，命名同合并模板）；

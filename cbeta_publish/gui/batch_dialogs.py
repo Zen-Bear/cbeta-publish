@@ -3,13 +3,15 @@
 
 两个入口共用同一 `BatchDialog`（`mode="update"|"merge"`）：
 - 共用丛书复选清单（默认全选非空；全选/全不选）。
+- 共用「来源」单选（官方书/自制书，初始值=右栏当前选择）；只显示对应策略。
 - 「更新素材」只设计素材刷新选项；「合并丛书」另有 合并/ZIP/自动备齐/报告
   与每部丛书独立分册配置。
 """
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox,
-                               QHBoxLayout, QLabel, QPushButton, QTreeWidget,
-                               QTreeWidgetItem, QVBoxLayout)
+from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QDialog,
+                               QDialogButtonBox, QHBoxLayout, QLabel, QPushButton,
+                               QRadioButton, QTreeWidget, QTreeWidgetItem,
+                               QVBoxLayout, QWidget)
 
 #: 官方刷新策略（值传给 _prepare_official 的 policy）
 OFFICIAL_POLICIES = [("XML较新则重下（推荐）", "stale"),
@@ -133,10 +135,12 @@ class BatchDialog(QDialog):
 
     def __init__(self, items, cfg_fn, parent=None, *, mode="merge",
                  merge_fmts=None, zip_fmts=None, can_merge=True,
-                 save_merge_fn=None, preview_fn=None, global_cfg=None):
+                 save_merge_fn=None, preview_fn=None, global_cfg=None,
+                 run_source=None):
         super().__init__(parent)
         self._fixed_mode = mode if mode in ("update", "merge") else None
-        self._mode = "merge" if self._fixed_mode is None else self._fixed_mode
+        # combined 默认停在「更新素材」（ destructive 最小、最常用前置步骤）
+        self._mode = "update" if self._fixed_mode is None else self._fixed_mode
         self._cfg_fn = cfg_fn
         self._save_merge_fn = save_merge_fn
         self._preview_fn = preview_fn
@@ -144,6 +148,7 @@ class BatchDialog(QDialog):
         self._merge_fmts = list(merge_fmts or [])
         self._zip_fmts = list(zip_fmts or [])
         self._can_merge = bool(can_merge)
+        self._init_source = run_source if run_source in ("official", "xml") else "official"
         self.setMinimumWidth(_DLG_MIN_W)
         self.resize(_DLG_MIN_W, 520)
         self._overrides = {}   # {path_str: merge|None}（仅 merge）
@@ -151,13 +156,12 @@ class BatchDialog(QDialog):
 
         v = QVBoxLayout(self)
         if self._fixed_mode is None:
-            from PySide6.QtWidgets import QButtonGroup, QRadioButton
             self.setWindowTitle("批量处理")
             rowm = QHBoxLayout()
             rowm.addWidget(QLabel("操作："))
             self.rb_update = QRadioButton("更新素材")
             self.rb_merge = QRadioButton("合并丛书")
-            self.rb_merge.setChecked(True)
+            self.rb_update.setChecked(True)
             self._mode_group = QButtonGroup(self)
             self._mode_group.addButton(self.rb_update)
             self._mode_group.addButton(self.rb_merge)
@@ -168,6 +172,24 @@ class BatchDialog(QDialog):
             self.rb_update.toggled.connect(self._apply_mode)
         else:
             self.setWindowTitle("批量更新素材" if mode == "update" else "批量合并丛书")
+
+        # 来源（更新/合并两种模式共用；只显示对应策略，不再依赖右栏选择）
+        rows = QHBoxLayout()
+        rows.addWidget(QLabel("来源："))
+        self.rb_src_official = QRadioButton("官方书")
+        self.rb_src_xml = QRadioButton("自制书")
+        self._src_group = QButtonGroup(self)
+        self._src_group.addButton(self.rb_src_official)
+        self._src_group.addButton(self.rb_src_xml)
+        if self._init_source == "xml":
+            self.rb_src_xml.setChecked(True)
+        else:
+            self.rb_src_official.setChecked(True)
+        rows.addWidget(self.rb_src_official)
+        rows.addWidget(self.rb_src_xml)
+        rows.addStretch(1)
+        v.addLayout(rows)
+        self.rb_src_official.toggled.connect(self._apply_source)
 
         hdr = QHBoxLayout()
         self.lbl_choose = QLabel()
@@ -207,8 +229,10 @@ class BatchDialog(QDialog):
         self._opt.addWidget(self.chk_prepare)
         self._merge_widgets.append(self.chk_prepare)
 
-        self.cb_official = self._policy_combo("官方书", OFFICIAL_POLICIES, 0)
-        self.cb_self = self._policy_combo("自制书", SELF_POLICIES, 0)
+        self._row_official, self.cb_official = self._policy_combo(
+            "官方书", OFFICIAL_POLICIES, 0)
+        self._row_self, self.cb_self = self._policy_combo(
+            "自制书", SELF_POLICIES, 0)
 
         # 分册编辑：点击列表「分册」列任意一行进入
         self.list.itemClicked.connect(self._on_list_clicked)
@@ -221,17 +245,20 @@ class BatchDialog(QDialog):
         btns.rejected.connect(self.reject)
         v.addWidget(btns)
         self._apply_mode()
+        self._apply_source()
 
     def _policy_combo(self, label, choices, default_idx=0):
-        row = QHBoxLayout()
+        box = QWidget()
+        row = QHBoxLayout(box)
+        row.setContentsMargins(0, 0, 0, 0)
         row.addWidget(QLabel(label))
         cb = QComboBox()
         for text, val in choices:
             cb.addItem(text, val)
         cb.setCurrentIndex(default_idx)
         row.addWidget(cb, 1)
-        self._opt.addLayout(row)
-        return cb
+        self._opt.addWidget(box)
+        return box, cb
 
     def _apply_mode(self, *_):
         if self._fixed_mode is None:
@@ -247,6 +274,15 @@ class BatchDialog(QDialog):
     def effective_mode(self):
         """combined=当前选择；固定模式=构造时指定。"""
         return self._mode
+
+    def _apply_source(self, *_):
+        xml = self.rb_src_xml.isChecked()
+        self._row_self.setVisible(xml)
+        self._row_official.setVisible(not xml)
+
+    def run_source(self):
+        """本次批量来源（对话框内选择，不再依赖右栏）。"""
+        return "xml" if self.rb_src_xml.isChecked() else "official"
 
     # ---------- 通用 ----------
     def selected_items(self):
@@ -313,8 +349,8 @@ class BatchDialog(QDialog):
 
 
 class BatchUpdateDialog(BatchDialog):
-    def __init__(self, items, cfg_fn, parent=None):
-        super().__init__(items, cfg_fn, parent, mode="update")
+    def __init__(self, items, cfg_fn, parent=None, **kw):
+        super().__init__(items, cfg_fn, parent, mode="update", **kw)
 
 
 class BatchMergeDialog(BatchDialog):

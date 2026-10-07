@@ -7071,7 +7071,7 @@ class MainWindow(QMainWindow):
         if not items:
             QMessageBox.warning(self, "失败", "没有非空丛书")
             return
-        run_source = self._run_source()
+        # 对话框默认：操作=更新素材、来源=官方书（构造参数缺省即此；不跟随右栏）
         merge_fmts = [f for f in self._checked_fmts() if f in ("pdf", "epub")]
         zip_fmts = self._batch_side_fmts()
         gmc = self._coll_merge_cfg({})
@@ -7093,7 +7093,7 @@ class MainWindow(QMainWindow):
             return
         if dlg.effective_mode() == "update":
             self._run_batch_update(selected, dlg.official_policy(), dlg.self_policy(),
-                                   dlg.save_report())
+                                   dlg.save_report(), run_source=dlg.run_source())
             return
         if not dlg.merge_enabled() and not dlg.zip_enabled():
             QMessageBox.warning(self, "失败", "请至少勾选「合并」或「ZIP 打包」")
@@ -7103,12 +7103,15 @@ class MainWindow(QMainWindow):
             "auto_prepare": dlg.auto_prepare(),
             "official_policy": dlg.official_policy(), "self_policy": dlg.self_policy(),
             "save_report": dlg.save_report(),
-            "merge_fmts": merge_fmts, "zip_fmts": zip_fmts, "run_source": run_source,
+            "merge_fmts": merge_fmts, "zip_fmts": zip_fmts,
+            "run_source": dlg.run_source(),
         })
 
-    def _run_batch_update(self, selected, official_policy, self_policy, save_report):
+    def _run_batch_update(self, selected, official_policy, self_policy, save_report,
+                            run_source=None):
         from cbeta_publish.books import official_ebook_source
-        run_source = self._run_source()
+        # 来源取对话框内选择（缺省=右栏当前，保持老调用兼容）
+        run_source = run_source or self._run_source()
         merge_fmts = [f for f in self._checked_fmts() if f in ("pdf", "epub")]
         fmts = list(dict.fromkeys(merge_fmts + self._batch_side_fmts())) or ["pdf"]
         dest_dir = official_ebook_source.official_books_dir(self.config)
@@ -7136,12 +7139,14 @@ class MainWindow(QMainWindow):
             results.append({"path": str(path), "name": d.get("name", ""),
                             "status": st, "failed": fs})
         if save_report:
-            self._write_batch_update_report(results, fmts, official_policy, self_policy)
+            self._write_batch_update_report(results, fmts, official_policy, self_policy,
+                                            run_source=run_source)
         self._show_batch_summary("批量更新完成", results, key="update")
         self.detail.setText(f"批量更新完成：成功 {sum(1 for r in results if r['status']=='ok')}"
                             f" / 共 {len(results)}")
 
-    def _write_batch_update_report(self, results, fmts, official_policy, self_policy):
+    def _write_batch_update_report(self, results, fmts, official_policy, self_policy,
+                                     run_source=None):
         import datetime
         out = self._out_dir()
         try:
@@ -7154,7 +7159,7 @@ class MainWindow(QMainWindow):
         n_skip = sum(1 for r in results if r["status"] == "skipped")
         lines = ["批量更新报告",
                  f"时间：{datetime.datetime.now().isoformat(timespec='seconds')}",
-                 f"来源：{self._run_source()} | 预设：{self._run_preset() or ''}",
+                  f"来源：{run_source or self._run_source()} | 预设：{self._run_preset() or ''}",
                  f"格式：{', '.join(fmts)}",
                  f"官方策略：{official_policy} | 自制策略：{self_policy}",
                  f"结果：成功 {n_ok} / 部分 {n_part} / 失败 {n_fail} / 跳过 {n_skip}", ""]

@@ -14,7 +14,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication, QFormLayout  # noqa: E402
 
-from cbeta_publish.gui.settings_dialog import DEFAULT_CONFIG, SettingsDialog  # noqa: E402
+from cbeta_publish.gui.settings_dialog import DEFAULT_CONFIG, SettingsDialog, cache_clean_warning  # noqa: E402
 
 
 def _app():
@@ -320,8 +320,7 @@ class SettingsDialogTest(unittest.TestCase):
         self.assertEqual(dlg.ed_imprint.text(), "太虛大師全書")
         self.assertNotIn("series", dlg._cfg["cover"])
 
-    def test_dead_cover_keys_dropped(self):
-        # 死键清理：intro.list / positions.cbeta_left_mm/top_mm 无人读取，
+    def test_dead_cover_keys_dropped(self):        # 死键清理：intro.list / positions.cbeta_left_mm/top_mm 无人读取，
         # 出厂默认不带；旧配置经 _collect 保存时一并去掉
         self.assertNotIn("list", DEFAULT_CONFIG["cover"]["intro"])
         self.assertNotIn("cbeta_left_mm", DEFAULT_CONFIG["cover"]["positions"])
@@ -876,8 +875,7 @@ class SettingsDialogTest(unittest.TestCase):
         finally:
             dlg.close()
 
-    def test_cache_verify_row_wired(self):
-        # 缓存页新增「校验目录」：getter 用 bridge.verify_dir（未配置也有默认）
+    def test_cache_verify_row_wired(self):        # 缓存页新增「校验目录」：getter 用 bridge.verify_dir（未配置也有默认）
         from cbeta_publish.books import xml2pdf_bridge
         dlg = self._dlg()
         self.assertIn("verify", dlg._cache_rows)
@@ -885,6 +883,24 @@ class SettingsDialogTest(unittest.TestCase):
         self.assertEqual(getter(), str(xml2pdf_bridge.verify_dir(dlg._cfg)))
         self.assertTrue(getter())
         self.assertNotEqual(lbl.text(), "（未配置）")
+
+
+class CacheCleanWarningTest(unittest.TestCase):
+    def _cfg(self, xml_root):
+        return {"xml2pdf": {"cbeta_ebook": str(xml_root)}}
+
+    def test_same_dir_warns(self):
+        self.assertTrue(cache_clean_warning("E:/dev/cbeta/cbeta_ebook",
+                                            self._cfg("E:/dev/cbeta/cbeta_ebook")))
+
+    def test_parent_of_xml_root_warns(self):
+        self.assertTrue(cache_clean_warning("E:/dev/cbeta",
+                                            self._cfg("E:/dev/cbeta/cbeta_ebook")))
+
+    def test_unrelated_dir_no_warning(self):
+        self.assertEqual(cache_clean_warning("E:/dev/cbeta/other",
+                                             self._cfg("E:/dev/cbeta/cbeta_ebook")), "")
+        self.assertEqual(cache_clean_warning("", self._cfg("E:/x")), "")
 
 
 if __name__ == "__main__":

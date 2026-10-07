@@ -170,6 +170,26 @@ def choose_note_file(parent, ed):
         QMessageBox.warning(parent, "失败", f"导入说明文件失败：{e}")
 
 
+def cache_clean_warning(path, cfg) -> str:
+    """清理目标与 CBETA XML 工作根重叠时的追加警告；无重叠返回 ""。
+
+    用户可能把官方电子书缓存与 XML 工作根设成同一目录，此时「清理官方缓存」
+    会连 XML 源一起删除；确认框必须点名这个后果。
+    """
+    try:
+        if not path:
+            return ""
+        from cbeta_publish.books import xml2pdf_bridge as _b
+        tp = Path(path).resolve()
+        xp = _b.xml_work_dir(cfg).resolve()
+        if tp == xp or tp in xp.parents:
+            return ("警告：该目录同时是 CBETA XML 工作根（或其父目录），"
+                    "清理会连 XML 源一起删除！")
+    except Exception:
+        pass
+    return ""
+
+
 class SettingsDialog(QDialog):
     def __init__(self, config: dict, parent=None, collection=None,
                  collection_path=None):
@@ -1208,7 +1228,11 @@ class SettingsDialog(QDialog):
         if not path:
             QMessageBox.information(self, "提示", "未配置该目录")
             return
-        if QMessageBox.question(self, "清理缓存", f"删除以下目录的全部内容？\n{path}") != QMessageBox.Yes:
+        warn = cache_clean_warning(path, self._cfg)
+        msg = f"删除以下目录的全部内容？\n{path}"
+        if warn:
+            msg += f"\n\n{warn}"
+        if QMessageBox.question(self, "清理缓存", msg) != QMessageBox.Yes:
             return
         from cbeta_publish.books.cache_manager import clean, human
         r = clean(path)

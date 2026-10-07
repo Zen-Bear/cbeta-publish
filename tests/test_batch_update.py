@@ -104,6 +104,32 @@ class BatchUpdateTest(unittest.TestCase):
         after = json.dumps(self.win.config, ensure_ascii=False, sort_keys=True)
         self.assertEqual(before, after)
 
+    def test_explicit_run_source_overrides_config(self):
+        # 对话框来源优先于右栏：config=official 也能强制跑自制分支，反之亦然
+        self.win.config["default_source"] = "official"
+        calls = []
+        self.win._ensure_xml_batch = lambda works, fmts, title="", regen_all=False: (
+            calls.append(1) or ({}, [], False))
+        self.win._run_batch_update(self._selected(), "stale", "missing", False,
+                                   run_source="xml")
+        self.assertEqual(len(calls), 1)
+
+        self.win.config["default_source"] = "xml"
+        prepped = []
+        self.win._prepare_official = lambda works, fmts, dest, policy="stale": (
+            prepped.append(1) or ({}, []))
+        self.win._run_batch_update(self._selected(), "stale", "missing", False,
+                                   run_source="official")
+        self.assertEqual(len(prepped), 1)
+
+    def test_report_uses_explicit_run_source(self):
+        self.win.config["default_source"] = "xml"
+        self.win._prepare_official = lambda works, fmts, dest, policy="stale": ({}, [])
+        self.win._run_batch_update(self._selected(), "stale", "missing", True,
+                                   run_source="official")
+        rep = Path(self.win.config["output_dir"]) / "批量更新报告.txt"
+        self.assertIn("来源：official", rep.read_text(encoding="utf-8"))
+
 
 if __name__ == "__main__":
     unittest.main()
