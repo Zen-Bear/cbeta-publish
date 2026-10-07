@@ -2,7 +2,7 @@
 
 > 设计文档：`docs/设计总案.md`（总方案）、`docs/UI设计.md`（UI）、
 > `docs/链路B-设计契约.md`（与 xml2pdf 的跨仓调用契约）。
-> 测试：`python -m unittest discover tests`（当前 644 项通过）。
+> 测试：`python -m unittest discover tests`（当前 654 项通过）。
 
 ## 约定（务必遵守）
 
@@ -58,7 +58,7 @@
   （自制/重制都跳；重制对跳过项仍重生成但不校验）＋设置开关 `xml2pdf.verify_reuse`（默认开）＋
   缓存页计数/独立清理；无指纹一律重验。`tests/test_verify_reuse.py`。
 
-### P1 — 批量合并（含 ZIP）＋批量更新素材＋官方书刷新（已完成，644 测试通过；设计与步骤见 `docs/批量合并-设计与实施.md`）
+### P1 — 批量合并（含 ZIP）＋批量更新素材＋官方书刷新（已完成，654 测试通过；设计与步骤见 `docs/批量合并-设计与实施.md`）
 - 入口：菜单「制作书籍 → 批量处理…」（`BatchDialog(mode="combined")`，窗口内单选
   「更新素材 / 合并丛书」；**不新开一级菜单、单一入口**）；两者共用备齐实现。
 - 批量合并：复选丛书（默认全选非空；全选/全不选）；☑合并 ☑ZIP 打包（格式沿用 `default_formats`）
@@ -114,6 +114,102 @@
 - [x] **丛书导航树结构**：左栏「丛书」视图固定为树 `分类→丛书→书籍`；按 `categories.json`
   顺序分组、空分类也显示、分类节点默认展开（双击仅展开折叠）；分类下拉保留作筛选
   （选中分类只显示该分类，与标签筛选叠加）。`tests/test_by_catalog.py:CollTreeTest`。
+
+### P5 — 批量清除上次合并输出＋XML 归属提示（已完成，651 测试通过）
+- [x] 批量对话框（合并模式）加复选框「清除所选丛书的上次合并输出（含 ZIP）并清除发布标记」
+  （默认不勾，仅 merge 可见，随 `_apply_mode` 显隐；`BatchDialog.purge_enabled()`）。
+- [x] `_run_batch_merge` 两阶段前插「阶段零：清除」——删 `output_dir/{丛书名}/`（缺失记「无输出可清」）；
+  成功后 `pop last_publish_at/dir`＋复用 `_commit_publish_meta` 落盘＋清内存 `_last_publish`。
+- [x] 勾选时执行前二次确认（列出将删目录；取消则整批不跑）；已删不恢复，报告注明；
+  根下 `批量合并报告.txt` 不动（下次合并覆盖写）。
+- [x] 已核实 ZIP 落点：ZIP 在 `out_dir` 内（`_zip_one_coll: out_dir/f"{base}_{fmt}.zip"`），
+  清除 `output_dir/{丛书名}/` 即覆盖合并＋ZIP。
+- [x] XML 更新不做（`materialize_work` 缺才下，无强制刷新口；`--update-data` 只管上游自带数据）。
+  改为提示：批量对话框更新模式＋来源=自制时，自制策略行下加灰字
+  「CBETA XML 源由 xml2pdf 更新和维护，publish 只读不写」（随 `_apply_source` 显隐）；
+  设置页「XML 工作根」输入框加同义 tooltip。
+- [x] 测试：`test_batch_dialog`（默认关/显隐/getter＋XML 提示显隐）＋ `test_batch_merge`
+  `BatchMergePurgeTest`（删目录＋清标记；缺失跳过；未勾/取消不删）；全量通过后同步测试数。
+- [x] 文档：`docs/批量合并-设计与实施.md`（清除语义＋XML 归属）＋本 P5 打勾。
+
+### P6 — 批量失败归因＋失败停留（已完成，654 测试通过）
+- [x] 部内 `skipped` 名单透出：`r["skipped"]`（之前直接丢掉，报告/页签都看不到缺了哪几部）；
+  报告加 `缺素材：…` 行（20 条截断）；页签显示前 3 部＋失败前 2 条。
+- [x] `reason` 自动归因：有缺失＋未勾「合并前自动备齐」→指引先跑批量更新或勾选后重试；
+  有缺失＋已备齐→"备齐后仍有缺失（见报告明细）"；状态栏同步追加指引。
+- [x] 失败停留成功关：有 `failed/partial`/取消调 `finish(总结行)` 手动关（报告先落盘，
+  总结行带报告路径）；全 `ok` 仍直接关；批量对话框不重开。
+- [x] 测试：`BatchMergeFailureUXTest`（归因文案×2＋失败 finish＋成功 close）；
+  全量通过后同步测试数。
+- [x] 文档：`docs/批量合并-设计与实施.md`（§3.8 报告示例＋§3.9 归因/停留规则）＋本 P6 打勾。
+
+### P7 — 上游 `verify_root` 适配（待办）
+- 背景：上游新增 `source.verify_root`（校验产物总目录，优先级 `--verify-root` ＞ 配置 ＞
+  默认 `{输出}/验证`）；新布局 `{输出}/验证/{id 书名}（验证）/{fmt}/＋report.txt＋report.json`。
+  校验目录分离决策已写入 `docs/链路B-设计契约.md` §9.4。
+- [ ] `bridge.find_verify_report` 改**双层兼容**（顶层旧版＋`{out}/验证/` 新版，递归）；
+  `verify_work` 跑前清理同步清嵌套同 work 目录（只清该 work，不动整个 `验证/`）。
+- [ ] `verify_work` 显式传 `--verify-root {out_dir}/验证`，把布局钉死（不受预设自定义值劫持）。
+- [ ] `_open_xml2pdf_window` 独立窗同样传 `--verify-root {vdir}/验证`；预设对齐检查扩展到
+  `source.verify_root`（设了非空即提示可一键清空，与 `cbeta_ebook` 对齐同口径）。
+- [ ] 测试：bridge 嵌套发现（新旧双布局）＋嵌套清理只清同 work＋两处 argv 钉死断言。
+- [ ] 文档：链路B §5（argv 加 `--verify-root`）＋§9。
+
+### P8 — 校验判读升级：`report.json` 优先（待办）
+- 背景与原则：上游 `report.json`＝机读结论、txt＝人读（同目录、每次覆盖写、`fail/undetermined/error`
+  照写）；publish 现在**只读 txt（正则）**，`report.json` 零引用（上游自身也不消费，`find_verify_reports`
+  是给下游的发现接口）。改为 **json 优先、txt 回退**（无 json／损坏／`schema≠1` 回退），
+  **消费者零改动**（改造收在 bridge 函数内部）。**比对档≠产物**：`formal_outputs` 仅展示，不入库。
+- 契约出处：`docs/校验report.json说明.md`（§1 文件位置、§4 指纹复用契约＋发现接口；
+  "上游公开接口"＝`verify_fingerprint`＋`find_verify_reports`）；`docs/第三方调用说明.md` 是
+  模块/函数级总览（面向二次开发），本次改动属前者。
+- **上游命名变更（2026-10-07）**：机读 JSON **统一名 `report.json`**（CLI/GUI 一致），
+  落 `{校验根}/{id 书名}（验证）/report.json`；旧名 `{id}_{书名}_校验报告.json` /
+  `*_verify_report.json` 上游 `find_verify_reports` **不再发现**（重跑一次校验即得新名）。
+  publish 同口径：**只认 `report.json`**，旧目录 → txt 回退（txt 仍兼容
+  `report.txt` / `*_verify_report.txt` / `*_校验报告.txt`）。
+- [ ] `bridge._paired_json(report_txt)`：**同目录只找 `report.json`**（不再认旧 JSON 名）；
+  `_read_verify_json`：utf-8-sig＋`schema==1`＋`fmts` dict，否则 None；
+  归一 `{fmts:{fmt:{verdict,missing,extra,reason,diff_scope,formal_outputs}}, coverage}`。
+- [ ] 四函数 json 优先、txt 回退：`verify_report_formats`（`pass→True、fail→False`，
+  `undetermined/error` 不收录）、`verify_report_pending`（reason 映射；pdf 的 reason 缺但
+  `coverage` 有时合成 `covered:<src>`）、`verify_report_numbers`（直读）、
+  `verify_report_pass`（任一 fail→False、任一 pass→True、否则 None）。
+- [ ] 新增展示函数：`verify_report_diff_scopes(path)`、`verify_report_comparison_files(path)`
+  （均 json-only，txt→空）。
+- [ ] diff_scope **全链路显示**：`_do_import_verified` 的未通过标签＋"未入"尾注追加
+  （含正文差异／差异仅注释／范围未知）；`_review_failed_dialog` 理由附范围＋"打开比对档"链接；
+  `VerifyWorker` 进度行（过／部分过／未过）追加范围文案，`finished_all` 签名不变。
+- [ ] 产物定位（修正版）：json 存在时用其 `fmts` 键限定产物格式（`_verify_products` 加可选
+  `fmts` 参数），防顶层旧残留误入；**不用 `formal_outputs` 作导入源**（比对档命名/配置不同）。
+- [ ] 测试（`tests/test_verify_import.py`，临时目录）：混合 verdict→四函数正确；json 与 txt 矛盾→
+  json 胜；损坏／`schema=2`→回退 txt；diff_scope／comparison_files 解析；导入流（pass 入库、
+  undet 不入、范围标签上结果页）；格式集过滤；worker 进度含范围；老 txt-only 不回归。
+- [ ] 文档：链路B §5/§9（判读链"json 优先、txt 回退；比对档仅展示不入库"）＋本 P8 打勾。
+- 备注：上游 reason 文案变异→原样透出（同现行为）；schema 升级需人工跟进；不做 json 指纹与
+  `verify_records.json` 交叉核对（维度不同）。
+
+### P9 — 批量 ID 建丛书（待办）
+- 入口：右侧丛书面板加按钮「导入ID…」（`main_window` 现有按钮批，895–906 接线）→ `_import_ids_dialog()`。
+- 对话框 `gui/import_ids_dialog.py` `ImportIdsDialog`：单一 `QPlainTextEdit` 内容区，三种来源灌入并
+  可继续手改——粘贴多行 `<work_id> [注释]…`；`从文件载入…`（.txt/.csv，utf-8-sig→gbk 回退）；
+  `从网页抓取…`（URL→`fetch_text`→`html_to_text`）。`解析/预览` → 表
+  `序号｜原始｜规范ID｜注释(可编辑)｜目录书名｜状态`；状态 `有效/未收录/无效/重复` 全部**保留并标注**，
+  可删行/全选/全不选；`OK=创建` → `_ask_name_category("新建丛书")` → 建丛书（内存＋标脏，保存后落盘）。
+- 纯逻辑 `collection/id_import.py`（无 Qt，易测）：`normalize_token`（basename `T01n0001`→`T0001`→
+  `canonical_work`）、`parse_id_lines`（跳空行/`#`/`//`；行首 id＋余下为注释，剥首分隔符）、
+  `classify(rows, work_exists_fn)`（格式→`work_exists`→有效性/未收录/重复）、`html_to_text`、
+  `fetch_text(url)`（仅 http(s)、UA、编码猜测、30s 超时）。
+- 数据模型（`collection_model.py`）：新增 `work_notes {work_id: 注释}`——`normalize_collection` 键
+  `canonical_work`＋按 `work_ids` 剪枝＋空注丢弃（仿 `bulei_groups`）；`Collection.__init__/to_dict/
+  create_collection` 透传（非空才写）。
+- 显示（仅展示，不参与合并/分册/校验）：左栏丛书树书籍行 tooltip（`_add_coll`/`_work_item` 1675–1681）；
+  右栏书单书籍行 tooltip（`_render_coll_rows` 4044+）；「书籍信息」页加注释行（3924）。
+- 测试：`tests/test_id_import.py`（分隔符/空行/`#`、basename 规范化、无效/重复、classify、html_to_text、
+  编码回退）＋ `tests/test_import_ids_dialog.py`（offscreen：解析→编辑注释→getter；建丛书后 work_notes
+  落盘；临时 `_config_path`/`collections_dir`＋`test_no_pollution.py` 护栏）。
+- 文档：`docs/UI设计.md`（按钮/对话框）＋`docs/链路B-设计契约.md` §4（`work_notes`）＋本 P9 打勾。
+- 风险：网页为通用整页转文本按行解析（不做站点适配/按链接）；抓取在 UI 线程（单页 30s 超时，后续可线程化）。
 
 ## 备注
 

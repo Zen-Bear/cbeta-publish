@@ -540,6 +540,9 @@ class SettingsDialog(QDialog):
             (self._cfg.get("xml2pdf", {}) or {}).get("cbeta_ebook")
             or str(PROJECT_ROOT / "cbeta_xml"))
         self.ed_x2p_ebook.setPlaceholderText("CBETA XML 目录（不可为空；空则用默认 cbeta_xml）")
+        self.ed_x2p_ebook.setToolTip(
+            "CBETA XML 源由 xml2pdf 更新和维护，publish 只读不写；\n"
+            "更新 XML 请到 xml2pdf 侧操作，此处只指定工作根位置。")
         self.ed_xmlbooks = QLineEdit()
         self.ed_verify = QLineEdit()
         self.ed_verify.setPlaceholderText("校验工作目录（默认 cbeta_verify）")

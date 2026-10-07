@@ -92,5 +92,40 @@ class BatchDialogSourceTest(unittest.TestCase):
             dlg.close()
 
 
+class BatchDialogPurgeTest(unittest.TestCase):
+    def test_purge_defaults_off(self):
+        dlg = _dlg()
+        try:
+            self.assertFalse(dlg.chk_purge.isChecked())
+            self.assertFalse(dlg.purge_enabled())
+        finally:
+            dlg.close()
+
+    def test_purge_only_in_merge_mode(self):
+        dlg = _dlg()  # combined 默认 update
+        try:
+            dlg.chk_purge.setChecked(True)
+            self.assertFalse(dlg.purge_enabled())  # update 模式不生效
+            self.assertFalse(dlg.chk_purge.isVisible())
+            dlg.rb_merge.setChecked(True)
+            self.assertTrue(dlg.chk_purge.isVisible())
+            self.assertTrue(dlg.purge_enabled())
+        finally:
+            dlg.close()
+
+
+class BatchDialogXmlHintTest(unittest.TestCase):
+    def test_hint_only_update_plus_xml(self):
+        dlg = _dlg()
+        try:
+            self.assertFalse(dlg._xml_hint.isVisible())  # update＋官方：隐藏
+            dlg.rb_src_xml.setChecked(True)
+            self.assertTrue(dlg._xml_hint.isVisible())  # update＋自制：显示
+            dlg.rb_merge.setChecked(True)
+            self.assertFalse(dlg._xml_hint.isVisible())  # merge＋自制：隐藏
+        finally:
+            dlg.close()
+
+
 if __name__ == "__main__":
     unittest.main()

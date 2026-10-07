@@ -6,10 +6,11 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
 
 from cbeta_publish.gui.main_window import MainWindow  # noqa: E402
 
@@ -200,6 +201,152 @@ class BatchMergeTest(unittest.TestCase):
         txt = (self.cdir / "甲.json").read_text(encoding="utf-8")
         self.assertIn('"merge"', txt)
         self.assertIn("dynasty", txt)
+
+
+class BatchMergePurgeTest(unittest.TestCase):
+    def setUp(self):
+        self.win, self.tmp, self.cdir = _make_window()
+        self.win.chk_pdf.setChecked(True)
+        self.win.chk_epub.setChecked(True)
+        self.win.chk_docx.setChecked(False)
+        self.merge_calls = []
+        self.win._merge_one_coll = lambda data, d, works, **kw: (
+            self.merge_calls.append(str(data))
+            or {"success": ["/tmp/x/a.pdf"], "skipped": [], "failed": [],
+                "cancelled": False, "out_dir": "/tmp/x"})
+        self.win._zip_one_coll = lambda d, works, **kw: (
+            {"success": [], "failed": [], "cancelled": False})
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _selected(self):
+        return [(p, d) for p, d in self.win._collections
+                if (d.get("work_ids") or [])]
+
+    def _report_text(self):
+        rep = next(Path(self.win.config["output_dir"]).glob("*报告.txt"))
+        return rep.read_text(encoding="utf-8")
+
+    def _qbox(self, answer):
+        m = mock.patch("cbeta_publish.gui.main_window.QMessageBox")
+        box = m.start()
+        self.addCleanup(m.stop)
+        box.question.return_value = answer
+        box.Yes = QMessageBox.Yes
+        box.No = QMessageBox.No
+        return box
+
+    def test_purge_off_by_default(self):
+        sel = self._selected()
+        out_d = Path(self.win.config["output_dir"]) / sel[0][1]["name"]
+        out_d.mkdir(parents=True)
+        (out_d / "old.pdf").write_text("x")
+        self.win._run_batch_merge(sel, _opts(zip=False))
+        self.assertTrue((out_d / "old.pdf").is_file())
+
+    def test_purge_yes_clears_outputs_and_marks(self):
+        sel = self._selected()
+        name = sel[0][1]["name"]
+        out_d = Path(self.win.config["output_dir"]) / name
+        out_d.mkdir(parents=True)
+        (out_d / "old.pdf").write_text("x")
+        sel[0][1]["last_publish_at"] = "2020-01-01T00:00:00Z"
+        sel[0][1]["last_publish_dir"] = str(out_d)
+        # 本用例合并零产出 → 合并阶段不写标记；末态无标记即证明清除阶段清过
+        self.win._merge_one_coll = lambda data, d, works, **kw: (
+            self.merge_calls.append(str(data))
+            or {"success": [], "skipped": [], "failed": [],
+                "cancelled": False, "out_dir": "/tmp/x"})
+        self._qbox(QMessageBox.Yes)
+        self.win._run_batch_merge(sel, _opts(zip=False, purge=True))
+        self.assertFalse(out_d.exists())
+        self.assertNotIn("last_publish_at", sel[0][1])
+        self.assertNotIn("last_publish_dir", sel[0][1])
+        self.assertTrue(self.merge_calls)  # 清除后合并照常跑
+        self.assertIn("清除", self._report_text())
+
+    def test_purge_no_cancels_whole_run(self):
+        sel = self._selected()
+        out_d = Path(self.win.config["output_dir"]) / sel[0][1]["name"]
+        out_d.mkdir(parents=True)
+        (out_d / "old.pdf").write_text("x")
+        self._qbox(QMessageBox.No)
+        self.win._run_batch_merge(sel, _opts(zip=False, purge=True))
+        self.assertTrue((out_d / "old.pdf").is_file())
+        self.assertEqual(self.merge_calls, [])
+
+    def test_purge_missing_dir_reports_and_continues(self):
+        sel = self._selected()
+        self._qbox(QMessageBox.Yes)
+        self.win._run_batch_merge(sel, _opts(zip=False, purge=True))
+        self.assertTrue(self.merge_calls)
+        self.assertIn("无输出可清", self._report_text())
+
+
+class BatchMergeFailureUXTest(unittest.TestCase):
+    """备齐关＋缺素材：skipped 透出、reason 归因、失败停留。"""
+
+    def setUp(self):
+        self.win, self.tmp, self.cdir = _make_window()
+        self.win.chk_pdf.setChecked(True)
+        self.win.chk_epub.setChecked(True)
+        self.win.chk_docx.setChecked(False)
+        self.finished = []
+        self.closed = []
+        win = self.win
+        finished, closed = self.finished, self.closed
+
+        class _FakeDlg:
+            def close(self):
+                closed.append(1)
+
+        def _fake_progress(title, total):
+            return _FakeDlg(), lambda *a, **k: True, \
+                {"finish": lambda lines: finished.append(list(lines))}
+        win._make_progress = _fake_progress
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _selected(self):
+        return [(p, d) for p, d in self.win._collections
+                if (d.get("work_ids") or [])]
+
+    def _report_text(self):
+        rep = next(Path(self.win.config["output_dir"]).glob("*报告.txt"))
+        return rep.read_text(encoding="utf-8")
+
+    def _stub_merge(self, skipped=(), failed=(), success=()):
+        self.win._merge_one_coll = lambda data, d, works, **kw: {
+            "success": list(success), "skipped": list(skipped),
+            "failed": list(failed), "cancelled": False, "out_dir": "/tmp/x"}
+        self.win._zip_one_coll = lambda d, works, **kw: {
+            "success": [], "failed": [], "cancelled": False}
+
+    def test_prepare_off_missing_points_to_prepare(self):
+        self._stub_merge(skipped=["T0001.pdf"], failed=["pdf 无文件"])
+        self.win._run_batch_merge(self._selected(), _opts(zip=False))
+        rep = self._report_text()
+        self.assertIn("缺素材", rep)
+        self.assertIn("自动备齐", rep)  # reason 归因进报告
+        self.assertIn("缺素材", self.win.lbl_coll_info.text())  # 页签可见
+        self.assertTrue(self.finished)  # 失败停留（调了 finish）
+        self.assertEqual(self.closed, [])
+
+    def test_prepare_on_missing_says_still_missing(self):
+        self._stub_merge(skipped=["T0001.pdf"], failed=["pdf 无文件"])
+        self.win._prepare_official = lambda *a, **k: ({}, [])
+        self.win._run_batch_merge(
+            self._selected(), _opts(zip=False, auto_prepare=True))
+        self.assertIn("备齐后仍有缺失", self._report_text())
+        self.assertTrue(self.finished)
+
+    def test_all_ok_still_closes(self):
+        self._stub_merge(success=["/tmp/x/a.pdf"])
+        self.win._run_batch_merge(self._selected(), _opts(zip=False))
+        self.assertEqual(self.finished, [])
+        self.assertTrue(self.closed)  # 成功仍直接关
 
 
 class BatchDialogTest(unittest.TestCase):

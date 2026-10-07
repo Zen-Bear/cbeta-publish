@@ -4,7 +4,8 @@
 两个入口共用同一 `BatchDialog`（`mode="update"|"merge"`）：
 - 共用丛书复选清单（默认全选非空；全选/全不选）。
 - 共用「来源」单选（官方书/自制书，初始值=右栏当前选择）；只显示对应策略。
-- 「更新素材」只设计素材刷新选项；「合并丛书」另有 合并/ZIP/自动备齐/报告
+- 「更新素材」只涉及素材刷新选项；更新模式＋自制来源时提示 XML 由 xml2pdf 维护；
+- 「合并丛书」另有 合并/ZIP/自动备齐/清除上次输出/报告
   与每部丛书独立分册配置。
 """
 from PySide6.QtCore import Qt
@@ -229,10 +230,25 @@ class BatchDialog(QDialog):
         self._opt.addWidget(self.chk_prepare)
         self._merge_widgets.append(self.chk_prepare)
 
+        self.chk_purge = QCheckBox("清除所选丛书的上次合并输出（含 ZIP）并清除发布标记")
+        self.chk_purge.setToolTip(
+            "开：合并前先删 output_dir/{丛书名}/（合并与 ZIP 都在内）并清除该丛书的\n"
+            "last_publish_at/dir 标记；执行前会二次确认，不可恢复。\n"
+            "关：保留上次输出（默认）。只删输出目录，不动素材库与 XML 源。")
+        self.chk_purge.setChecked(False)
+        self._opt.addWidget(self.chk_purge)
+        self._merge_widgets.append(self.chk_purge)
+
         self._row_official, self.cb_official = self._policy_combo(
             "官方书", OFFICIAL_POLICIES, 0)
         self._row_self, self.cb_self = self._policy_combo(
             "自制书", SELF_POLICIES, 0)
+
+        # XML 归属提示：仅更新模式＋自制来源时可见（更新 XML 请到 xml2pdf 侧）
+        self._xml_hint = QLabel("提示：CBETA XML 源由 xml2pdf 更新和维护，publish 只读不写。")
+        self._xml_hint.setStyleSheet("color: gray")
+        self._xml_hint.setWordWrap(True)
+        self._opt.addWidget(self._xml_hint)
 
         # 分册编辑：点击列表「分册」列任意一行进入
         self.list.itemClicked.connect(self._on_list_clicked)
@@ -270,6 +286,11 @@ class BatchDialog(QDialog):
         self.lbl_choose.setText(
             "选择丛书（默认全选非空；点击『分册』列可设置该丛书分册）："
             if on else "选择丛书（默认全选非空）：")
+        self._apply_xml_hint()
+
+    def _apply_xml_hint(self):
+        self._xml_hint.setVisible(
+            self._mode == "update" and self.rb_src_xml.isChecked())
 
     def effective_mode(self):
         """combined=当前选择；固定模式=构造时指定。"""
@@ -279,6 +300,7 @@ class BatchDialog(QDialog):
         xml = self.rb_src_xml.isChecked()
         self._row_self.setVisible(xml)
         self._row_official.setVisible(not xml)
+        self._apply_xml_hint()
 
     def run_source(self):
         """本次批量来源（对话框内选择，不再依赖右栏）。"""
@@ -346,6 +368,9 @@ class BatchDialog(QDialog):
 
     def auto_prepare(self):
         return self._mode == "merge" and self.chk_prepare.isChecked()
+
+    def purge_enabled(self):
+        return self._mode == "merge" and self.chk_purge.isChecked()
 
 
 class BatchUpdateDialog(BatchDialog):

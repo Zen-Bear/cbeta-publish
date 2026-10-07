@@ -7101,6 +7101,7 @@ class MainWindow(QMainWindow):
         self._run_batch_merge(selected, {
             "merge": dlg.merge_enabled(), "zip": dlg.zip_enabled(),
             "auto_prepare": dlg.auto_prepare(),
+            "purge": dlg.purge_enabled(),
             "official_policy": dlg.official_policy(), "self_policy": dlg.self_policy(),
             "save_report": dlg.save_report(),
             "merge_fmts": merge_fmts, "zip_fmts": zip_fmts,
@@ -7187,6 +7188,51 @@ class MainWindow(QMainWindow):
         zip_fmts = opts["zip_fmts"]
         prepare_fmts = list(dict.fromkeys(merge_fmts + zip_fmts))
         prep_failed = []
+        purge_marks = {}
+        # 阶段零 清除上次输出（勾选时）：删 output_dir/{丛书名}/ 并清发布标记
+        if opts.get("purge"):
+            out_root = self._out_dir()
+            targets = []
+            for _p, _d in selected:
+                _name = (_d.get("name") or "").strip()
+                if not _name:
+                    purge_marks[str(_p)] = "空白名，跳过清除"
+                    continue
+                targets.append((_p, _name, out_root / _name))
+            if targets:
+                _show = "\n".join(str(t[2]) for t in targets[:10])
+                if len(targets) > 10:
+                    _show += f"\n……等共 {len(targets)} 个目录"
+                _ret = QMessageBox.question(
+                    self, "确认清除",
+                    "将删除以下上次合并输出目录（不可恢复），并清除发布标记：\n"
+                    f"{_show}\n\n继续批量合并吗？",
+                    QMessageBox.Yes | QMessageBox.No)
+                if _ret != QMessageBox.Yes:
+                    self.detail.setText("已取消批量合并（清除前）")
+                    return
+            import shutil
+            for _p, _name, _dir in targets:
+                try:
+                    if _dir.exists():
+                        shutil.rmtree(_dir)
+                        purge_marks[str(_p)] = f"已清除 { _dir.name}/"
+                    else:
+                        purge_marks[str(_p)] = "无输出可清"
+                except Exception as e:
+                    purge_marks[str(_p)] = f"清除失败：{e}"
+            for _p, _d in selected:
+                if str(_p) in purge_marks and purge_marks[str(_p)].startswith("已清除"):
+                    _d.pop("last_publish_at", None)
+                    _d.pop("last_publish_dir", None)
+                    try:
+                        self._commit_publish_meta(str(_p), _d)
+                    except Exception:
+                        pass
+                    try:
+                        self._last_publish.pop(str(_p), None)
+                    except Exception:
+                        pass
         # 阶段一 备齐
         if opts["auto_prepare"] and prepare_fmts:
             all_works = []
@@ -7235,7 +7281,8 @@ class MainWindow(QMainWindow):
             name = d.get("name", "")
             out_dir = out_root / name
             r = {"name": name, "status": "ok", "failed": [], "merge": [], "zip": [],
-                 "reason": "", "out_dir": str(out_dir)}
+                 "skipped": [], "reason": "", "out_dir": str(out_dir),
+                 "purged": purge_marks.get(str(path), "")}
             works = d.get("work_ids") or []
             if not works:
                 r["status"] = "skipped"; r["reason"] = "丛书为空"
@@ -7267,6 +7314,7 @@ class MainWindow(QMainWindow):
                         cancelled = True
                     r["merge"] = list(res["success"])
                     r["failed"].extend(res["failed"])
+                    r["skipped"].extend(res.get("skipped") or [])
                     if res["success"]:
                         r["status"] = "partial" if (res["failed"] or res["skipped"]) else "ok"
                     elif res["failed"]:
@@ -7302,26 +7350,44 @@ class MainWindow(QMainWindow):
                 d["last_publish_at"] = datetime.datetime.utcnow().isoformat() + "Z"
                 d["last_publish_dir"] = str(out_dir)
                 self._commit_publish_meta(str(path), d)
+            # 失败归因：没开自动备齐＋有缺失，最可能就是缺素材
+            if not r["reason"] and (r["skipped"] or r["status"] in ("failed", "partial")):
+                if r["skipped"] and not opts["auto_prepare"]:
+                    r["reason"] = ("素材缺失：未勾选「合并前自动备齐」，"
+                                   "请先跑「批量更新素材」或勾选后重试")
+                elif r["skipped"]:
+                    r["reason"] = "备齐后仍有缺失（见报告明细）"
             results.append(r)
             if cancelled:
                 for pj, dj in selected[i + 1:]:
                     results.append({"name": dj.get("name", ""), "status": "cancelled",
                                     "failed": [], "merge": [], "zip": [],
-                                    "reason": "用户取消", "out_dir": ""})
+                                    "skipped": [], "reason": "用户取消", "out_dir": ""})
                 break
-        try:
-            dlg.close()
-        except Exception:
-            pass
-        if cancelled:
-            pstate["finish"](["已取消批量合并（已完成部保留）。"])
         if opts["save_report"]:
             self._write_batch_merge_report(results, opts, prep_failed)
+        _n_ok = sum(1 for r in results if r["status"] == "ok")
+        _n_bad = sum(1 for r in results if r["status"] in ("failed", "partial"))
+        if cancelled:
+            pstate["finish"](["已取消批量合并（已完成部保留）。"])
+        elif _n_bad:
+            _rep = str(self._out_dir() / "批量合并报告.txt") if opts["save_report"] else "（报告未落盘）"
+            pstate["finish"]([
+                f"批量合并完成：成功 {_n_ok} / 共 {len(results)}"
+                f"（失败 {sum(1 for r in results if r['status']=='failed')}"
+                f"，部分 {sum(1 for r in results if r['status']=='partial')}）。",
+                f"明细报告：{_rep}",
+                "各部原因见「丛书信息」页签；关掉本窗口后可重开批量处理重试。"])
+        else:
+            try:
+                dlg.close()
+            except Exception:
+                pass
         self._load_coll_works()
         self._show_batch_summary("批量合并完成", results, key="merge")
         self.tab_bottom.setCurrentIndex(1)
-        self.detail.setText(f"批量合并完成：成功 {sum(1 for r in results if r['status']=='ok')}"
-                            f" / 共 {len(results)}")
+        self.detail.setText(f"批量合并完成：成功 {_n_ok} / 共 {len(results)}"
+                            + ("，有失败（见丛书信息页签/报告）" if _n_bad else ""))
 
     def _write_batch_merge_report(self, results, opts, prep_failed):
         import datetime
@@ -7352,6 +7418,10 @@ class MainWindow(QMainWindow):
                 lines.append(f"    合并: {len(r['merge'])} 个文件")
             if r["zip"]:
                 lines.append(f"    ZIP: {len(r['zip'])} 个文件")
+            if r.get("purged"):
+                lines.append(f"    清除：{r['purged']}")
+            for s in (r.get("skipped") or [])[:20]:
+                lines.append(f"    缺素材：{s}")
             for f in r["failed"][:20]:
                 lines.append(f"    失败：{f}")
         path = out / "批量合并报告.txt"
@@ -7371,8 +7441,22 @@ class MainWindow(QMainWindow):
                 f'{_html.escape(Path(f).name)}</a>' for f in files[:5])
             more = f" …共 {len(files)} 个" if len(files) > 5 else ""
             extra = f"  原因：{_html.escape(r['reason'])}" if r.get("reason") else ""
+            miss = ""
+            if r.get("skipped"):
+                _sk = list(r["skipped"])
+                _shown = "、".join(_html.escape(str(x)) for x in _sk[:3])
+                if len(_sk) > 3:
+                    _shown += f"…等共 {len(_sk)} 部"
+                miss += f"  缺素材：{_shown}"
+            if r.get("failed") and r["status"] in ("failed", "partial"):
+                _fl = list(r["failed"])
+                _shown = "；".join(_html.escape(str(x)) for x in _fl[:2])
+                if len(_fl) > 2:
+                    _shown += f"；…等共 {len(_fl)} 条"
+                miss += f"  失败：{_shown}"
             rows.append(f"[{r['status']}] {_html.escape(r['name'])}："
-                        f"产物 {len(files)}{('：' + links + more) if links else ''}{extra}")
+                        f"产物 {len(files)}{('：' + links + more) if links else ''}"
+                        f"{miss}{extra}")
         self.lbl_coll_info.setText("<br>".join(rows) or "无内容")
         self.tab_bottom.setCurrentIndex(1)
 
