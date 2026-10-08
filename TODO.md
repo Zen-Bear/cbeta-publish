@@ -2,7 +2,7 @@
 
 > 设计文档：`docs/设计总案.md`（总方案）、`docs/UI设计.md`（UI）、
 > `docs/链路B-设计契约.md`（与 xml2pdf 的跨仓调用契约）。
-> 测试：`python -m unittest discover tests`（当前 667 项通过）。
+> 测试：`python -m unittest discover tests`（当前 676 项通过）。
 
 ## 约定（务必遵守）
 
@@ -96,7 +96,7 @@
 - [x] 缓存页增加「校验目录」（`verify_dir`）统计与清理。
 
 ### P2 — 校验可配置阈值（已完成）
-- [x] 全局配置 `xml2pdf.verify_max_diff`（默认 5）与 `verify_diff_lines`（默认 5）；
+- [x] 全局配置 `xml2pdf.verify_max_diff`（原默认 5；P10 起默认 0）与 `verify_diff_lines`（默认 5）；
   设置页「自制E书」以 0–50 数值输入，`bridge.verify_work` 始终透传上游
   `--verify-max-diff`/`--verify-diff-lines`（钳制 0–50）。上游预设 `verify` 段无此二项，仅 CLI 支持。
 
@@ -218,6 +218,43 @@
   落盘；临时 `_config_path`/`collections_dir`＋`test_no_pollution.py` 护栏）。
 - 文档：`docs/UI设计.md`（按钮/对话框）＋`docs/链路B-设计契约.md` §4（`work_notes`）＋本 P9 打勾。
 - 风险：网页为通用整页转文本按行解析（不做站点适配/按链接）；抓取在 UI 线程（单页 30s 超时，后续可线程化）。
+
+### P10 — 跨边校验复用＋验收档位（已完成，676 测试通过）
+- 背景：上游 P2 提案（`E:/dev/cbeta/xml2pdf/docs/上游-P2校验结论跨边复用提案.md`）经 publish
+  审核，意见见 `docs/上游-P2复用提案-下游审核意见.md`（同文已就地追加为该提案 §9）；
+  指纹入参改进见 `docs/上游-指纹presets入参提案.md`。目标：上游 `report.json` 的结论可被
+  publish 复用（跳过重复校验），并加"注释差异"验收档。
+- 上游依赖（待上游落地）：`verify_fingerprint(..., presets=<effective dict>)`——三项
+  （`_strip_no_from`/`_theme_css_digest`/`_canon_annotations`）由 presets 派生；
+  首选裸预设升为出厂深合并（或公开"取最终生效配置"API），否则验收改为"三形态传同一
+  effective 配置"（publish 自包 run 取 dict）；`annotations` 相对路径 publish 绝对化后传；
+  预设/`config.user.json` `verify.maxDiff` 改 0（`diff_lines` 保 5）；CLI 文档注明
+  `--verify-max-diff 0`；fail 时照写 `diff_scope`（已完成）。
+- 多源口径（再审核定，P2 提案 §9.7）：**上游无需改**——publish 采用「输入集」模型，
+  GUI 聚合报告天然支持；CLI 多源报告不导入。
+- [x] `verify_cache` schema v2（输入集）：`entries[work][fmt].sets =
+  [{fingerprint, inputs:[源基名…], accept, product}]`；`is_fresh`＝存在一个 set 其
+  `inputs` 恰为**当前全部源**且指纹逐字命中；旧 schema 1 忽略（本地库尚不存在，零成本）。
+- [x] 验收两档（publish 侧，上游不改 verdict 逻辑）：strict＝`missing==0 且 extra==0`；
+  notes＝`(missing+extra) ≤ 10` 且 `diff_scope=="notes_only"`；其余人工检验且**放行不记库**；
+  常量 `ACCEPT_NOTES_DIFF_MAX=10`；次序＝先按档位得接受集，再做 docx→pdf 覆盖提升。
+- [x] 惰性导入（`_send_coll_to_verify`）：按报告 `inputs.xml_files` **同序**映射当前源文件
+  算指纹（聚合/单源同一路径；CLI 多源报告不导入；顺序或集合任一不符即不命中；GUI 合并
+  临时名无法映射时静默不导入）；stale 时扫 `xml2pdf.verify_reports_dir`
+  （默认解析生效 `source.verify_root`，可显式覆盖；解析不到=关）→ 匹配（`schema==1`／
+  `work`／指纹相等／`inputs.xml_files` 与 `formal_outputs` 非空）＋两档验收 → 记库；
+  一次运行缓存扫描；结果页一行"上游导入 N 条"。
+- [x] 判读链：`_do_import_verified` 档位替换"仅 verdict pass"、结果页标注"仅注释差异"；
+  `VerifyWorker` 聚合 `nums`、进度行区分通过／通过（仅注释差异）／未通过。
+- [x] 阈值 0：`settings_dialog.DEFAULT_CONFIG`、`config/app.default.json` 的
+  `verify_max_diff` 5→0（运行期 `config/app.json` 由用户手动改，不动真实数据）。
+- [x] 测试：档位真值表（0/0、notes≤10、body≤10、notes>10、数未知）；覆盖提升；输入集模型
+  （全源 set 命中/部分源不命中/顺序不符不命中/合并名不导入/CLI 多源不导入/GUI 聚合 TX0011
+  用例）；跨边导入四条件＋档位；reports dir 解析与覆盖；阈值 0 默认；隔离护栏照旧。
+  上游落地前先以假指纹打桩测导入链。
+- [x] 文档：链路B §5（验收档＋逐源复用＋报告根＋阈值 0）＋`docs/设计总案.md` 测试数同步。
+- 备注：旧报告（阈值 5）与旧记录全部失效，上游按 0 **重跑一次**后跨边复用生效；
+  1–5 字正文差异的书从"自动入库"转为"人工检验"（符合验收档设计）。
 
 ## 备注
 

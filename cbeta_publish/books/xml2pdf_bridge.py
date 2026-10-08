@@ -723,12 +723,15 @@ def verify_work(work: str, fmts, out_dir, config: dict, preset=None, stop=None) 
     run_wrap = write_run_wrapper(config, preset) if preset else None
     # 校验阈值（全局配置）：缺+多 ≤ verify_max_diff 判 OK；verify_diff_lines 为失败报告上下文行数。
     # 上游仅 CLI 支持（预设 verify 段无此二项），故始终透传；钳制 0–50。
+    # 默认 max_diff=0（严格：仅 0/0 通过；注释差异由 publish 验收档处理）、diff_lines=5。
     try:
-        _maxd = int(_cfg(config).get("verify_max_diff", 5))
+        _maxd = _cfg(config).get("verify_max_diff", 0)
+        _maxd = 0 if _maxd is None else int(_maxd)
     except Exception:
-        _maxd = 5
+        _maxd = 0
     try:
-        _dl = int(_cfg(config).get("verify_diff_lines", 5))
+        _dl = _cfg(config).get("verify_diff_lines", 5)
+        _dl = 5 if _dl is None else int(_dl)
     except Exception:
         _dl = 5
     _maxd = max(0, min(50, _maxd))
@@ -1037,7 +1040,8 @@ def _read_verify_json(report_path):
 
     - 容错：utf-8-sig；解析失败／非 dict／`schema != 1`／无 `fmts` → None；
     - 归一：`{fmts: {fmt: {verdict, missing, extra, reason, diff_scope,
-      formal_outputs}}, coverage}`；未知字段忽略（上游约定）。
+      formal_outputs, fingerprint}}, coverage, inputs}`，其中 `inputs` 为
+      `inputs.xml_files` 基名列表（保序，供跨边指纹重算）；未知字段忽略（上游约定）。
     """
     jp = _paired_json(report_path)
     if jp is None:
@@ -1051,13 +1055,14 @@ def _read_verify_json(report_path):
     fmts_raw = data.get("fmts")
     if not isinstance(fmts_raw, dict):
         return None
-    out = {"fmts": {}, "coverage": {}}
+    out = {"fmts": {}, "coverage": {}, "inputs": []}
     for fmt, info in fmts_raw.items():
         if not fmt or not isinstance(info, dict):
             continue
         _mi = info.get("missing")
         _ex = info.get("extra")
         _scope = info.get("diff_scope")
+        _fp = info.get("fingerprint")
         out["fmts"][str(fmt)] = {
             "verdict": str(info.get("verdict") or ""),
             "missing": _mi if isinstance(_mi, int) else None,
@@ -1066,9 +1071,13 @@ def _read_verify_json(report_path):
             "diff_scope": _scope if _scope in _DIFF_SCOPE_RANK else None,
             "formal_outputs": [str(p) for p in (info.get("formal_outputs") or [])
                                if isinstance(p, (str, Path)) and str(p)],
+            "fingerprint": _fp if isinstance(_fp, str) and _fp else None,
         }
-    _cov = (data.get("inputs") or {}).get("coverage") \
-        if isinstance(data.get("inputs"), dict) else None
+    _inp = data.get("inputs") if isinstance(data.get("inputs"), dict) else {}
+    for x in (_inp.get("xml_files") or []):
+        if isinstance(x, dict) and x.get("name"):
+            out["inputs"].append(str(x["name"]))
+    _cov = _inp.get("coverage")
     if isinstance(_cov, dict):
         out["coverage"] = {str(k): str(v) for k, v in _cov.items() if k and v}
     return out
@@ -1119,6 +1128,62 @@ def verify_report_comparison_files(path) -> dict:
         if files:
             out[f] = files
     return out
+
+
+#: 注释差异自动接受上限（total=缺+多 ≤ 此值 且 diff_scope=="notes_only"）。
+#: 与验证阈值（verify_max_diff=0，严格仅 0/0）互补：0 差异直接入库；小注释差异也入库。
+ACCEPT_NOTES_DIFF_MAX = 10
+
+
+def accept_tier(passed: bool, mi, ex, scope) -> str | None:
+    """单格式接受档：'strict' | 'notes_only' | None（人工）。
+
+    - 逐格式判定通过 → strict；
+    - 未通过但 missing/extra 均为 int、合计 ≤ ACCEPT_NOTES_DIFF_MAX 且
+      scope=="notes_only" → notes_only；
+    - 余下（正文差异/超限/数未知/未判定）→ None，走人工检验。
+    """
+    if passed:
+        return "strict"
+    if (isinstance(mi, int) and isinstance(ex, int)
+            and (mi + ex) <= ACCEPT_NOTES_DIFF_MAX and scope == "notes_only"):
+        return "notes_only"
+    return None
+
+
+def verify_json_inputs_names(report_path):
+    """配对 report.json 的 `inputs.xml_files` 基名列表（保序）；无则 None。"""
+    rj = _read_verify_json(report_path)
+    if rj is None:
+        return None
+    return list(rj.get("inputs") or [])
+
+
+def verify_reports_dir(config):
+    """上游报告扫描根：显式 `xml2pdf.verify_reports_dir` 优先，否则取生效预设的
+    `source.verify_root`；都无则 None（跨边导入功能关闭）。"""
+    try:
+        x = _cfg(config)
+        v = str(x.get("verify_reports_dir") or "").strip()
+        if v:
+            return Path(v)
+        pp = resolve_preset(config)
+        d = load_preset_dict(pp, config) if pp else {}
+        v2 = str(((d or {}).get("source") or {}).get("verify_root") or "").strip()
+        return Path(v2) if v2 else None
+    except Exception:
+        return None
+
+
+def find_upstream_reports(config, reports_dir):
+    """经上游公开接口扫描报告根 → [{id,title,dir,report_json,report_txt}]；失败回 []。"""
+    try:
+        _ensure_path(str(_x2p_root(config)))
+        from pycbeta.verify import find_verify_reports
+        got = find_verify_reports(str(reports_dir))
+        return [e for e in (got or []) if isinstance(e, dict)]
+    except Exception:
+        return []
 
 
 def verify_report_numbers(path) -> dict:
@@ -1342,12 +1407,33 @@ def verify_fingerprint_available(config) -> bool:
         return False
 
 
-def verify_fingerprint(work: str, fmt: str, config, preset=None):
-    """上游校验指纹预检：返回当前 (work, fmt) 的指纹，或 None。
+def _effective_presets(config, preset_path):
+    """生效配置 dict（上游公开 API；与 GUI run 形态同口径）。
 
-    None = 不能证明仍然有效（上游未实现/算不出/缺输入），调用方一律重验。
-    无副作用（不下载不渲染不写文件）。阈值取 publish 全局配置并钳制 0–50，
-    与 `verify_work` 透传值一致。
+    经临时 run 包装（仓库 run.json 槽＋config-json 指预设）解析；裸预设已由上游
+    出厂深合并。返回 (eff_dict, wrap_path)；失败回 (None, wrap)（调用方判不可复用）。
+    wrap 由调用方用后经 `remove_temp_preset` 删除。
+    """
+    _ensure_path(str(_x2p_root(config)))
+    from pycbeta.theme import load_effective_presets
+    wrap = write_run_wrapper(config, preset_path) if preset_path else None
+    try:
+        eff = load_effective_presets(str(wrap) if wrap else None)
+        return (eff if isinstance(eff, dict) else None), wrap
+    except Exception:
+        return None, wrap
+
+
+def verify_fingerprint(work: str, fmt: str, config, preset=None, xml_files=None):
+    """单（work, fmt）校验指纹预判：返回当前输入的指纹，None 表示不可复用。
+
+    - xml_files 为空时上游自行定位（旧行为）；传入则按该有序列表计算
+      （跨边比对须与报告 `inputs.xml_files` 同序）；
+    - 以生效配置 dict（`presets=`）调用上游，与 GUI 报告同形；另传
+      `config_path=包装路径` 贴近 GUI（注释相对路径等边缘求同）；
+    - 阈值取 publish 全局（`verify_max_diff` 默认 0、`verify_diff_lines` 默认 5），
+      钳制 0–50，与 `verify_work` 透传值一致。
+    无副作用（不下载不写盘）。
     """
     try:
         _ensure_path(str(_x2p_root(config)))
@@ -1358,16 +1444,31 @@ def verify_fingerprint(work: str, fmt: str, config, preset=None):
     except Exception:
         return None
     try:
-        md = int((_cfg(config).get("verify_max_diff", 5)) or 5)
+        md = _cfg(config).get("verify_max_diff", 0)
+        md = 0 if md is None else int(md)
     except (TypeError, ValueError):
-        md = 5
+        md = 0
     try:
-        dl = int((_cfg(config).get("verify_diff_lines", 5)) or 5)
+        dl = _cfg(config).get("verify_diff_lines", 5)
+        dl = 5 if dl is None else int(dl)
     except (TypeError, ValueError):
         dl = 5
     try:
-        fp = fn(str(work), str(fmt), config_path=preset or None,
-                max_diff=max(0, min(50, md)), diff_lines=max(0, min(50, dl)))
+        eff, wrap = _effective_presets(config, preset)
+        if not isinstance(eff, dict):
+            return None
+        try:
+            fp = fn(str(work), str(fmt),
+                    xml_files=[str(p) for p in (xml_files or [])] or None,
+                    config_path=str(wrap) if wrap else None, presets=eff,
+                    max_diff=max(0, min(50, md)),
+                    diff_lines=max(0, min(50, dl)))
+        finally:
+            if wrap is not None:
+                try:
+                    remove_temp_preset(wrap)
+                except Exception:
+                    pass
     except Exception:
         return None
     return fp if isinstance(fp, str) and fp else None

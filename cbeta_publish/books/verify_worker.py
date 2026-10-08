@@ -45,6 +45,7 @@ class VerifyWorker(QThread):
                 fmts_status = {}
                 pending_all = {}
                 scopes = {}
+                nums_all = {}
                 overall = None
                 for rp in reports:
                     one = b.verify_report_formats(rp)
@@ -62,6 +63,9 @@ class VerifyWorker(QThread):
                             fmts_status[fmt] = True
                     for fmt, reason in one_pending.items():
                         pending_all.setdefault(fmt, reason)
+                    # 验收档用缺数/范围：多报告同格式取首个判定报告的
+                    for fmt, _ne in b.verify_report_numbers(rp).items():
+                        nums_all.setdefault(fmt, _ne)
                     # diff_scope（json-only）：多报告同格式取最保守
                     for fmt, sc in b.verify_report_diff_scopes(rp).items():
                         scopes[fmt] = b.conservative_diff_scope([scopes.get(fmt), sc])
@@ -76,6 +80,13 @@ class VerifyWorker(QThread):
                 if fmts_status:
                     passed = [f for f, v in fmts_status.items() if v]
                     failed_f = [f for f, v in fmts_status.items() if not v]
+                    def _flab(_f):
+                        _mi, _ex = nums_all.get(_f, (None, None))
+                        _t = b.accept_tier(False, _mi, _ex, scopes.get(_f))
+                        if _t == "notes_only":
+                            return f"{_f} 未过（仅注释）"
+                        _sct = b.diff_scope_text(scopes.get(_f))
+                        return f"{_f} 未过" + (f"（{_sct}）" if _sct else "")
                     _sc = b.diff_scope_text(b.conservative_diff_scope(
                         [scopes.get(f) for f in failed_f]))
                     if passed and not failed_f:
@@ -85,8 +96,7 @@ class VerifyWorker(QThread):
                         ok += 1
                         self.progress.emit(
                             i, f"{REPLACE_LAST}生成并校验 {w} ...部分通过"
-                               f"（{'/'.join(passed)} 过，{'/'.join(failed_f)} 未过"
-                               + (f"；{_sc}" if _sc else "") + "）", "ok")
+                               f"（{'/'.join(passed)} 过，{'/'.join(_flab(f) for f in failed_f)}）", "ok")
                     else:
                         failed.append(w)
                         self.progress.emit(

@@ -171,7 +171,8 @@ class VerifyReportJsonTest(unittest.TestCase):
     def test_json_verdicts_reading(self):
         from cbeta_publish.books import xml2pdf_bridge as b
         rp = self._mk(body={"schema": 1, "fmts": {
-            "docx": {"verdict": "pass", "missing": 0, "extra": 0},
+            "docx": {"verdict": "pass", "missing": 0, "extra": 0,
+                     "fingerprint": "fp-docx"},
             "pdf": {"verdict": "undetermined", "reason": "covered:docx"},
             "epub": {"verdict": "fail", "missing": 48, "extra": 97,
                      "diff_scope": "body"},
@@ -186,6 +187,9 @@ class VerifyReportJsonTest(unittest.TestCase):
         self.assertEqual(b.verify_report_diff_scopes(rp), {"epub": "body"})
         self.assertEqual(b.verify_json_formats(rp),
                          ["docx", "epub", "md", "pdf"])
+        self.assertEqual(b._read_verify_json(rp)["fmts"]["docx"]["fingerprint"],
+                         "fp-docx")
+        self.assertIsNone(b._read_verify_json(rp)["fmts"]["epub"]["fingerprint"])
 
     def test_json_wins_over_txt(self):
         from cbeta_publish.books import xml2pdf_bridge as b
@@ -244,6 +248,34 @@ class VerifyReportJsonTest(unittest.TestCase):
         self.assertIsNone(b.conservative_diff_scope([None, ""]))
         self.assertEqual(b.diff_scope_text("notes_only"), "差异仅注释")
         self.assertEqual(b.diff_scope_text(None), "")
+
+    def test_accept_tier_truth_table(self):
+        from cbeta_publish.books import xml2pdf_bridge as b
+        self.assertEqual(b.accept_tier(True, 0, 0, None), "strict")
+        self.assertEqual(b.accept_tier(True, 48, 97, "body"), "strict")
+        self.assertEqual(b.accept_tier(False, 0, 0, "notes_only"), "notes_only")
+        self.assertEqual(b.accept_tier(False, 4, 6, "notes_only"), "notes_only")
+        self.assertEqual(b.accept_tier(False, 0, 10, "notes_only"), "notes_only")
+        self.assertIsNone(b.accept_tier(False, 0, 0, None))   # 无范围信息
+        self.assertIsNone(b.accept_tier(False, 5, 6, "notes_only"))   # 11 超限
+        self.assertIsNone(b.accept_tier(False, 5, 6, "notes_only"))   # 11 超限
+        self.assertIsNone(b.accept_tier(False, 4, 6, "body"))        # 正文差异
+        self.assertIsNone(b.accept_tier(False, 4, 6, "unknown"))
+        self.assertIsNone(b.accept_tier(False, None, None, "notes_only"))
+        self.assertIsNone(b.accept_tier(False, 4, 6, None))
+        self.assertIsNone(b.accept_tier(False, 4, None, "notes_only"))
+
+    def test_json_inputs_names(self):
+        from cbeta_publish.books import xml2pdf_bridge as b
+        rp = self._mk(body={"schema": 1,
+                            "inputs": {"xml_files": [{"name": "A.xml"},
+                                                     {"name": "B.xml"}]},
+                            "fmts": {"docx": {"verdict": "pass"}}})
+        self.assertEqual(b.verify_json_inputs_names(rp), ["A.xml", "B.xml"])
+        (self.dir / "T0001 长阿含经（验证）" / "report.json").unlink()
+        rp2 = self._mk()
+        self.assertIsNone(b.verify_json_inputs_names(rp2))  # 无配对 json
+        self.assertIsNone(b.verify_json_inputs_names(self.dir / "nope.txt"))
 
 
 class VerifySendImportTest(unittest.TestCase):
@@ -953,6 +985,90 @@ class VerifySendImportTest(unittest.TestCase):
         self.assertEqual(len(res["ok"]), 1)
         self.assertEqual(res["fail"], [])
         self.assertIn("未入 epub", res["ok"][0])
+
+    def test_import_notes_tier_moves_and_marks(self):
+        # fail + 缺4/多6 + notes_only → 自动入库（仅注释），标签带档位
+        import cbeta_publish.books.xml2pdf_bridge as b
+        win = self.win
+        vdir = self.tmp / "vnotes"
+        vdir.mkdir(parents=True, exist_ok=True)
+        (vdir / "T0001 大般若經.docx").write_bytes(b"DOCX")
+        (vdir / "T0001 大般若經.epub").write_bytes(b"EPUB")
+        vd = vdir / "T0001 大般若經（验证）"
+        vd.mkdir(parents=True, exist_ok=True)
+        (vd / "report.txt").write_text("=== T0001\n", encoding="utf-8")
+        (vd / "report.json").write_text(json.dumps({
+            "schema": 1,
+            "fmts": {"docx": {"verdict": "pass"},
+                     "epub": {"verdict": "fail", "missing": 4, "extra": 6,
+                              "diff_scope": "notes_only"}}},
+            ensure_ascii=False), encoding="utf-8")
+        base = self.tmp / "nlib"
+        res = win._do_import_verified(["T0001"], vdir, base)
+        self.assertEqual((base / "docx" / "T0001 大般若經.docx").read_bytes(),
+                         b"DOCX")
+        self.assertEqual((base / "epub" / "T0001 大般若經.epub").read_bytes(),
+                         b"EPUB")
+        self.assertEqual(res["fail"], [])
+        self.assertEqual(res["accept"], {("T0001", "docx"): "strict",
+                                        ("T0001", "epub"): "notes_only"})
+        self.assertTrue(any("仅注释" in x for x in res["ok"]), res["ok"])
+
+    def test_import_body_scope_goes_review(self):
+        # fail + 缺4/多2 + body → 不入库，走人工；标签带范围与缺数
+        import cbeta_publish.books.xml2pdf_bridge as b
+        win = self.win
+        vdir = self.tmp / "vbody"
+        vdir.mkdir(parents=True, exist_ok=True)
+        (vdir / "T0001 大般若經.epub").write_bytes(b"EPUB")
+        vd = vdir / "T0001 大般若經（验证）"
+        vd.mkdir(parents=True, exist_ok=True)
+        (vd / "report.txt").write_text("=== T0001\n", encoding="utf-8")
+        (vd / "report.json").write_text(json.dumps({
+            "schema": 1,
+            "fmts": {"epub": {"verdict": "fail", "missing": 4, "extra": 2,
+                              "diff_scope": "body"}}}, ensure_ascii=False),
+            encoding="utf-8")
+        base = self.tmp / "blib"
+        res = win._do_import_verified(["T0001"], vdir, base)
+        self.assertFalse((base / "epub" / "T0001 大般若經.epub").exists())
+        self.assertTrue(any("含正文差异" in x for x in res["fail"]), res["fail"])
+        self.assertTrue(any("缺4/多2" in x for x in res["fail"]), res["fail"])
+        self.assertEqual(len(res["review"]), 1)
+        self.assertIn("含正文差异", res["review"][0][4])
+
+    def test_worker_notes_tier_label(self):
+        # epub 未过但 notes_only → 进度行带「仅注释」
+        from cbeta_publish.books.verify_worker import VerifyWorker
+        import cbeta_publish.books.xml2pdf_bridge as b
+        real = b.verify_work
+
+        def fake(work, fmts, out_dir, config, preset=None, stop=None):
+            out = Path(out_dir)
+            out.mkdir(parents=True, exist_ok=True)
+            vd = out / f"{work} 大般若經（验证）"
+            vd.mkdir(parents=True, exist_ok=True)
+            rp = vd / "report.txt"
+            rp.write_text("[T0001] 2 format: 1[docx=OK(0/0)], 2[epub=FAIL(4/97)]\n",
+                          encoding="utf-8")
+            (vd / "report.json").write_text(json.dumps({
+                "schema": 1,
+                "fmts": {"docx": {"verdict": "pass"},
+                         "epub": {"verdict": "fail", "missing": 4,
+                                  "extra": 6, "diff_scope": "notes_only"}}},
+                ensure_ascii=False), encoding="utf-8")
+            return rp
+
+        b.verify_work = fake
+        msgs = []
+        try:
+            w = VerifyWorker(["T0001"], ["docx", "epub"],
+                             self.tmp / "wnotes", self.win.config)
+            w.progress.connect(lambda done, label, level: msgs.append(label))
+            w.run()
+        finally:
+            b.verify_work = real
+        self.assertTrue(any("仅注释" in m for m in msgs), msgs)
 
     def test_import_json_scope_and_fail_label(self):
         # report.json：docx 过、epub 未过（差异含正文）→ 只入 docx；"未入"带范围

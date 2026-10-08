@@ -53,7 +53,7 @@
     "preset": "A5 霞鹜文楷",
     "cbeta_ebook": "E:\\dev\\cbeta\\publish\\cbeta_xml",
     "verify_build": false,
-    "verify_max_diff": 5,
+    "verify_max_diff": 0,
     "verify_diff_lines": 5,
     "verify_reuse": true,
     "reuse_pdf_companion": true

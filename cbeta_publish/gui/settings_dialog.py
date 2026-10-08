@@ -52,7 +52,7 @@ DEFAULT_CONFIG = {
     "xml2pdf": {"path": "E:/dev/cbeta/xml2pdf",
                 "cbeta_ebook": str(PROJECT_ROOT / "cbeta_xml"),
                 "preset": "", "verify_build": False,
-                "verify_max_diff": 5, "verify_diff_lines": 5, "verify_reuse": True,
+                "verify_max_diff": 0, "verify_diff_lines": 5, "verify_reuse": True,
                 "reuse_pdf_companion": True},
     "catalog": {"filters": {"tripitaka": {"hidden": []}, "dynasty": {"hidden": []}, "vol": {"hidden": []}}},
     "cover": {
@@ -567,9 +567,10 @@ class SettingsDialog(QDialog):
         _x2p = self._cfg.get("xml2pdf", {}) or {}
         self.sp_verify_maxdiff = self._no_wheel_until_focused(QSpinBox())
         self.sp_verify_maxdiff.setRange(0, 50)
-        self.sp_verify_maxdiff.setValue(int(_x2p.get("verify_max_diff", 5) or 5))
+        self.sp_verify_maxdiff.setValue(int(_x2p.get("verify_max_diff", 0) or 0))
         self.sp_verify_maxdiff.setToolTip(
-            "校验阈值：报告里 缺失+多余 行数 ≤ 此值判为通过（默认 5；透传上游 --verify-max-diff）")
+            "校验阈值：报告里 缺失+多余 行数 ≤ 此值判为通过（默认 0，即严格零差异；"
+            "≤10 且差异仅注释的可自动入库；透传上游 --verify-max-diff）")
         form.addRow("校验阈值（缺+多）", self.sp_verify_maxdiff)
         self.sp_verify_difflines = self._no_wheel_until_focused(QSpinBox())
         self.sp_verify_difflines.setRange(0, 50)
@@ -1058,7 +1059,7 @@ class SettingsDialog(QDialog):
             x2p.get("cbeta_ebook") or str(PROJECT_ROOT / "cbeta_xml")))
         self._reload_preset_combo(keep=x2p.get("preset", ""))
         (self.rb_build_verify if x2p.get("verify_build") else self.rb_build_noverify).setChecked(True)
-        self.sp_verify_maxdiff.setValue(max(0, min(50, int(x2p.get("verify_max_diff", 5) or 5))))
+        self.sp_verify_maxdiff.setValue(max(0, min(50, int(x2p.get("verify_max_diff", 0) or 0))))
         self.sp_verify_difflines.setValue(max(0, min(50, int(x2p.get("verify_diff_lines", 5) or 5))))
         self.chk_verify_reuse.setChecked(bool(x2p.get("verify_reuse", True)))
         self.chk_reuse_pdf_docx.setChecked(bool(x2p.get("reuse_pdf_companion", True)))

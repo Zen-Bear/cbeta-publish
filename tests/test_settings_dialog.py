@@ -499,12 +499,13 @@ class SettingsDialogTest(unittest.TestCase):
         self.assertFalse(d2.chk_reuse_pdf_docx.isChecked())
 
     def test_verify_thresholds_default_and_roundtrip(self):
-        # 校验阈值/上下文行数：0–50，默认 5；落盘回读
+        # 校验阈值/报告行数：范围 0–50；max_diff 默认 0（严格）、diff_lines 默认 5；回写
         dlg = self._dlg()
         for sp in (dlg.sp_verify_maxdiff, dlg.sp_verify_difflines):
             self.assertEqual(sp.minimum(), 0)
             self.assertEqual(sp.maximum(), 50)
-            self.assertEqual(sp.value(), 5)
+        self.assertEqual(dlg.sp_verify_maxdiff.value(), 0)
+        self.assertEqual(dlg.sp_verify_difflines.value(), 5)
         dlg.sp_verify_maxdiff.setValue(3)
         dlg.sp_verify_difflines.setValue(7)
         out = dlg._collect()["xml2pdf"]

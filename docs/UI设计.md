@@ -232,10 +232,12 @@
   - 分册文件名模板（`merge.name_template`，缺省 `{coll}.{nn}.{seg}`，见 §7 命名）。
     模式/深度/模板/阈值均落盘（`merge.*`＋`pdf.split_pages`/`epub.split_items`）。
 - **自制E书**：**制作书籍：○校验 ○无校验**（`xml2pdf.verify_build`）——选校验后，
-  右栏 `[自制]/[重制]` 生成后逐本校验、仅通过项导入；校验阈值（缺+多，`verify_max_diff`，
-  默认 5）与报告失败上下文行数（`verify_diff_lines`，默认 5）均为 0–50 的数值输入
-  （透传上游 `--verify-max-diff`/`--verify-diff-lines`）；**校验复用**复选
-  （`xml2pdf.verify_reuse`，默认开：源未变时跳过校验，需上游指纹可用）；**复用 PDF 伴生 docx** 复选
+   右栏 `[自制]/[重制]` 生成后逐本校验、仅通过项导入；校验阈值（缺+多，`verify_max_diff`，
+   默认 0，即严格零差异；≤10 且差异仅注释的可自动入库）与报告失败上下文行数
+   （`verify_diff_lines`，默认 5）均为 0–50 的数值输入
+   （透传上游 `--verify-max-diff`/`--verify-diff-lines`）；**校验复用**复选
+   （`xml2pdf.verify_reuse`，默认开：源未变时跳过校验，需上游指纹可用；上游报告结论
+   可惰性导入复用，见链路B §5）；**复用 PDF 伴生 docx** 复选
   （`xml2pdf.reuse_pdf_companion`，默认开：pdf+docx 同跑时直接用 pdf 管线附带的同内容 docx，
   省一次 docx 渲染；html2pdf/竖排无伴生则照常渲染）；另含 自制程序路径 /
    CBETA XML 目录（传 `--cbeta-ebook`，不可为空；输入框 tooltip 注明 XML 由 xml2pdf 更新维护）/ 自制电子书目录（默认 `cbeta_xml_ebooks`）/

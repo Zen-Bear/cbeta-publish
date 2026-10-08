@@ -85,6 +85,35 @@ class VerifyCacheTest(unittest.TestCase):
         self.assertFalse(vc.record_pass(self.db, "T0001", "pdf", ""))
         self.assertFalse(self.db.exists())
 
+    def test_input_sets_model(self):
+        # schema v2：同 (work,fmt) 多输入集并存；新鲜要求 inputs 有序相等＋指纹一致
+        from cbeta_publish.books import verify_cache as vc
+        self.assertTrue(vc.record_pass(self.db, "TX0011", "docx", "fp-a",
+                                       {"inputs": ["A.xml", "B.xml"],
+                                        "accept": "strict"}))
+        self.assertTrue(vc.is_fresh(self.db, "TX0011", "docx", "fp-a",
+                                    ["A.xml", "B.xml"]))
+        self.assertFalse(vc.is_fresh(self.db, "TX0011", "docx", "fp-a",
+                                     ["B.xml", "A.xml"]))   # 顺序不同
+        self.assertFalse(vc.is_fresh(self.db, "TX0011", "docx", "fp-a",
+                                     ["A.xml"]))            # 集合不同
+        self.assertFalse(vc.is_fresh(self.db, "TX0011", "docx", "fp-b",
+                                     ["A.xml", "B.xml"]))   # 指纹不同
+        # 同 inputs 覆盖，不同 inputs 追加
+        self.assertTrue(vc.record_pass(self.db, "TX0011", "docx", "fp-a2",
+                                       {"inputs": ["A.xml", "B.xml"],
+                                        "accept": "notes_only"}))
+        self.assertTrue(vc.is_fresh(self.db, "TX0011", "docx", "fp-a2",
+                                    ["A.xml", "B.xml"]))
+        self.assertTrue(vc.record_pass(self.db, "TX0011", "docx", "fp-c",
+                                       {"inputs": ["A.xml"]}))
+        self.assertTrue(vc.is_fresh(self.db, "TX0011", "docx", "fp-c", ["A.xml"]))
+        self.assertTrue(vc.is_fresh(self.db, "TX0011", "docx", "fp-a2",
+                                    ["A.xml", "B.xml"]))
+        e = vc.get(self.db, "TX0011", "docx")
+        self.assertEqual(len(e["sets"]), 2)
+        self.assertEqual(vc.stats(self.db)["entries"], 1)
+
     def test_records_path_default(self):
         from cbeta_publish.books import verify_cache as vc
         p = vc.records_path({})
@@ -138,6 +167,8 @@ class VerifyReuseFlowTest(unittest.TestCase):
         (cls.tmp / "x2p").mkdir()
         win.config["xml2pdf"]["path"] = str(cls.tmp / "x2p")
         win.config["xml2pdf"]["preset"] = ""
+        (cls.tmp / "xe-empty").mkdir()
+        win.config["xml2pdf"]["cbeta_ebook"] = str(cls.tmp / "xe-empty")
         col = Path(win.config["collections_dir"]) / "custom" / "复用测.json"
         col.write_text(json.dumps({"id": "r", "name": "复用测", "category": "custom",
                                    "tags": [], "work_ids": ["T0001", "T0002"]},
@@ -205,7 +236,7 @@ class VerifyReuseFlowTest(unittest.TestCase):
     def _stub_fingerprint(self):
         import cbeta_publish.books.xml2pdf_bridge as b
         b.verify_fingerprint_available = lambda config: True
-        b.verify_fingerprint = lambda w, f, config, preset=None: f"fp-{w}-{f}"
+        b.verify_fingerprint = lambda w, f, config, preset=None, xml_files=None: f"fp-{w}-{f}"
 
     def test_all_fresh_skips_everything(self):
         import cbeta_publish.books.xml2pdf_bridge as b
@@ -250,6 +281,66 @@ class VerifyReuseFlowTest(unittest.TestCase):
         # 通过后记录被刷新为新指纹
         self.assertTrue(vc.is_fresh(self._records_path(), "T0001", "pdf",
                                     "fp-T0001-pdf"))
+
+    def test_upstream_import_skips_verify(self):
+        # 上游报告目录有匹配 pass 报告 → 记库并跳过，不调 verify_work
+        import cbeta_publish.books.xml2pdf_bridge as b
+        from cbeta_publish.books import verify_cache as vc
+        win = self.win
+        self._stub_fingerprint()
+        vc.drop(self._records_path(), "T0001")
+        vc.drop(self._records_path(), "T0002")
+        _old_ebook = win.config["xml2pdf"].get("cbeta_ebook")
+        _old_rdir = win.config["xml2pdf"].get("verify_reports_dir")
+        xe = self.tmp / "xe"
+        (xe / "T0001 X").mkdir(parents=True)
+        (xe / "T0001 X" / "S.xml").write_text("<x/>", encoding="utf-8")
+        win.config["xml2pdf"]["cbeta_ebook"] = str(xe)
+        upv = self.tmp / "upv"
+        vd = upv / "T0001 X（验证）"
+        vd.mkdir(parents=True)
+        (vd / "report.json").write_text(json.dumps({
+            "schema": 1,
+            "work": "T0001",
+            "fmts": {"pdf": {"verdict": "pass",
+                             "fingerprint": "fp-T0001-pdf",
+                             "formal_outputs": ["a.pdf"]}},
+            "inputs": {"xml_files": [{"name": "S.xml"}]}}), encoding="utf-8")
+        (vd / "report.txt").write_text("=== T0001\n  [OK]  pdf 缺0 多0\n",
+                                       encoding="utf-8")
+        win.config["xml2pdf"]["verify_reports_dir"] = str(upv)
+        base = Path(win.config["xml_to_ebooks_dir"])
+        (base / "pdf").mkdir(parents=True)
+        (base / "pdf" / "T0001.pdf").write_bytes(b"x")
+        (base / "pdf" / "T0002.pdf").write_bytes(b"x")
+        real_find = b.find_upstream_reports
+        b.find_upstream_reports = lambda config, rdir: [
+            {"id": "T0001", "title": "T0001 X", "dir": str(vd),
+             "report_json": str(vd / "report.json"),
+             "report_txt": str(vd / "report.txt")}]
+        boxes, finishes, restore = self._patch_common()
+        calls, restore_v = self._patch_verify()
+        try:
+            win._send_coll_to_verify()
+        finally:
+            restore_v()
+            restore()
+            b.find_upstream_reports = real_find
+            if _old_ebook is None:
+                win.config["xml2pdf"].pop("cbeta_ebook", None)
+            else:
+                win.config["xml2pdf"]["cbeta_ebook"] = _old_ebook
+            if _old_rdir is None:
+                win.config["xml2pdf"].pop("verify_reports_dir", None)
+            else:
+                win.config["xml2pdf"]["verify_reports_dir"] = _old_rdir
+        self.assertEqual(calls, ["T0002"])   # T0001 由上游导入跳过
+        flat = [str(x) for f in finishes for x in (f or [])]
+        self.assertTrue(any("上游导入 1 条" in x for x in flat), flat)
+        e = vc.get(self._records_path(), "T0001", "pdf")
+        self.assertEqual(e["accept"], "strict")
+        self.assertEqual(e["sets"][0]["inputs"], ["S.xml"])
+        self.assertEqual(e["sets"][0]["fingerprint"], "fp-T0001-pdf")
 
     def test_toggle_off_verifies_all(self):
         # 开关关闭：回退旧行为（重制即全部重验），即使记录新鲜

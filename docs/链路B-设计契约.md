@@ -206,9 +206,18 @@ def convert_outputs(work_id, fmt, out_dir, config, preset=None, stop=None) -> li
   `pycbeta.cli.main(["-i", work, "-f", <勾选>, "-o", <vdir>, [--config wrap],
   "--cbeta-ebook", <工作根>, "--verify",
   "--verify-max-diff", N, "--verify-diff-lines", M])`
-  （阈值取全局 `xml2pdf.verify_max_diff`（默认 5）与 `verify_diff_lines`（默认 5），钳制 0–50；
-  上游预设 `verify` 段无此二项、仅 CLI 支持，故 publish 始终透传。`VerifyWorker`
-  聚合该 work 的全部语义产物报告：任一失败即该 work 失败，只有全部通过才算通过；
+   （阈值取全局 `xml2pdf.verify_max_diff`（默认 0，即严格零差异）与
+   `verify_diff_lines`（默认 5），钳制 0–50；
+   上游预设 `verify` 段无此二项、仅 CLI 支持，故 publish 始终透传。`VerifyWorker`
+   聚合该 work 的全部语义产物报告：任一失败即该 work 失败，只有全部通过才算通过；
+   **验收两档**（publish 侧）：`missing==0 且 extra==0` 直接入库（strict）；
+   `(missing+extra) ≤ 10` 且 `diff_scope=="notes_only"` 也入库（notes_only，
+   结果页标"仅注释"）；余下人工检验（放行不记库）。**跨边复用**：`verify_records.json`
+   schema 2 输入集模型（`entries[work][fmt].sets=[{fingerprint, inputs, accept, product}]`，
+   新鲜＝某集 inputs 恰为当前全部源且指纹命中）；指纹经生效配置 dict（`presets=`，
+   与 GUI run 形态同口径）＋报告 `inputs.xml_files` 同序计算；跳过检查时 stale 项
+   惰性扫 `xml2pdf.verify_reports_dir`（默认生效 `source.verify_root`，可显式覆盖）
+   导入上游 `report.json` 结论（同验收档）；
   上游 `cli.py` 修 work id 校验 `2a10d12`；
   官方基线源目录 `src` 亦按 work id 修正 `16df9cf`：文件→其目录 / 目录→该目录 /
   編號→已材料化 XML 的 work 目录，否则 `find_official`/`auto_fetch` 定位不到）；

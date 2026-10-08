@@ -5360,6 +5360,66 @@ class MainWindow(QMainWindow):
         from cbeta_publish.books import verify_cache as _vc
         return _vc.records_path({"_config_path": str(getattr(self, "_config_path", ""))})
 
+    def _import_upstream_pass(self, w, f, inputs, base_dir, rpath, cache):
+        """从上游报告目录惰性导入 (w,f) 的通过记录；成功返回 True（已记库）。
+
+        inputs: 当前源基名有序列表。cache: 本轮扫描缓存 {"reports": [...]|None}。
+        条件（缺一即跳过）：report.json 有效（schema1、`work` 匹配）＋该 fmt 有结论
+        ＋ verdict 接受档（strict 或 notes_only≤10）＋ `formal_outputs`/`inputs.xml_files`
+        非空 ＋ 按报告顺序映射本地源全命中 ＋ 现算指纹相等。接受档与 publish 导入同口径。
+        """
+        from cbeta_publish.books import xml2pdf_bridge as _b
+        from cbeta_publish.books import verify_cache as _vc
+        try:
+            if "reports" not in cache:
+                rdir = _b.verify_reports_dir(self.config)
+                cache["reports"] = _b.find_upstream_reports(self.config, rdir) \
+                    if rdir is not None else []
+            for e in cache["reports"] or []:
+                try:
+                    _id, _title = str(e.get("id") or ""), str(e.get("title") or "")
+                    if _id != str(w) and not _b._verify_stem_matches(_title, str(w)):
+                        continue
+                    jp = e.get("report_json")
+                    if not jp:
+                        continue
+                    rj = _b._read_verify_json(jp)
+                    if rj is None:
+                        continue
+                    info = (rj.get("fmts") or {}).get(f)
+                    if not isinstance(info, dict):
+                        continue
+                    tier = _b.accept_tier(info.get("verdict") == "pass",
+                                          info.get("missing"), info.get("extra"),
+                                          info.get("diff_scope"))
+                    if tier is None:
+                        continue
+                    if not info.get("formal_outputs"):
+                        continue
+                    _names = list(rj.get("inputs") or [])
+                    if not _names:
+                        continue
+                    srcs = _b.work_source_files(self.config, w)
+                    byname = {p.name: p for p in srcs}
+                    if set(_names) != set(byname):
+                        continue
+                    ordered = [byname[n] for n in _names]
+                    fp_now = _b.verify_fingerprint(
+                        w, f, self.config, preset=self._run_preset(),
+                        xml_files=[str(p) for p in ordered])
+                    if not fp_now or fp_now != info.get("fingerprint"):
+                        continue
+                    _prod = _b.find_built(w, f, base_dir)
+                    _vc.record_pass(rpath, w, f, fp_now,
+                                    {"inputs": list(_names), "accept": tier,
+                                     "product": str(_prod) if _prod else ""})
+                    return True
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        return False
+
     def _send_coll_to_verify(self, regen_all=False):
         """自制/重制（设置选「校验」时）：进程内逐本生成+校验，跑完自动导入通过项。
 
@@ -5392,20 +5452,30 @@ class MainWindow(QMainWindow):
         reuse_wanted=bool((self.config.get("xml2pdf", {}) or {}).get("verify_reuse", True))
         reuse=reuse_wanted and self._verify_reuse_enabled()
         preset=self._run_preset()
-        fps={}            # (work, fmt) -> 本次指纹（与校验运行同输入）
+        fps={}            # (work, fmt) -> (指纹, 输入基名有序列表)（与校验运行同形态）
         works_to_verify=[]
         works_fmts={}
         skipped=[]        # [(work, [fmts])]：全部新鲜，直接跳过
+        _up_cache={}      # 上游报告扫描缓存（本轮一次）
+        _up_imported=[]   # ["W.FMT"] 上游导入命中（记库后视为新鲜）
         if reuse:
             for w in works:
                 fresh_fmts, stale_fmts=[], []
+                _srcs=_b.work_source_files(self.config, w)
+                _inputs=[p.name for p in _srcs]
+                _xmls=[str(p) for p in _srcs]
                 for f in fmts:
-                    fp=_b.verify_fingerprint(w, f, self.config, preset=preset)
+                    fp=_b.verify_fingerprint(w, f, self.config, preset=preset,
+                                             xml_files=_xmls)
                     if fp:
-                        fps[(w, f)]=fp
-                    if (fp and _vc.is_fresh(rpath, w, f, fp)
+                        fps[(w, f)]=(fp, _inputs)
+                    if (fp and _vc.is_fresh(rpath, w, f, fp, _inputs)
                             and _b.find_built(w, f, base_dir) is not None):
                         fresh_fmts.append(f)
+                    elif self._import_upstream_pass(w, f, _inputs, base_dir,
+                                                   rpath, _up_cache):
+                        fresh_fmts.append(f)
+                        _up_imported.append(f"{w}.{f}")
                     else:
                         stale_fmts.append(f)
                 if stale_fmts:
@@ -5489,13 +5559,17 @@ class MainWindow(QMainWindow):
         imp["reused"]=[f"{w}（{'/'.join(ff)}）" for w, ff in skipped if ff]
         if reuse and fps:
             # 只记录本次自动导入的通过项（人工放行是覆盖判定，不记）；
-            # 入库成功才记，入库失败不记。
+            # 入库成功才记，入库失败不记。档位取导入判定（strict/notes_only）。
             _okf=imp.get("ok_files") or {}
+            _tiers=imp.get("accept") or {}
             for w, flist in _okf.items():
                 for f, _dest in flist:
-                    fp=fps.get((w, f))
-                    if fp:
-                        _vc.record_pass(rpath, w, f, fp, {"product": _dest})
+                    _got=fps.get((w, f))
+                    if _got:
+                        _fp, _inputs=_got
+                        _vc.record_pass(rpath, w, f, _fp,
+                                        {"inputs": _inputs, "product": _dest,
+                                         "accept": _tiers.get((w, f), "strict")})
         import html as _html
         def _dirlink(p):
             from PySide6.QtCore import QUrl as _QU
@@ -5510,6 +5584,8 @@ class MainWindow(QMainWindow):
         summary=[f"校验完成 {result['ok']}/{total}"]
         if skipped:
             summary.append(f"跳过已通过 {len(skipped)} 部（源未变）")
+        if _up_imported:
+            summary.append(f"上游导入 {len(_up_imported)} 条（report.json，指纹一致）")
         if reuse_wanted and not reuse:
             summary.append("上游未提供校验指纹，本次全部重验（复用未生效）")
         summary.append("验证输出目录：" + _dirlink(vdir))          # 目录可点开
@@ -5624,6 +5700,7 @@ class MainWindow(QMainWindow):
 
         返回 {"ok": [...], "fail": [...], "undet": [...], "skip": [...],
               "ok_files": {work: [(fmt, dest_str)]},
+              "accept": {(work, fmt): "strict"|"notes_only"},
               "review": [(work, fmt, src_str, report_str, reason, missing, extra)]}
         （dest 供结果页显示可点文件链接；review 供人工检验：
         未通过/未判定格式都可人工放行；未放行项由 `_maybe_review_failed`
@@ -5639,6 +5716,7 @@ class MainWindow(QMainWindow):
         reports=sorted(_b.verify_reports(vdir), key=lambda x: str(x[0]))
         ok_list, fail_list, undet_list, skip_list=[], [], [], []
         ok_files={}
+        accept={}
         review=[]
         done=0
         def _num_text(_f, _nums):
@@ -5669,6 +5747,24 @@ class MainWindow(QMainWindow):
                     fail_list.append(f"{hit} 缺产物")
                 else:
                     moved=[]; bad=[]; undet=[]
+                    def _tier_of(_fmt, _seen=()):
+                        # 接受档：strict=逐格式通过；notes_only=未通过但注释小差；
+                        # 被覆盖格式继承源格式档位；余下 None（人工）。
+                        if _fmt in _seen:
+                            return None
+                        if fmt_status.get(_fmt) is True:
+                            _r = pending.get(_fmt)
+                            if isinstance(_r, str) and _r.startswith("covered:"):
+                                return _tier_of(_r.split(":", 1)[1],
+                                                _seen + (_fmt,)) or "strict"
+                            return "strict"
+                        if fmt_status.get(_fmt) is False:
+                            _mi, _ex = nums.get(_fmt, (None, None))
+                            return _b.accept_tier(False, _mi, _ex,
+                                                  scopes.get(_fmt))
+                        if overall is True:
+                            return "strict"
+                        return None
                     def _miss_text(_f):
                         _t=_num_text(_f, nums)
                         _sc=_b.diff_scope_text(scopes.get(_f))
@@ -5677,12 +5773,14 @@ class MainWindow(QMainWindow):
                         st=fmt_status.get(fmt)
                         if st is None:
                             st=overall          # 无逐格式信息：退回整体判定
-                        if st is True:
+                        _tier=_tier_of(fmt)
+                        if _tier is not None:
                             try:
                                 (base/fmt).mkdir(parents=True, exist_ok=True)
                                 _dst=base/fmt/src.name   # L2：保留上游带书名
                                 shutil.move(str(src), str(_dst))
                                 moved.append(fmt)
+                                accept[(hit, fmt)]=_tier
                                 ok_files.setdefault(hit, []).append((fmt, str(_dst)))
                             except Exception as e:
                                 fail_list.append(f"{hit} {fmt} 入库失败: {e}")
@@ -5712,7 +5810,10 @@ class MainWindow(QMainWindow):
                                 _reason="未判定"
                             review.append((hit, fmt, str(src), str(rp), _reason, None, None))
                     if moved:
-                        label=f"{hit}（{'/'.join(moved)}）"
+                        def _tok(_f):
+                            return f"{_f}（仅注释）" \
+                                if accept.get((hit, _f)) == "notes_only" else _f
+                        label=f"{hit}（{'/'.join(_tok(_f) for _f in moved)}）"
                         if bad or undet:
                             label+=f"；未入 {'/'.join(_miss_text(_f) for _f in bad+undet)}"
                         ok_list.append(label)
@@ -5735,7 +5836,8 @@ class MainWindow(QMainWindow):
             if update is not None and not update(done, done_label):
                 break
         return {"ok": ok_list, "fail": fail_list, "undet": undet_list,
-                "skip": skip_list, "ok_files": ok_files, "review": review}
+                "skip": skip_list, "ok_files": ok_files, "accept": accept,
+                "review": review}
 
     def _review_failed_dialog(self, review, base, allow_delete=False):
         """人工检验未通过/未判定项：左勾选放行项，右预览校验报告＋可打开产物。

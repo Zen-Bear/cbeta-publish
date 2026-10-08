@@ -67,6 +67,68 @@ class BridgeConvertLibTest(unittest.TestCase):
         self.assertFalse(nested.exists())     # 新布局已清
         self.assertTrue(old_top.exists())     # 顶层旧目录保留
 
+    def test_verify_reports_dir_explicit_and_preset(self):
+        import cbeta_publish.books.xml2pdf_bridge as b
+        from pathlib import Path
+        cfg = {"xml2pdf": {"path": str(self.x2p),
+                           "verify_reports_dir": "E:/up/verify"}}
+        self.assertEqual(b.verify_reports_dir(cfg), Path("E:/up/verify"))
+        pd = self.x2p / "presets"
+        pd.mkdir()
+        (pd / "p.json").write_text("{}", encoding="utf-8")
+        real = b.load_preset_dict
+        b.load_preset_dict = lambda pp, config=None: {
+            "source": {"verify_root": "E:/up/v2"}}
+        try:
+            cfg2 = {"xml2pdf": {"path": str(self.x2p), "preset": "p"}}
+            self.assertEqual(b.verify_reports_dir(cfg2), Path("E:/up/v2"))
+            cfg3 = {"xml2pdf": {"path": str(self.x2p), "preset": "p",
+                                "verify_reports_dir": "E:/up/explicit"}}
+            self.assertEqual(b.verify_reports_dir(cfg3),
+                             Path("E:/up/explicit"))
+            cfg4 = {"xml2pdf": {"path": str(self.x2p)}}
+            self.assertIsNone(b.verify_reports_dir(cfg4))
+        finally:
+            b.load_preset_dict = real
+
+    def test_verify_fingerprint_uses_presets_and_order(self):
+        # presets= 生效配置透传；xml_files 保序；阈值缺省 0/5
+        import json as _json
+        import sys
+        import cbeta_publish.books.xml2pdf_bridge as b
+        seen_path = self.dir / "seen.json"
+        pkg = self.dir / "fx2p" / "pycbeta"
+        pkg.mkdir(parents=True)
+        (pkg / "__init__.py").write_text("")
+        (pkg / "theme.py").write_text(
+            "def load_effective_presets(path=None):\n"
+            "    return {'theme_marker': 1}\n")
+        (pkg / "verify.py").write_text(
+            "def verify_fingerprint(*a, **k):\n"
+            "    import json as _j\n"
+            "    open(r'" + str(seen_path).replace("\\", "\\\\") + "', 'w').write("
+            "_j.dumps({str(k): str(v) for k, v in k.items()}))\n"
+            "    return 'fp-x'\n")
+        cfg = {"xml2pdf": {"path": str(self.dir / "fx2p")}}
+        saved_path = list(sys.path)
+        saved_mods = {k: sys.modules.pop(k) for k in
+                      [k for k in sys.modules
+                       if k == "pycbeta" or k.startswith("pycbeta.")]}
+        try:
+            got = b.verify_fingerprint("T0001", "pdf", cfg,
+                                       xml_files=["b.xml", "a.xml"])
+        finally:
+            for k in ("pycbeta", "pycbeta.theme", "pycbeta.verify"):
+                sys.modules.pop(k, None)
+            sys.modules.update(saved_mods)
+            sys.path[:] = saved_path
+        self.assertEqual(got, "fp-x")
+        seen = _json.loads(seen_path.read_text(encoding="utf-8"))
+        self.assertEqual(seen["xml_files"], "['b.xml', 'a.xml']")
+        self.assertIn("presets", seen)
+        self.assertEqual(seen["max_diff"], "0")
+        self.assertEqual(seen["diff_lines"], "5")
+
     def test_argv_with_xml_and_preset(self):
         import cbeta_publish.books.xml2pdf_bridge as b
         xml = self.dir / "T01n0001.xml"
@@ -409,8 +471,8 @@ class BridgeVerifyWorkTest(unittest.TestCase):
         self.assertIn("--verify", a)
         self.assertEqual(a[a.index("--cbeta-ebook") + 1], str(b.xml_work_dir(self.cfg)))
         self.assertNotIn("--config", a)   # 出厂默认不传
-        # 校验阈值：缺省透传 5/5
-        self.assertEqual(a[a.index("--verify-max-diff") + 1], "5")
+        # 校验阈值：缺省透传 0/5（max_diff 默认严格零差异）
+        self.assertEqual(a[a.index("--verify-max-diff") + 1], "0")
         self.assertEqual(a[a.index("--verify-diff-lines") + 1], "5")
 
     def test_argv_verify_thresholds(self):
