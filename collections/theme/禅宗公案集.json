@@ -1,0 +1,43 @@
+{
+  "id": "custom_kongbaicongshu_20261009",
+  "slug": "theme_chanzonggonganji_20261009",
+  "name": "禅宗公案集",
+  "category": "theme",
+  "tags": [
+    "custom"
+  ],
+  "work_ids": [
+    "T2003",
+    "T2004",
+    "T2005",
+    "T2006"
+  ],
+  "works": [],
+  "source": "official",
+  "work_sources": {},
+  "work_groups": {},
+  "manual_volumes": [],
+  "xml_options": {},
+  "created_at": "2026-10-09T22:47:12.261494Z",
+  "updated_at": "2026-10-09T22:47:59.525305Z",
+  "last_publish_at": null,
+  "last_publish_dir": null,
+  "bulei_groups": {
+    "T2003": [
+      "T2003-6 公案集 T48",
+      "T2003 佛果圜悟禪師碧巖錄 (10卷)【宋 重顯頌古．克勤評唱】"
+    ],
+    "T2004": [
+      "T2003-6 公案集 T48",
+      "T2004 萬松老人評唱天童覺和尚頌古從容庵錄 (6卷)【宋 正覺頌古．元 行秀評唱】"
+    ],
+    "T2005": [
+      "T2003-6 公案集 T48",
+      "T2005 無門關 (1卷)【宋 宗紹編】"
+    ],
+    "T2006": [
+      "T2003-6 公案集 T48",
+      "T2006 人天眼目 (6卷)【宋 智昭集】"
+    ]
+  }
+}
