@@ -453,4 +453,4 @@ publish「运行独立窗」预填 `--out=<丛书校验目录>` 的单次任务�
   `source.verify_root` ＞ `{输出}/验证`）；`_open_xml2pdf_window` 传
   `--verify-root {vdir}/验证` 钉死，与进程内 CLI 一致；预设对齐检查覆盖
   `source.verify_root` 作手动运行的兜底（非空提示可一键清空，与 `cbeta_ebook` 同流程）。
-- 提案归档：`docs/上游-GUI校验根参数提案.md`（**已实现**）。
+- 提案归档：`docs/上游提案归档/上游-GUI校验根参数提案.md`（**已实现**）。

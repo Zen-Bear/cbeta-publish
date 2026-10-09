@@ -155,7 +155,7 @@
   候选集由 `_newest_report` 取最新（并存取新）；新增常量 `VERIFY_ROOT_NAME="验证"`。
 - [x] `verify_work` 跑前清理**只清新版** `{out}/验证/{work}*（验证）/`（顶层旧目录保留兼容读取）。
 - [x] `verify_work` 显式传 `--verify-root {out_dir}/验证`，把布局钉死（不受预设自定义值劫持）。
-- [x] **独立窗**：上游已实现 GUI `--verify-root`（提案 `docs/上游-GUI校验根参数提案.md` 已归档）；
+- [x] **独立窗**：上游已实现 GUI `--verify-root`（提案 `docs/上游提案归档/上游-GUI校验根参数提案.md` 已归档）；
   `_open_xml2pdf_window` 传 `--verify-root {vdir}/验证` 钉死，与进程内 CLI 一致；
   预设对齐检查扩展到 `source.verify_root`（非空提示可一键清空，作手动运行兜底）。
 - [x] 测试：嵌套发现（新/旧/并存取新）；清理只清新版、顶层旧目录保留；argv 含
@@ -227,9 +227,9 @@
 - 风险：网页为通用整页转文本按行解析（不做站点适配/按链接）；抓取在 UI 线程（单页 30s 超时，后续可线程化）。
 
 ### P10 — 跨边校验复用＋验收档位（已完成，676 测试通过）
-- 背景：上游 P2 提案（`E:/dev/cbeta/xml2pdf/docs/上游-P2校验结论跨边复用提案.md`）经 publish
-  审核，意见见 `docs/上游-P2复用提案-下游审核意见.md`（同文已就地追加为该提案 §9）；
-  指纹入参改进见 `docs/上游-指纹presets入参提案.md`。目标：上游 `report.json` 的结论可被
+- 背景：上游 P2 提案（`E:/dev/cbeta/xml2pdf/docs/上游提案归档/上游-P2校验结论跨边复用提案.md`）经 publish
+  审核，意见见 `docs/上游提案归档/上游-P2复用提案-下游审核意见.md`（同文已就地追加为该提案 §9）；
+  指纹入参改进见 `docs/上游提案归档/上游-指纹presets入参提案.md`。目标：上游 `report.json` 的结论可被
   publish 复用（跳过重复校验），并加"注释差异"验收档。
 - 上游依赖（待上游落地）：`verify_fingerprint(..., presets=<effective dict>)`——三项
   （`_strip_no_from`/`_theme_css_digest`/`_canon_annotations`）由 presets 派生；
@@ -267,7 +267,7 @@
 - 背景：上游已落地卷子集（`--juan`/`-i ID:范围`，2026-10-07）；publish 需让 token 全链
   可走：ID 导入/书单 token → 自制/校验透传 → 子集产物入库与复用。上游指纹/报告卷维度
   （本仓 P11 请求）2026-10-08 已实现。
-- [x] 上游指纹/报告卷维度（提案 `docs/上游-指纹juan入参提案.md`，§8 复核）：`verify_fingerprint(juan=)`
+- [x] 上游指纹/报告卷维度（提案 `docs/上游提案归档/上游-指纹juan入参提案.md`，§8 复核）：`verify_fingerprint(juan=)`
   归一进 payload（`None` 逐字回归）＋`_official_superset` 卷限定（html/docx/txt_notes）＋
   `report.json` 顶层 `juan{segments,label}` 恒输出＋CLI/GUI 全覆盖/无 milestone→`None` 归一
   （顺带修无 milestone 仍加后缀的既有小 bug）；契约见上游 `docs/校验report.json说明.md`
