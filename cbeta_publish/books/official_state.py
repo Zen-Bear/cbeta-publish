@@ -105,7 +105,8 @@ def mark_checked(config, work: str, fmt: str, path=None) -> bool:
     ver = ""
     try:
         from cbeta_publish.books import xml2pdf_bridge as _xb
-        src = _xb.source_mtime(config, work)
+        from cbeta_publish.catalog.work_id import split_entry
+        src = _xb.source_mtime(config, split_entry(work)[0])
     except Exception:
         src = None
     try:
@@ -130,7 +131,8 @@ def stale(config, work: str, fmt: str, dest_dir, path=None) -> bool:
     cur_src = None
     try:
         from cbeta_publish.books import xml2pdf_bridge as _xb
-        cur_src = _xb.source_mtime(config, work)
+        from cbeta_publish.catalog.work_id import split_entry
+        cur_src = _xb.source_mtime(config, split_entry(work)[0])
     except Exception:
         cur_src = None
     entry = get(p, work, fmt)

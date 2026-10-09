@@ -32,7 +32,7 @@ class DownloadWorker(QThread):
     def run(self):
         from cbeta_publish.books.official_ebook_source import (
             download_ebook, remote_info, is_unchanged, local_path, local_size_kb,
-            copy_from_library, RemoteNotFound,
+            copy_from_library, RemoteNotFound, NoJuanEndpoint,
         )
         ok = 0
         total = len(self.pairs)
@@ -61,6 +61,10 @@ class DownloadWorker(QThread):
                     except RemoteNotFound:
                         failed.append(f"{w}.{fmt} 不存在")
                         self.progress.emit(f"{REPLACE_LAST}下载 {w}.{fmt} ...不存在")
+                        continue
+                    except NoJuanEndpoint:
+                        failed.append(f"{w}.{fmt} 官方无单卷")
+                        self.progress.emit(f"{REPLACE_LAST}下载 {w}.{fmt} ...官方无单卷")
                         continue
                 if got and got.exists():
                     ok += 1

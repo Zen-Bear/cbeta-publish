@@ -464,5 +464,250 @@ class OfficialLibraryTest(unittest.TestCase):
         self.assertTrue((wdir / "epub").is_dir())
 
 
+class OfficialJuanTest(unittest.TestCase):
+    """官方按卷下载：路径/端点/条目拆分（html/txt_notes/txt/docx/odt 有单卷；pdf/epub 无）。"""
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def test_juan_num(self):
+        self.assertEqual(oes._juan_num("479"), 479)
+        self.assertEqual(oes._juan_num("479-479"), 479)
+        self.assertIsNone(oes._juan_num("1-3"))
+        self.assertIsNone(oes._juan_num(""))
+        self.assertIsNone(oes._juan_num("abc"))
+
+    def test_local_path_volume_vs_whole(self):
+        base = self.dir
+        self.assertEqual(oes.local_path("T0220:479", "html", base),
+                         base / "html" / "T0220_479.html")
+        self.assertEqual(oes.local_path("T0220:479", "txt_notes", base),
+                         base / "txt_notes" / "T0220_479")
+        self.assertEqual(oes.local_path("T0220:479", "txt", base),
+                         base / "txt" / "T0220_479")
+        # 卷 docx/odt → 单文件
+        self.assertEqual(oes.local_path("T0099:1", "docx", base),
+                         base / "docx" / "T0099_001.docx")
+        self.assertEqual(oes.local_path("T0220:479", "odt", base),
+                         base / "odt" / "T0220_479.odt")
+        # 无单卷端点 → 卷名占位（不会存在，避免把整部误当该卷）
+        self.assertEqual(oes.local_path("T0220:479", "pdf", base),
+                         base / "pdf" / "T0220_479.pdf")
+        self.assertEqual(oes.local_path("T0220:479", "epub", base),
+                         base / "epub" / "T0220_479.epub")
+        # 整部
+        self.assertEqual(oes.local_path("T0220", "html", base),
+                         base / "html" / "T0220")
+
+    def test_juan_supported(self):
+        for f in ("html", "txt_notes", "txt", "docx", "odt", "pdf", "epub"):
+            self.assertTrue(oes.juan_supported(f), f)
+
+    def test_juan_url_docx_odt(self):
+        self.assertEqual(oes._juan_url("docx", "T0099", 1),
+                         "https://cbdata.dila.edu.tw/stable/download/docx/T/T0099/T0099_001.docx")
+        self.assertEqual(oes._juan_url("odt", "T0220", 479),
+                         "https://cbdata.dila.edu.tw/stable/download/odt/T/T0220/T0220_479.odt")
+
+    def test_download_volume_docx_single(self):
+        calls = []
+        real = oes.cf.download
+        real_head = oes._head_absent_404
+        oes._head_absent_404 = lambda url, timeout=None: False
+        def fake(url, dest, unzip=False):
+            calls.append((url, str(dest), unzip))
+            Path(dest).parent.mkdir(parents=True, exist_ok=True)
+            Path(dest).write_bytes(b"x")
+            return True
+        oes.cf.download = fake
+        try:
+            got = oes.download_ebook("T0099:1", "docx", self.dir)
+        finally:
+            oes.cf.download = real
+            oes._head_absent_404 = real_head
+        self.assertEqual(calls[0][0],
+                         "https://cbdata.dila.edu.tw/stable/download/docx/T/T0099/T0099_001.docx")
+        self.assertEqual(Path(calls[0][1]), self.dir / "docx" / "T0099_001.docx")
+        self.assertFalse(calls[0][2])
+        self.assertEqual(got, self.dir / "docx" / "T0099_001.docx")
+
+    def test_juan_url(self):
+        self.assertEqual(oes._juan_url("html", "T0220", 479),
+                         "https://cbdata.dila.edu.tw/stable/download/html/T0220_479.html")
+        self.assertEqual(oes._juan_url("txt_notes", "T0220", 479),
+                         "https://cbdata.dila.edu.tw/stable/download/text-with-notes/T0220_479.txt.zip")
+        self.assertEqual(oes._juan_url("txt", "T0220", 479),
+                         "https://cbdata.dila.edu.tw/stable/download/text/T0220_479.txt.zip")
+
+    def test_download_volume_html(self):
+        calls = []
+        real = oes.cf.download
+        real_head = oes._head_absent_404
+        oes._head_absent_404 = lambda url, timeout=None: False
+        def fake(url, dest, unzip=False):
+            calls.append((url, str(dest), unzip))
+            Path(dest).parent.mkdir(parents=True, exist_ok=True)
+            if not unzip:
+                Path(dest).write_bytes(b"x")
+            return True
+        oes.cf.download = fake
+        try:
+            got = oes.download_ebook("T0220:479", "html", self.dir)
+        finally:
+            oes.cf.download = real
+            oes._head_absent_404 = real_head
+        self.assertEqual(calls[0][0],
+                         "https://cbdata.dila.edu.tw/stable/download/html/T0220_479.html")
+        self.assertEqual(Path(calls[0][1]), self.dir / "html" / "T0220_479.html")
+        self.assertFalse(calls[0][2])            # html 单文件不 unzip
+        self.assertEqual(got, self.dir / "html" / "T0220_479.html")
+
+    def test_download_volume_txt_notes_zip(self):
+        calls = []
+        real = oes.cf.download
+        real_head = oes._head_absent_404
+        oes._head_absent_404 = lambda url, timeout=None: False
+        def fake(url, dest, unzip=False):
+            calls.append((url, str(dest), unzip))
+            Path(dest).mkdir(parents=True, exist_ok=True)
+            return True
+        oes.cf.download = fake
+        try:
+            oes.download_ebook("T0220:479", "txt_notes", self.dir)
+        finally:
+            oes.cf.download = real
+            oes._head_absent_404 = real_head
+        self.assertEqual(calls[0][0],
+                         "https://cbdata.dila.edu.tw/stable/download/text-with-notes/T0220_479.txt.zip")
+        self.assertEqual(Path(calls[0][1]), self.dir / "txt_notes" / "T0220_479")
+        self.assertTrue(calls[0][2])             # zip 型 unzip
+
+    def test_download_volume_unsupported_raises(self):
+        # 未知格式的卷条目：明确抛 NoJuanEndpoint（保留作失败通道）
+        with self.assertRaises(oes.NoJuanEndpoint):
+            oes.download_ebook("T0220:479", "mobi", self.dir)
+
+    def test_copy_library_volume_pdf_returns_none(self):
+        # 本地库卷条目 + pdf：不拿整部冒充
+        self.assertIsNone(oes.copy_from_library("T0220:479", "pdf", self.dir,
+                                                {"official_library": {}}))
+        self.assertEqual(oes.find_in_library("T0220:479", "pdf",
+                                             {"official_library": {}}), [])
+
+
+class OfficialSplitTest(unittest.TestCase):
+    """官方 pdf/epub 本地按卷拆分（离线：本地真实 T0220 作夹具，拷 temp）。"""
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def _fixture(self, fmt):
+        src = Path("E:/dev/cbeta/cbeta_ebook") / fmt / "T0220.pdf"
+        if fmt == "epub":
+            src = Path("E:/dev/cbeta/cbeta_ebook") / fmt / "T0220.epub"
+        if not src.is_file():
+            self.skipTest(f"no local fixture {src}")
+        dst = self.dir / src.name
+        shutil.copy2(str(src), str(dst))
+        return dst
+
+    def test_split_pdf_juan(self):
+        whole = self._fixture("pdf")
+        out = self.dir / "T0220_479.pdf"
+        got = oes.split_pdf_juan(whole, 479, out)
+        self.assertIsNotNone(got)
+        self.assertTrue(out.is_file())
+        import pymupdf
+        d = pymupdf.open(str(out))
+        try:
+            # 卷 479 页范围 = 零补齐目录相邻边界
+            src = pymupdf.open(str(whole))
+            try:
+                toc = src.get_toc() or []
+                import re
+                z = sorted(
+                    (int(m.group(1)), int(pg))
+                    for lv, t, pg in toc if lv == 2
+                    for m in [re.match(r"^\s*(\d{3})\s*$", str(t or ""))] if m)
+                pages = [p for _, p in z]
+                want = pages[479 - 1], (pages[479] if 479 < len(pages) else src.page_count + 1)
+            finally:
+                src.close()
+            # 卷首封面（整部第 1 页：无文字整页图）＋子集目录页码重定
+            self.assertEqual(d.page_count, (want[1] - want[0]) + 1)
+            self.assertEqual(d[0].get_text().strip(), "")
+            self.assertGreater(len(d[0].get_images()), 0)
+            _toc = d.get_toc() or []
+            _hit = [pg for _lv, _t, pg in _toc if "479" in str(_t)]
+            self.assertIn(2, _hit)
+        finally:
+            d.close()
+        # 越界/非法 → None
+        self.assertIsNone(oes.split_pdf_juan(whole, 9999, self.dir / "x.pdf"))
+        self.assertIsNone(oes.split_pdf_juan(whole, 0, self.dir / "x.pdf"))
+        self.assertIsNone(oes.split_pdf_juan(self.dir / "nope.pdf", 1,
+                                             self.dir / "x.pdf"))
+
+    def test_split_epub_juan_preserves_package(self):
+        whole = self._fixture("epub")
+        out = self.dir / "T0220_479.epub"
+        got = oes.split_epub_juan(whole, 479, out)
+        self.assertIsNotNone(got)
+        import zipfile
+        import xml.etree.ElementTree as ET
+        z = zipfile.ZipFile(str(out))
+        try:
+            names = z.namelist()
+            self.assertIn("mimetype", names)
+            self.assertIn("OEBPS/content.opf", names)
+            self.assertIn("OEBPS/juans/479.xhtml", names)
+            self.assertNotIn("OEBPS/juans/478.xhtml", names)
+            self.assertNotIn("OEBPS/juans/480.xhtml", names)
+            opf = ET.fromstring(z.read("OEBPS/content.opf"))
+            NS = {"opf": "http://www.idpf.org/2007/opf"}
+            spine = opf.find("opf:spine", NS)
+            refs = [ir.get("idref") for ir in spine.findall("opf:itemref", NS)]
+            self.assertEqual(len(refs), 2)                       # 封面页＋本卷
+            self.assertEqual(refs[0], "titlepage")
+            self.assertTrue(refs[1].startswith("juan"))
+            self.assertIn("OEBPS/titlepage.xhtml", names)         # 封面页保留
+            self.assertIn("OEBPS/images/cover.jpg", names)       # 封面图保留
+            # manifest 保留原包其余条目（css/图/ncx），只剔他卷 xhtml
+            man_ids = {it.get("id") for it in
+                       opf.find("opf:manifest", NS).findall("opf:item", NS)}
+            self.assertIn(refs[0], man_ids)
+            self.assertIn("ncx", man_ids)
+            self.assertNotIn("juan478", man_ids)
+        finally:
+            z.close()
+        self.assertIsNone(oes.split_epub_juan(whole, 9999, self.dir / "x.epub"))
+
+    def test_download_volume_pdf_splits_and_keeps_whole(self):
+        whole = self._fixture("pdf")
+        cfg = {}
+        (self.dir / "pdf").mkdir(parents=True, exist_ok=True)
+        shutil.copy2(str(whole), str(self.dir / "pdf" / "T0220.pdf"))
+        got = oes.download_ebook("T0220:479", "pdf", self.dir, cfg)
+        self.assertEqual(Path(got), self.dir / "pdf" / "T0220_479.pdf")
+        self.assertTrue((self.dir / "pdf" / "T0220.pdf").is_file())   # 整部保留
+        # 已存在且非 force → 直接返回，不重拆
+        again = oes.download_ebook("T0220:479", "pdf", self.dir, cfg)
+        self.assertEqual(Path(again), self.dir / "pdf" / "T0220_479.pdf")
+
+    def test_download_volume_epub_splits(self):
+        whole = self._fixture("epub")
+        cfg = {}
+        (self.dir / "epub").mkdir(parents=True, exist_ok=True)
+        shutil.copy2(str(whole), str(self.dir / "epub" / "T0220.epub"))
+        got = oes.download_ebook("T0220:1", "epub", self.dir, cfg)
+        self.assertEqual(Path(got), self.dir / "epub" / "T0220_001.epub")
+
+
 if __name__ == "__main__":
     unittest.main()

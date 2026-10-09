@@ -14,9 +14,17 @@ from email.utils import parsedate_to_datetime
 from pathlib import Path
 
 from cbeta_publish._vendor import cbeta_fetch as cf
-from cbeta_publish.catalog.work_id import canonical_work, catalog_path
+from cbeta_publish.catalog.work_id import canonical_work, catalog_path, split_entry
 
 _ZIP_FORMATS = {"docx", "odt", "html", "txt_notes", "txt"}
+
+#: 有官方**按卷**端点的格式（实测）：html 单文件、txt_notes/txt 为 zip、
+#: docx/odt 单文件（`{canon}/{work}/{work}_{NNN}.{ext}`）；pdf/epub 无 → 本地拆分。
+_JUAN_FORMATS = {"html", "txt_notes", "txt", "docx", "odt"}
+#: 按卷为**单文件**的格式（其余按卷为 zip → 目录）
+_JUAN_SINGLE = {"html", "docx", "odt", "pdf", "epub"}
+#: 按卷需**本地拆分**的格式（官方无单卷端点）：整部取到缓存再切分，整部保留
+_JUAN_SPLIT = {"pdf", "epub"}
 
 #: 打包（ZIP/导出）可选格式：官方源 7 种全列，自制源仅 pdf/epub（xml2pdf 只产这两种）。
 PACK_FORMATS = ("pdf", "epub", "html", "docx", "odt", "txt", "txt_notes")
@@ -39,6 +47,39 @@ def canon_of(work: str) -> str:
         return cf.parse_work_id(canonical(work))[0]
     except ValueError:
         return (work or "?")[0].upper()
+
+
+def _entry(work: str):
+    """条目键 → (规范 work, 卷范围)。`T0220:479` → ("T0220", "479")。"""
+    w, juan = split_entry(work)
+    return canonical(w), juan
+
+
+def _juan_num(juan) -> int | None:
+    """卷范围 spec → 单个卷号 int（仅单卷 `479`/`479-479`）；多段/非数字 → None。"""
+    s = str(juan or "").strip()
+    m = re.fullmatch(r"(\d{1,4})(?:-\1)?", s)
+    return int(m.group(1)) if m else None
+
+
+def _juan_local(work: str, fmt: str, dest_dir, n: int) -> Path:
+    """按卷官方缓存路径：html/docx/odt 单文件 `{work}_{NNN}.{ext}`；
+    txt_notes/txt 目录 `{work}_{NNN}/`。"""
+    base = Path(dest_dir) / fmt
+    if fmt in _JUAN_SINGLE:
+        ext = {"html": "html", "docx": "docx", "odt": "odt",
+               "pdf": "pdf", "epub": "epub"}.get(fmt, fmt)
+        return base / f"{canonical(work)}_{n:03d}.{ext}"
+    return base / f"{canonical(work)}_{n:03d}"
+
+
+def juan_supported(fmt: str) -> bool:
+    """该格式官方卷是否可取：直取（html/txt_notes/txt/docx/odt）或本地拆分（pdf/epub）。"""
+    return fmt in _JUAN_FORMATS or fmt in _JUAN_SPLIT
+
+
+class NoJuanEndpoint(Exception):
+    """官方无单卷且本地不可拆分：卷条目不可从官方取单卷（保留作失败通道）。"""
 
 
 def ebook_url(fmt: str, canon: str, work: str) -> str:
@@ -66,7 +107,17 @@ def zip_dest_dir(work: str, fmt: str, dest_dir) -> Path:
 
 
 def local_path(work: str, fmt: str, dest_dir) -> Path:
-    return zip_dest_dir(work, fmt, dest_dir) if fmt in _ZIP_FORMATS else dest_path(work, fmt, dest_dir)
+    """条目缓存路径：按卷（直取或本地拆分）→ 卷文件/目录；否则整部路径。
+
+    未知格式的卷条目 → 卷名占位路径（不会存在，避免把整部误当该卷）。
+    """
+    w, juan = _entry(work)
+    n = _juan_num(juan)
+    if n is not None:
+        if fmt in _JUAN_FORMATS or fmt in _JUAN_SPLIT:
+            return _juan_local(w, fmt, dest_dir, n)
+        return Path(dest_dir) / fmt / f"{w}_{n:03d}.{fmt}"
+    return zip_dest_dir(w, fmt, dest_dir) if fmt in _ZIP_FORMATS else dest_path(w, fmt, dest_dir)
 
 
 def local_size_kb(path) -> int:
@@ -120,11 +171,347 @@ def product_mtime(path) -> float:
     return 0.0
 
 
+def _juan_url(fmt: str, work: str, n: int) -> str:
+    """按卷官方端点：html `…/html/{ID}_{NNN}.html`（去 zip）；txt_notes/txt 为 zip；
+    docx/odt `…/{fmt}/{canon}/{ID}/{ID}_{NNN}.{ext}`（实测 2026-10-08）。"""
+    token = f"{work}_{n:03d}"
+    if fmt in ("docx", "odt"):
+        ext = "docx" if fmt == "docx" else "odt"
+        tmpl = cf.DEFAULT_DOWNLOADS.get(fmt) or ""
+        if not tmpl or "{canon}" not in tmpl:
+            return ""
+        return f"{tmpl.split('{canon}')[0]}{canon_of(work)}/{work}/{token}.{ext}"
+    tmpl = cf.DEFAULT_DOWNLOADS.get(fmt) or _EXTRA_DOWNLOADS.get(fmt)
+    if not tmpl:
+        return ""
+    url = tmpl.format(canon=canon_of(work), id=token)
+    if fmt == "html" and url.endswith(".zip"):
+        url = url[:-4]
+    return url
+
+
+def split_pdf_juan(whole_pdf, n, dest):
+    """官方整部 pdf 按卷切出单卷 → dest；失败返回 None（不抛）。
+
+    依据目录（TOC）level-2 纯数字条目（卷号须连续 1..K）取页范围
+    `[本卷页, 下卷页)`（末卷到文末）；卷首加整部第 1 页作封面（卷范围已含第 1 页
+    时不重复加）；子集保留该范围内的目录条目（页码重定）。源为扫描图（无文本层）
+    亦可切。返回 dest Path 或 None。
+    """
+    import re as _re
+    try:
+        import pymupdf
+    except Exception:
+        return None
+    try:
+        n = int(n)
+        if n < 1:
+            return None
+    except (TypeError, ValueError):
+        return None
+    doc = None
+    out = None
+    try:
+        doc = pymupdf.open(str(whole_pdf))
+        toc = doc.get_toc() or []
+
+        def _bounds(pat):
+            out = []
+            for lv, title, pg in toc:
+                if lv != 2:
+                    continue
+                m = _re.match(pat, str(title or ""))
+                if not m:
+                    continue
+                try:
+                    pg = int(pg)
+                except (TypeError, ValueError):
+                    continue
+                out.append((int(m.group(1)), pg))
+            out.sort(key=lambda t: (t[1], t[0]))
+            return out
+
+        # 优先零补齐 `001` 式（官方常见；`1 卷` 与 `001` 并存时以后者为准，去重干净）
+        bounds = _bounds(r"^\s*(\d{3})\s*$")
+        nums = [b[0] for b in bounds]
+        if not nums or nums != list(range(1, len(nums) + 1)):
+            # 回退一般数字式（同号取页码首个）
+            seen = {}
+            for num, pg in _bounds(r"^\s*(\d+)"):
+                seen.setdefault(num, pg)
+            bounds = sorted(seen.items(), key=lambda t: t[1])
+            nums = [b[0] for b in bounds]
+        if not nums or nums != list(range(1, len(nums) + 1)):
+            return None
+        pages = [b[1] for b in bounds]
+        if any(b <= a for a, b in zip(pages, pages[1:])):
+            return None
+        if not (1 <= n <= len(nums)):
+            return None
+        pages = [b[1] for b in bounds]
+        start = pages[n - 1]
+        end = pages[n] if n < len(pages) else doc.page_count + 1
+        if not (1 <= start < end <= doc.page_count + 1):
+            return None
+        out = pymupdf.open()
+        # 卷首加封面（整部第 1 页；卷范围已含第 1 页时不重复加）
+        _cover = start > 1
+        if _cover:
+            out.insert_pdf(doc, from_page=0, to_page=0)
+        out.insert_pdf(doc, from_page=start - 1, to_page=end - 2)
+        if out.page_count <= 0:
+            return None
+        # 子集目录：范围内条目页码重定（封面占第 1 页时 +1）
+        _off = (2 - start) if _cover else (1 - start)
+        # 子集目录：卷根作 1 级（封面之后），后代条目展平为 2 级跟随
+        # （set_toc 要求首条 1 级；源目录卷内层级不一，展平最稳）。
+        _inr = []
+        for lv, title, pg in toc:
+            try:
+                pg = int(pg)
+            except (TypeError, ValueError):
+                continue
+            if start <= pg < end:
+                _inr.append((lv, title, pg))
+        _root = next(((lv, t, pg) for lv, t, pg in _inr
+                      if lv == 2 and _re.match(rf"^\s*{n}\b", str(t or ""))), None)
+        if _root is None:
+            _root = next(((lv, t, pg) for lv, t, pg in _inr if lv == 2), None)
+        if _root is None and _inr:
+            _root = _inr[0]
+        sub = []
+        if _root is not None:
+            _rlv, _rt, _rpg = _root
+            sub.append([1, _rt, _rpg + _off])
+            _seen = set()
+            for lv, t, pg in sorted(_inr, key=lambda x: (x[2], x[0])):
+                if lv <= _rlv:
+                    continue
+                key = (str(t), pg)
+                if key in _seen:
+                    continue
+                _seen.add(key)
+                sub.append([2, t, pg + _off])
+        if sub:
+            try:
+                out.set_toc(sub)
+            except Exception:
+                pass
+        dp = Path(dest)
+        dp.parent.mkdir(parents=True, exist_ok=True)
+        out.save(str(dp), garbage=4, deflate=True)
+        return dp if dp.is_file() and dp.stat().st_size > 0 else None
+    except Exception:
+        return None
+    finally:
+        for _d in (doc, out):
+            try:
+                if _d is not None:
+                    _d.close()
+            except Exception:
+                pass
+
+
+def split_epub_juan(whole_epub, n, dest):
+    """官方整部 epub 按卷抽单卷 → dest（保留原包：原 OPF/NCX/目录结构裁剪、assets 全留）。
+
+    取 manifest 中 `juans/{NNN}.xhtml`（或 .html）为目标卷；保留卷首 `titlepage.xhtml`
+    ＋封面图作封面；剔除其他 xhtml（toc/front/back/他卷）及其 spine 引用；guide 只留
+    指向保留文件的 reference；NCX 递归剔除 content 指向已删文件的 navPoint（保留结构）。
+    失败返回 None（不抛）。
+    """
+    import re as _re
+    import xml.etree.ElementTree as _ET
+    import zipfile as _zf
+    try:
+        n = int(n)
+        if n < 1:
+            return None
+    except (TypeError, ValueError):
+        return None
+    try:
+        zin = _zf.ZipFile(str(whole_epub))
+    except Exception:
+        return None
+    try:
+        opf_path = "OEBPS/content.opf"
+        try:
+            cont = zin.read("META-INF/container.xml").decode("utf-8")
+            m = _re.search(r'full-path="([^"]+\.opf)"', cont)
+            if m:
+                opf_path = m.group(1)
+        except Exception:
+            pass
+        opf_dir = opf_path.rsplit("/", 1)[0] if "/" in opf_path else ""
+
+        def _join(base, href):
+            parts = []
+            for seg in (base + "/" + href).split("/"):
+                if seg in ("", "."):
+                    continue
+                if seg == "..":
+                    if not parts:
+                        return None
+                    parts.pop()
+                    continue
+                parts.append(seg)
+            return "/".join(parts)
+
+        _NS = {"opf": "http://www.idpf.org/2007/opf"}
+        try:
+            root = _ET.fromstring(zin.read(opf_path))
+        except Exception:
+            return None
+        man = root.find("opf:manifest", _NS)
+        spine = root.find("opf:spine", _NS)
+        if man is None or spine is None:
+            return None
+        items = {}
+        for it in man.findall("opf:item", _NS):
+            iid = it.get("id")
+            href = it.get("href")
+            if not iid or not href:
+                continue
+            fp = _join(opf_dir, href)
+            if fp:
+                items[iid] = (fp, it.get("media-type", ""))
+        target = None
+        for iid, (fp, _mt) in items.items():
+            if _re.search(rf"juans/{n:03d}\.x?html$", fp):
+                target = iid
+                break
+        if target is None:
+            return None
+
+        def _is_titlepage(iid, fp):
+            return iid == "titlepage" or fp.rsplit("/", 1)[-1] == "titlepage.xhtml"
+
+        drop_ids = set()
+        for iid, (fp, _mt) in items.items():
+            if iid != target and not _is_titlepage(iid, fp) \
+                    and fp.endswith((".xhtml", ".html", ".htm")):
+                drop_ids.add(iid)
+        for it in man.findall("opf:item", _NS):
+            if it.get("id") in drop_ids:
+                man.remove(it)
+        for ir in spine.findall("opf:itemref", _NS):
+            _id = ir.get("idref")
+            if _id != target and not _is_titlepage(
+                    _id, items.get(_id, ("", ""))[0]):
+                spine.remove(ir)
+        keep_files = {items[i][0] for i in items if i not in drop_ids}
+        guide = root.find("opf:guide", _NS)
+        if guide is not None:
+            for rf in guide.findall("opf:reference", _NS):
+                if _join(opf_dir, rf.get("href", "")) not in keep_files:
+                    guide.remove(rf)
+        ncx_fp = None
+        for _iid, (_fp, _mt) in items.items():
+            if _mt == "application/x-dtbncx+xml" or _fp.endswith(".ncx"):
+                ncx_fp = _fp
+                break
+        ncx_new = None
+        if ncx_fp:
+            try:
+                _NN = {"ncx": "http://www.daisy.org/z3986/2005/ncx/"}
+                _raw = zin.read(ncx_fp).decode("utf-8")
+                _nroot = _ET.fromstring(_re.sub(r"<!DOCTYPE[^>]*>", "", _raw))
+                _navmap = _nroot.find("ncx:navMap", _NN)
+                if _navmap is not None:
+                    def _prune(np_):
+                        for child in list(np_):
+                            if not child.tag.endswith("navPoint"):
+                                continue
+                            _prune(child)
+                            _cont = child.find("ncx:content", _NN)
+                            _src = _cont.get("src") if _cont is not None else ""
+                            _nd = ncx_fp.rsplit("/", 1)[0] if "/" in ncx_fp else ""
+                            _fp2 = _join(_nd, (_src or "").split("#")[0])
+                            _kids = [c for c in child if c.tag.endswith("navPoint")]
+                            if _fp2 not in keep_files and not _kids:
+                                np_.remove(child)
+                    _prune(_navmap)
+                    ncx_new = _ET.tostring(_nroot, encoding="utf-8",
+                                           xml_declaration=True)
+            except Exception:
+                ncx_new = None
+        names = set(zin.namelist())
+        outp = Path(dest)
+        outp.parent.mkdir(parents=True, exist_ok=True)
+        with _zf.ZipFile(str(outp), "w") as zout:
+            try:
+                zout.writestr("mimetype", zin.read("mimetype"),
+                              compress_type=_zf.ZIP_STORED)
+            except KeyError:
+                zout.writestr("mimetype", b"application/epub+zip",
+                              compress_type=_zf.ZIP_STORED)
+            try:
+                zout.writestr("META-INF/container.xml",
+                              zin.read("META-INF/container.xml"),
+                              compress_type=_zf.ZIP_DEFLATED)
+            except KeyError:
+                pass
+            zout.writestr(opf_path,
+                          _ET.tostring(root, encoding="utf-8", xml_declaration=True),
+                          compress_type=_zf.ZIP_DEFLATED)
+            if ncx_fp:
+                try:
+                    zout.writestr(ncx_fp, ncx_new if ncx_new else zin.read(ncx_fp),
+                                  compress_type=_zf.ZIP_DEFLATED)
+                except KeyError:
+                    pass
+            for fp in sorted(keep_files):
+                if fp in ("mimetype", "META-INF/container.xml", opf_path, ncx_fp):
+                    continue
+                if fp not in names:
+                    continue
+                try:
+                    zout.writestr(fp, zin.read(fp),
+                                  compress_type=_zf.ZIP_DEFLATED)
+                except KeyError:
+                    continue
+        if not (outp.is_file() and outp.stat().st_size > 0):
+            return None
+        try:
+            _chk = _zf.ZipFile(str(outp))
+            _chk.read(opf_path)
+            _chk.close()
+        except Exception:
+            return None
+        return outp
+    except Exception:
+        return None
+    finally:
+        try:
+            zin.close()
+        except Exception:
+            pass
+
+
 def remote_info(work: str, fmt: str) -> dict | None:
     """HEAD 探针（复用共享层），返回 {url,size,mtime,etag}；失败/zip 型返回 None。"""
+    w, juan = _entry(work)
+    n = _juan_num(juan)
+    if n is not None and fmt in _JUAN_FORMATS:
+        if fmt not in _JUAN_SINGLE:
+            return None   # 卷 zip → 本地目录，大小不可比
+        url = _juan_url(fmt, w, n)
+        r = cf.probe_info(url)
+        if r.get("status") != "changed":
+            return None
+        mtime = None
+        lm = r.get("last_modified")
+        if lm:
+            try:
+                mtime = parsedate_to_datetime(lm).timestamp()
+            except Exception:
+                mtime = None
+        return {"url": url, "size": r.get("size"), "mtime": mtime, "etag": r.get("etag")}
+    if n is not None and fmt in _JUAN_SPLIT:
+        return None   # 本地拆分件：无远端可比，新鲜度走 official_state 水位
     if fmt in _ZIP_FORMATS:
         return None   # 端点为 zip，本地是目录，大小不可比 → 总是下载
-    work = canonical(work)
+    work = w
     url = ebook_url(fmt, canon_of(work), work)
     r = cf.probe_info(url)
     if r.get("status") != "changed":
@@ -159,7 +546,39 @@ def is_unchanged(info: dict | None, dest) -> bool:
 
 
 def download_ebook(work: str, fmt: str, dest_dir, config=None, *, force=False) -> Path | None:
-    work = canonical(work)
+    w, juan = _entry(work)
+    n = _juan_num(juan)
+    if n is not None and fmt in _JUAN_SPLIT:
+        # 官方无单卷端点：整部取到缓存（保留）再本地拆卷
+        dest = _juan_local(w, fmt, dest_dir, n)
+        if dest.is_file() and not force:
+            return dest
+        whole = dest_path(w, fmt, dest_dir)
+        if not whole.is_file() or force:
+            got_w = download_ebook(w, fmt, dest_dir, config, force=force)
+            if got_w is None or not Path(got_w).is_file():
+                return None
+            whole = Path(got_w)
+        if fmt == "pdf":
+            return split_pdf_juan(whole, n, dest)
+        return split_epub_juan(whole, n, dest)
+    if n is not None and fmt not in _JUAN_FORMATS:
+        raise NoJuanEndpoint(f"{fmt} 官方无单卷端点")
+    if n is not None and fmt in _JUAN_FORMATS:
+        got = copy_from_library(work, fmt, dest_dir, config, force=force)
+        if got is not None:
+            return got
+        url = _juan_url(fmt, w, n)
+        if not url:
+            return None
+        if _head_absent_404(url):
+            raise RemoteNotFound(url)
+        dest = _juan_local(w, fmt, dest_dir, n)
+        if fmt in _JUAN_SINGLE:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            return dest if cf.download(url, str(dest)) else None
+        return dest if cf.download(url, str(dest), unzip=True) else None
+    work = w
     got = copy_from_library(work, fmt, dest_dir, config, force=force)
     if got is not None:
         return got
@@ -464,7 +883,13 @@ def find_in_library(work: str, fmt: str, config=None, *, root=None, libmap=None)
     """本地库查找 → 非空文件 Path 列表（单文件 1 个，按卷多个）；无则 []。
 
     只读本地库。`{fmt: entry}` 可由 `resolve_library_map` 预解析传入。
+    条目键（`T0220:479`）→ 只取该卷文件；无卷端点格式按整部回退。
     """
+    _w, _juan = _entry(work)
+    _n = _juan_num(_juan)
+    work = _w
+    if _n is not None and fmt not in _JUAN_FORMATS:
+        return []   # 卷条目 + 无单卷格式：官方/本地库均无该卷
     if root is None:
         root, ov = library_config(config)
     else:
@@ -529,6 +954,8 @@ def find_in_library(work: str, fmt: str, config=None, *, root=None, libmap=None)
         except OSError:
             continue
         files = [p for p in files if _nonempty(p)]
+        if _n is not None:
+            files = [p for p in files if p.name.startswith(f"{v}_{_n:03d}")]
         if files:
             return files
     return out
@@ -551,13 +978,14 @@ def copy_from_library(work: str, fmt: str, dest_dir, config=None, *, root=None,
     files = find_in_library(work, fmt, config, root=root, libmap=libmap)
     if not files:
         return None
+    _w, _juan = _entry(work)
+    _n = _juan_num(_juan)
+    if _n is not None and fmt not in _JUAN_FORMATS:
+        return None   # 卷条目 + 无单卷格式：不拿整部冒充
+    _single = (fmt not in _ZIP_FORMATS) or (_n is not None and fmt in _JUAN_SINGLE)
     try:
-        w = canonical(work)
-    except Exception:
-        w = work
-    try:
-        if len(files) == 1 and _LIB_SINGLE_RE.match(files[0].name):
-            dest = dest_path(w, fmt, dest_dir)
+        if _single:
+            dest = local_path(work, fmt, dest_dir)
             dest.parent.mkdir(parents=True, exist_ok=True)
             if dest.exists() and not force:
                 try:
@@ -567,7 +995,7 @@ def copy_from_library(work: str, fmt: str, dest_dir, config=None, *, root=None,
                     pass
             shutil.copy2(str(files[0]), str(dest))
             return dest if dest.exists() else None
-        out = zip_dest_dir(w, fmt, dest_dir)
+        out = local_path(work, fmt, dest_dir)
         out.mkdir(parents=True, exist_ok=True)
         for f in files:
             dst = out / f.name

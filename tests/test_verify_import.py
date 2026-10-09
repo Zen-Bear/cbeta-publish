@@ -334,7 +334,7 @@ class VerifySendImportTest(unittest.TestCase):
         real = b.verify_work
         calls = []
 
-        def fake(work, fmts, out_dir, config, preset=None, stop=None):
+        def fake(work, fmts, out_dir, config, preset=None, stop=None, juan=None):
             calls.append((work, list(fmts), str(out_dir)))
             out = Path(out_dir)
             out.mkdir(parents=True, exist_ok=True)
@@ -684,7 +684,7 @@ class VerifySendImportTest(unittest.TestCase):
         import cbeta_publish.books.xml2pdf_bridge as b
         real = b.verify_work
 
-        def fake(work, fmts, out_dir, config, preset=None, stop=None):
+        def fake(work, fmts, out_dir, config, preset=None, stop=None, juan=None):
             out = Path(out_dir)
             out.mkdir(parents=True, exist_ok=True)
             rp = out / "r.txt"
@@ -763,6 +763,27 @@ class VerifySendImportTest(unittest.TestCase):
             b.verify_work = real
         self.assertEqual(done.get("tot"), 1)
         self.assertEqual(done.get("fl"), ["T0001"])
+
+    def test_worker_passes_juan(self):
+        # 卷子集：works_juan 逐本透传给 verify_work（缺省 ""=整本）
+        from cbeta_publish.books.verify_worker import VerifyWorker
+        import cbeta_publish.books.xml2pdf_bridge as b
+        real = b.verify_work
+        seen = {}
+
+        def fake(work, fmts, out_dir, config, preset=None, stop=None, juan=None):
+            seen[work] = juan
+            return None
+
+        b.verify_work = fake
+        try:
+            w = VerifyWorker(["T0001", "T0349"], ["pdf"], self.tmp / "o",
+                             self.win.config, works_juan={"T0349": "2-3"})
+            w.run()
+        finally:
+            b.verify_work = real
+        self.assertEqual(seen.get("T0349"), "2-3")
+        self.assertEqual(seen.get("T0001"), "")
 
     def test_send_clears_worker_ref(self):
         # 跑完不断开/不释放线程对象会导致野指针：_verify_worker 必须复位
@@ -1037,13 +1058,34 @@ class VerifySendImportTest(unittest.TestCase):
         self.assertEqual(len(res["review"]), 1)
         self.assertIn("含正文差异", res["review"][0][4])
 
+    def test_import_subset_suffix_product(self):
+        # 卷子集：报告目录/产物带 （卷…） 后缀，导入保留上游产物名
+        import cbeta_publish.books.xml2pdf_bridge as b
+        win = self.win
+        vdir = self.tmp / "vsub"
+        vdir.mkdir(parents=True, exist_ok=True)
+        name = "T0001 大般若經（卷2-3）"
+        (vdir / f"{name}.pdf").write_bytes(b"PDF")
+        vd = vdir / f"{name}（验证）"
+        vd.mkdir(parents=True, exist_ok=True)
+        (vd / "report.txt").write_text("=== T0001\n", encoding="utf-8")
+        (vd / "report.json").write_text(json.dumps({
+            "schema": 1, "work": "T0001",
+            "juan": {"segments": [[2, 3]], "label": "2-3"},
+            "fmts": {"pdf": {"verdict": "pass", "fingerprint": "x"}}},
+            ensure_ascii=False), encoding="utf-8")
+        base = self.tmp / "sublib"
+        res = win._do_import_verified(["T0001:2-3"], vdir, base)
+        self.assertEqual((base / "pdf" / f"{name}.pdf").read_bytes(), b"PDF")
+        self.assertEqual(res["accept"], {("T0001:2-3", "pdf"): "strict"})
+
     def test_worker_notes_tier_label(self):
         # epub 未过但 notes_only → 进度行带「仅注释」
         from cbeta_publish.books.verify_worker import VerifyWorker
         import cbeta_publish.books.xml2pdf_bridge as b
         real = b.verify_work
 
-        def fake(work, fmts, out_dir, config, preset=None, stop=None):
+        def fake(work, fmts, out_dir, config, preset=None, stop=None, juan=None):
             out = Path(out_dir)
             out.mkdir(parents=True, exist_ok=True)
             vd = out / f"{work} 大般若經（验证）"
@@ -1124,7 +1166,7 @@ class VerifySendImportTest(unittest.TestCase):
         import cbeta_publish.books.xml2pdf_bridge as b
         real = b.verify_work
 
-        def fake(work, fmts, out_dir, config, preset=None, stop=None):
+        def fake(work, fmts, out_dir, config, preset=None, stop=None, juan=None):
             out = Path(out_dir)
             out.mkdir(parents=True, exist_ok=True)
             vd = out / f"{work} 大般若經（验证）"

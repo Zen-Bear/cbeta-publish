@@ -13,6 +13,7 @@ publish 侧不再自行定位 XML：CBReader 书库是 P5a（按卷切分），�
 import contextlib
 import io
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -64,7 +65,19 @@ def _run_cli(argv):
             return 1
 
 
-def _run_cli_convert(src, fmt, output, config, preset):
+def _id_juan_arg(src, juan=None):
+    """`-i` 取值：work id + 卷范围（`ID:spec`）；空 juan 或已是路径/含 `:` 原样。
+
+    与上游 `-i ID:范围`（`split_id_juan`）同形；多段分隔沿用上游 `,`（CLI）。
+    """
+    s = str(src or "")
+    j = str(juan or "").strip()
+    if not j or ":" in s or "/" in s or "\\" in s:
+        return s
+    return f"{s}:{j}"
+
+
+def _run_cli_convert(src, fmt, output, config, preset, juan=None):
     """构造一次 CLI 调用并返回 `(退出码, 输出尾部)`；调用前不检查停机，由调用方决定。"""
     x2p = _x2p_root(config)
     if not x2p.exists():
@@ -72,7 +85,7 @@ def _run_cli_convert(src, fmt, output, config, preset):
         return None, ""
     _ensure_path(str(x2p))
     run_wrap = write_run_wrapper(config, preset) if preset else None
-    argv = ["-i", src, "-f", fmt, "-o", str(output)]
+    argv = ["-i", _id_juan_arg(src, juan), "-f", fmt, "-o", str(output)]
     if run_wrap is not None:
         argv += ["--config", str(run_wrap)]
     elif preset:
@@ -134,12 +147,13 @@ def _replace_staged_path(src: Path, dest: Path):
 
 
 def convert_outputs(work_id: str, fmt: str, out_dir, config: dict, preset=None,
-                    stop=None) -> list:
+                    stop=None, juan=None) -> list:
     """用上游默认命名转换一部作品的全部源文档，返回搬入 `out_dir` 的产物。
 
     同一 work id 可能对应多个源 XML（如 TX0011 的 TX18/TX19 两册）。
     显式 `-o` 文件会让后渲染的源覆盖先渲染的源，因此这里传输出目录，
     让上游按各自标题落盘，再把产物与报告一起搬回 `out_dir`。
+    `juan`（卷范围 `ID:spec` 的 spec）非空时按卷子集渲染，产物名带上游 `（卷…）` 后缀。
     """
     if stop is not None:
         try:
@@ -156,7 +170,8 @@ def convert_outputs(work_id: str, fmt: str, out_dir, config: dict, preset=None,
     import tempfile
     with tempfile.TemporaryDirectory(prefix=f"{work_id}-{fmt}-", dir=out_dir) as stage:
         stage_path = Path(stage)
-        code, tail = _run_cli_convert(str(work_id), fmt, stage_path, config, preset)
+        code, tail = _run_cli_convert(str(work_id), fmt, stage_path, config, preset,
+                                      juan=juan)
         if code:
             print("pycbeta fail", code, tail)
             return []
@@ -178,7 +193,7 @@ def convert_outputs(work_id: str, fmt: str, out_dir, config: dict, preset=None,
 
 
 def convert(work_id: str, xml_path, out_file, config: dict, fmt: str = "pdf",
-            preset=None, stop=None) -> Path | None:
+            preset=None, stop=None, juan=None) -> Path | None:
     """进程内调 pycbeta 生成单个文件。
 
     xml_path: 本地 XML 路径（一般传 None 直接传 work id，由对面按自家
@@ -190,6 +205,8 @@ def convert(work_id: str, xml_path, out_file, config: dict, fmt: str = "pdf",
     out_file: 显式输出文件路径（publish 侧定名，保证合并可寻址）。
     注意：多源 work 不要用显式 `-o`（后渲染的源会覆盖先渲染的源），
     请用 `convert_outputs` 走输出目录。
+    juan: 卷范围 spec（`ID:spec` 的 spec）；非空按卷子集渲染（显式 `-o` 不加后缀，
+    调用方需自行按上游模板定名，见 `resolve_juan_suffix`）。
     stop: 可调用对象，调用前返回 True 表示取消。
     返回产物 Path（存在）或 None。
     """
@@ -207,7 +224,7 @@ def convert(work_id: str, xml_path, out_file, config: dict, fmt: str = "pdf",
     out_file = Path(out_file)
     out_file.parent.mkdir(parents=True, exist_ok=True)
     src = str(xml_path) if xml_path else str(work_id)
-    code, tail = _run_cli_convert(src, fmt, out_file, config, preset)
+    code, tail = _run_cli_convert(src, fmt, out_file, config, preset, juan=juan)
     if code:
         print("pycbeta fail", code, tail)
         return None
@@ -526,6 +543,16 @@ def find_built(work: str, fmt: str, base_dir):
     return found[0] if found else None
 
 
+def find_all_built_entry(work: str, fmt: str, base_dir, juan=""):
+    """条目产物：卷非空取带 `（卷…）` 后缀者；整本取无卷后缀者（回退全部）。"""
+    allp = find_all_built(work, fmt, base_dir)
+    j = str(juan or "").strip()
+    if not j:
+        return [p for p in allp if "（卷" not in p.stem] or allp
+    suffix = f"（卷{j}）"
+    return [p for p in allp if p.stem.endswith(suffix)]
+
+
 def source_mtime(config, work: str):
     """该 work 的 XML 源最新 mtime：工作根下其目录内**根级** `*.xml` 取最大。
 
@@ -573,12 +600,14 @@ def _outputs_current(existing, sources, fresh: bool) -> bool:
 
 
 def ensure_products(work: str, fmt: str, base_dir, config, preset=None,
-                    regen_all: bool = False, name: str = None):
+                    regen_all: bool = False, name: str = None, juan=None):
     """确保一部作品该格式的全部自制产物存在，返回 ([Path...], 全部复用?)。
 
     同一 work id 可能对应多个源 XML（如 TX0011 的 TX18/TX19 两册），
     此时上游默认命名才能区分产物；只有在源集合已知为单文件时才沿用
     `name`/精确路径的旧行为。`name` 在多源批量生成中不作为输出名。
+    `juan`（卷范围 spec）非空时恒走输出目录模式，由上游按卷子集命名
+    （显式 `-o` 不加 `（卷…）` 后缀）。
     """
     base_dir = Path(base_dir)
     out_dir = base_dir / fmt
@@ -586,18 +615,18 @@ def ensure_products(work: str, fmt: str, base_dir, config, preset=None,
         out_dir.mkdir(parents=True, exist_ok=True)
     except Exception:
         pass
-    existing = find_all_built(work, fmt, base_dir)
+    existing = find_all_built_entry(work, fmt, base_dir, juan)
     sources = work_source_files(config, work)
     if not regen_all and _outputs_current(
             existing, sources, not sources_newer(config, work, existing)):
         return existing, True
-    if sources and len(sources) == 1 and len(existing) <= 1:
+    if not juan and sources and len(sources) == 1 and len(existing) <= 1:
         target = existing[0] if existing else xml_dest(work, fmt, base_dir, name)
         got = convert(work, None, target, config, fmt=fmt, preset=preset)
         if got is not None and got.exists():
             return [got], False
         return [], False
-    outputs = convert_outputs(work, fmt, out_dir, config, preset=preset)
+    outputs = convert_outputs(work, fmt, out_dir, config, preset=preset, juan=juan)
     if not outputs:
         return [], False
     if sources and len(outputs) == len(sources):
@@ -614,7 +643,7 @@ def ensure_products(work: str, fmt: str, base_dir, config, preset=None,
 
 
 def ensure_one(work: str, fmt: str, base_dir, config, preset=None,
-               regen_all: bool = False, name: str = None):
+               regen_all: bool = False, name: str = None, juan=None):
     """确保一部自制书存在，返回 (代表产物 Path | None, 全部复用?)。
 
     兼容旧的单产物调用；多源 work 会生成全部产物，但只返回第一项。
@@ -622,7 +651,7 @@ def ensure_one(work: str, fmt: str, base_dir, config, preset=None,
     """
     outputs, reused = ensure_products(work, fmt, base_dir, config,
                                       preset=preset, regen_all=regen_all,
-                                      name=name)
+                                      name=name, juan=juan)
     return (outputs[0] if outputs else None), reused
 
 
@@ -677,12 +706,15 @@ def verify_coll_dir(config, slug: str) -> Path:
     return verify_dir(config) / (_safe_stem(slug) or "coll")
 
 
-def verify_work(work: str, fmts, out_dir, config: dict, preset=None, stop=None) -> Path | None:
+def verify_work(work: str, fmts, out_dir, config: dict, preset=None, stop=None,
+                juan=None) -> Path | None:
     """进程内逐本校验：跑 `pycbeta.cli.main([... --verify])`，产物与报告落 out_dir。
 
     - 有预设时经 `write_run_wrapper` 包临时 run.json（保留仓库主题），用后删。
     - 报告：CLI 写 `{id 书名}（验证）/{id}_{书名}_校验报告.txt`
       （旧版为 `report.txt`，仍兼容读）；本函数返回实际报告 Path（存在）或 None。
+    - juan: 卷范围 spec；非空时 `-i ID:spec` 按卷子集校验（上游产物/报告目录名带
+      `（卷…）` 后缀，`find_verify_report` 的 `{work}*（验证）` 通配仍命中）。
     """
     if stop is not None:
         try:
@@ -736,7 +768,7 @@ def verify_work(work: str, fmts, out_dir, config: dict, preset=None, stop=None) 
         _dl = 5
     _maxd = max(0, min(50, _maxd))
     _dl = max(0, min(50, _dl))
-    argv = ["-i", str(work), "-f", fmt_arg, "-o", str(out_dir), "--verify",
+    argv = ["-i", _id_juan_arg(str(work), juan), "-f", fmt_arg, "-o", str(out_dir), "--verify",
             "--verify-max-diff", str(_maxd), "--verify-diff-lines", str(_dl)]
     # 校验根钉死到 `{out_dir}/验证`：CLI `--verify-root` 显式优先，预设
     # `source.verify_root` 劫持不到（报告才能落回 publish 托管区）
@@ -839,11 +871,26 @@ def _report_group_identity(path) -> str:
     return ""
 
 
+def _head_token(s):
+    """token/stem 的 work 头：剥 `:范围` 与 `_NNN` 卷后缀（`T0001_001`→`T0001`）。"""
+    s = str(s or "").strip()
+    m = re.match(r"^([^:：]+)[:：]", s)
+    if m:
+        s = m.group(1).strip()
+    m2 = re.match(r"^(.+)_\d{1,3}$", s)
+    if m2:
+        s = m2.group(1)
+    return s
+
+
 def _verify_stem_matches(stem: str, work: str) -> bool:
     # 新命名用下划线分隔（T0001_长阿含经_校验报告.txt），同样按分隔符匹配，
     # 避免 T185 误命中 T1858（要求分隔符后一位对齐）。
+    # 先剥两侧卷后缀（`:范围`/`_NNN`）：旧脏 id `T0001_001` 与 `T0001` 视为同一部。
     if not stem or not work:
         return False
+    stem = _head_token(stem)
+    work = _head_token(work)
     return (stem == work or stem.startswith(work + " ")
             or stem.startswith(work + "_"))
 
@@ -1055,7 +1102,7 @@ def _read_verify_json(report_path):
     fmts_raw = data.get("fmts")
     if not isinstance(fmts_raw, dict):
         return None
-    out = {"fmts": {}, "coverage": {}, "inputs": []}
+    out = {"fmts": {}, "coverage": {}, "inputs": [], "juan": None}
     for fmt, info in fmts_raw.items():
         if not fmt or not isinstance(info, dict):
             continue
@@ -1080,6 +1127,13 @@ def _read_verify_json(report_path):
     _cov = _inp.get("coverage")
     if isinstance(_cov, dict):
         out["coverage"] = {str(k): str(v) for k, v in _cov.items() if k and v}
+    _j = data.get("juan")
+    if isinstance(_j, dict):
+        _segs = _j.get("segments")
+        _lab = _j.get("label")
+        if isinstance(_segs, list) or isinstance(_lab, str):
+            out["juan"] = {"segments": _segs if isinstance(_segs, list) else [],
+                           "label": str(_lab or "")}
     return out
 
 
@@ -1157,6 +1211,43 @@ def verify_json_inputs_names(report_path):
     if rj is None:
         return None
     return list(rj.get("inputs") or [])
+
+
+def verify_json_juan(report_path):
+    """配对 report.json 的卷标签（`juan.label`）；无 json／整本返回 ""。"""
+    rj = _read_verify_json(report_path)
+    if rj is None:
+        return ""
+    j = rj.get("juan") or {}
+    return str(j.get("label") or "") if isinstance(j, dict) else ""
+
+
+def juan_segments(config, spec):
+    """卷范围 spec → 上游归一 [(lo,hi)]；空/非法/上游不可用返回 None。
+
+    `、`（显示分隔）先归一为 `,`（上游 `parse_juan_spec` 分隔符）。
+    """
+    s = str(spec or "").strip()
+    if not s:
+        return None
+    try:
+        _ensure_path(str(_x2p_root(config)))
+        from pycbeta.juan import parse_juan_spec
+        return parse_juan_spec(s.replace("、", ","))
+    except Exception:
+        return None
+
+
+def juan_label(config, spec):
+    """卷范围 spec → 上游规范标签（`format_juan_label`）；不可用回退原文。"""
+    segs = juan_segments(config, spec)
+    if segs is None:
+        return str(spec or "").strip()
+    try:
+        from pycbeta.juan import format_juan_label
+        return format_juan_label(segs)
+    except Exception:
+        return str(spec or "").strip()
 
 
 def verify_reports_dir(config):
@@ -1424,11 +1515,14 @@ def _effective_presets(config, preset_path):
         return None, wrap
 
 
-def verify_fingerprint(work: str, fmt: str, config, preset=None, xml_files=None):
+def verify_fingerprint(work: str, fmt: str, config, preset=None, xml_files=None,
+                       juan=None):
     """单（work, fmt）校验指纹预判：返回当前输入的指纹，None 表示不可复用。
 
     - xml_files 为空时上游自行定位（旧行为）；传入则按该有序列表计算
       （跨边比对须与报告 `inputs.xml_files` 同序）；
+    - juan 为卷范围 spec（或规范标签）；非空时经上游 `parse_juan_spec` 归一后
+      入指纹（子集与整本、不同子集互异）；非法/上游不支持则返回 None（不复用）；
     - 以生效配置 dict（`presets=`）调用上游，与 GUI 报告同形；另传
       `config_path=包装路径` 贴近 GUI（注释相对路径等边缘求同）；
     - 阈值取 publish 全局（`verify_max_diff` 默认 0、`verify_diff_lines` 默认 5），
@@ -1443,6 +1537,11 @@ def verify_fingerprint(work: str, fmt: str, config, preset=None, xml_files=None)
             return None
     except Exception:
         return None
+    segs = None
+    if str(juan or "").strip():
+        segs = juan_segments(config, juan)
+        if segs is None:
+            return None          # 卷范围非法/上游不支持：不可复用
     try:
         md = _cfg(config).get("verify_max_diff", 0)
         md = 0 if md is None else int(md)
@@ -1462,7 +1561,8 @@ def verify_fingerprint(work: str, fmt: str, config, preset=None, xml_files=None)
                     xml_files=[str(p) for p in (xml_files or [])] or None,
                     config_path=str(wrap) if wrap else None, presets=eff,
                     max_diff=max(0, min(50, md)),
-                    diff_lines=max(0, min(50, dl)))
+                    diff_lines=max(0, min(50, dl)),
+                    juan=segs)
         finally:
             if wrap is not None:
                 try:

@@ -119,6 +119,23 @@ class VerifyCacheTest(unittest.TestCase):
         p = vc.records_path({})
         self.assertEqual(p.name, "verify_records.json")
 
+    def test_juan_isolation(self):
+        # 同 (work,fmt) 整本与子集、不同子集互不命中；集身份=(inputs,juan)
+        from cbeta_publish.books import verify_cache as vc
+        vc.record_pass(self.db, "T0349", "pdf", "fpw", {"inputs": ["S.xml"]})
+        self.assertTrue(vc.is_fresh(self.db, "T0349", "pdf", "fpw", ["S.xml"]))
+        self.assertFalse(vc.is_fresh(self.db, "T0349", "pdf", "fpw", ["S.xml"],
+                                     juan="2-3"))
+        vc.record_pass(self.db, "T0349", "pdf", "fps",
+                       {"inputs": ["S.xml"], "juan": "2-3"})
+        self.assertTrue(vc.is_fresh(self.db, "T0349", "pdf", "fps", ["S.xml"],
+                                    juan="2-3"))
+        self.assertFalse(vc.is_fresh(self.db, "T0349", "pdf", "fps", ["S.xml"],
+                                     juan="5"))
+        self.assertTrue(vc.is_fresh(self.db, "T0349", "pdf", "fpw", ["S.xml"]))
+        e = vc.get(self.db, "T0349", "pdf")
+        self.assertEqual(len(e["sets"]), 2)   # 同 inputs 不同 juan → 两集
+
 
 class FingerprintProbeTest(unittest.TestCase):
     def _real_cfg(self):
@@ -155,6 +172,15 @@ class FingerprintProbeTest(unittest.TestCase):
             self.assertEqual(list(tmp.iterdir()), [])
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_juan_label_and_segments(self):
+        import cbeta_publish.books.xml2pdf_bridge as b
+        cfg = self._real_cfg()
+        self.assertEqual(b.juan_label(cfg, "2-3"), "2-3")
+        self.assertEqual(b.juan_label(cfg, "34-36,40"), "34-36、40")
+        self.assertEqual(b.juan_label(cfg, "34-36、40"), "34-36、40")
+        self.assertEqual(b.juan_segments(cfg, "34-36,40"), [(34, 36), (40, 40)])
+        self.assertIsNone(b.juan_segments(cfg, ""))
 
 
 class VerifyReuseFlowTest(unittest.TestCase):
@@ -216,7 +242,7 @@ class VerifyReuseFlowTest(unittest.TestCase):
         real = b.verify_work
         calls = []
 
-        def fake(work, fmts, out_dir, config, preset=None, stop=None):
+        def fake(work, fmts, out_dir, config, preset=None, stop=None, juan=None):
             calls.append(work)
             out = Path(out_dir)
             out.mkdir(parents=True, exist_ok=True)
@@ -236,7 +262,7 @@ class VerifyReuseFlowTest(unittest.TestCase):
     def _stub_fingerprint(self):
         import cbeta_publish.books.xml2pdf_bridge as b
         b.verify_fingerprint_available = lambda config: True
-        b.verify_fingerprint = lambda w, f, config, preset=None, xml_files=None: f"fp-{w}-{f}"
+        b.verify_fingerprint = lambda w, f, config, preset=None, xml_files=None, juan=None: f"fp-{w}-{f}"
 
     def test_all_fresh_skips_everything(self):
         import cbeta_publish.books.xml2pdf_bridge as b
@@ -341,6 +367,31 @@ class VerifyReuseFlowTest(unittest.TestCase):
         self.assertEqual(e["accept"], "strict")
         self.assertEqual(e["sets"][0]["inputs"], ["S.xml"])
         self.assertEqual(e["sets"][0]["fingerprint"], "fp-T0001-pdf")
+
+    def test_subset_not_reused_from_whole_record(self):
+        # 卷条目（work:卷）不被整本记录复用：label 不等 → 重验
+        import cbeta_publish.books.xml2pdf_bridge as b
+        from cbeta_publish.books import verify_cache as vc
+        win = self.win
+        self._stub_fingerprint()
+        d = win._coll_dict(win.coll_combo.currentData())
+        _old = list(d.get("work_ids") or [])
+        d["work_ids"] = ["T0001:2-3", "T0002"]
+        base = Path(win.config["xml_to_ebooks_dir"])
+        (base / "pdf").mkdir(parents=True, exist_ok=True)
+        for w in ("T0001", "T0002"):
+            (base / "pdf" / f"{w}.pdf").write_bytes(b"x")
+        vc.record_pass(self._records_path(), "T0001", "pdf", "fp-T0001-pdf")
+        vc.record_pass(self._records_path(), "T0002", "pdf", "fp-T0002-pdf")
+        boxes, finishes, restore = self._patch_common()
+        calls, restore_v = self._patch_verify()
+        try:
+            win._send_coll_to_verify()
+        finally:
+            restore_v()
+            restore()
+            d["work_ids"] = _old
+        self.assertEqual(calls, ["T0001"])   # 子集不复用整本记录
 
     def test_toggle_off_verifies_all(self):
         # 开关关闭：回退旧行为（重制即全部重验），即使记录新鲜

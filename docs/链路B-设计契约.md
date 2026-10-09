@@ -131,15 +131,24 @@ def convert_outputs(work_id, fmt, out_dir, config, preset=None, stop=None) -> li
 **`collections/<cat>/<slug>.json`**（只读兼容，不参与决策）
 ```json
 { "source": "official", "work_sources": {...}, "xml_options": {...},
+  "work_ids": ["T0001", "T0220:479", "T0220:523"],
   "manual_volumes": [ {"title": "法藏", "work_ids": ["T0001","T0002"]} ],
+  "work_notes": { "T0001": "依大正藏本" },
   "bulei_groups": { "T0001": ["16 淨土部類", "T0001 淨土經"] } }
 ```
+- **条目键**：`work_ids` 存 `work`（整本）或 `work:卷范围`（卷子集，如 `T0220:479`）；
+  同一部的**不同卷是不同条目**（去重按条目键，故「导入ID…」29 行即 29 条）。
+  `canonical_entry` 归一 work 大小写、卷原样；`split_entry` 取回 (work, 卷)。
 - `bulei_groups`：从部类树拖入时记录的来源部类**全路径**（`{work_id: [段...]}`）。
   「按部类」分组/合并时按当前深度截断、`_clean_bulei_seg` 清洗后优先采用，
   解决同书多部类被首个命中抢走的问题（如 16 淨土的书同时在 06/10）。
   读入规范化：key 归一、剔除不在 `work_ids` 的项。无记录的书走自动解析（旧行为）。
-- `manual_volumes`：右栏「手工分册」的卷定义（顺序=册序；`work_ids` 仍是全书单真相，
-  卷内顺序不独立存放）。读入规范化：id 归一、剔除不在 `work_ids` 的脏 id、跨卷去重（先出现者保留）、
+- `work_notes`：「导入ID…」（P9）带入的书籍注释（`{work_id: 注释}`）。**仅展示**
+  （左/右栏书籍行 tooltip、书籍信息页注释行），不参与合并/分册/校验。
+  读入规范化：key 按 work 部分归一、剪枝、空值丢弃。
+  （旧 `work_juan` 字段废弃——卷范围已并入 `work_ids` 条目键。）
+- `manual_volumes`：右栏「手工分册」的卷定义（顺序=册序；`work_ids` 仍是条目单真相，
+  卷内顺序不独立存放）。读入规范化：条目键归一、剔除不在 `work_ids` 的脏项、跨卷去重（先出现者保留）、
   空卷保留。`merge.mode=manual` 时按此分册（无卷则回退不分册）。
 - 来源**不再**按丛书/逐书配置：一套丛书可按官方或自制合并（右栏按次选，整批统一）。
 - 旧字段保留仅为兼容旧 JSON，publish 不写、不用。
@@ -260,6 +269,25 @@ def convert_outputs(work_id, fmt, out_dir, config, preset=None, stop=None) -> li
   （默认指向当前丛书 `verify_dir/<丛书>/`，可改选独立窗输出目录，同样兼容两种报告名），
    便于把独立窗已校验的产物入库（菜单「制作书籍 → 运行 xml2pdf 制作书籍…」
    会把当前丛书直接带过去）。独立窗保留为手动工作台。
+- **卷子集（P11）**：卷范围作为**条目键**的一部分存进 `work_ids`（`T0220:479` 等，
+  同部多卷各自成条），经全链透传——`bridge.convert/convert_outputs/ensure_products/
+  verify_work` 加 `juan=`（`-i "ID:spec"`，`juan` 非空时 `ensure_products` 恒走输出目录模式，
+  由上游加 `（卷…）` 后缀，寻址用 `find_all_built_entry`）；`VerifyWorker` 按条目拆 `work`/卷
+  透传。**复用按卷隔离**：`verify_records.json` 集身份＝`(inputs, juan)`（`juan` 缺省 `""`＝整本）；
+  指纹经 `verify_fingerprint(juan=)` 带上游卷维度，`report.json` 顶层 `juan.label` 参与
+  惰性导入/入库匹配（`_do_import_verified` 按 `work`＋卷标签命中条目）；子集与整本、
+  不同子集互不命中（上游契约见《上游-指纹juan入参提案.md》）。报告/产物目录名带 `（卷…）` 后缀，
+  `find_verify_report`/`_report_group_identity` 的 `{work}*（验证）` 通配与
+  `_verify_stem_matches` 头比对（剥 `:范围`/`_NNN`）均命中。
+- **官方按卷下载（P11）**：官方源按条目拆 `work`/卷——`html`/`txt_notes`/`txt`（单文件/zip）
+  与 `docx`/`odt`（`{canon}/{ID}/{ID}_{NNN}.{ext}` 单文件）直取单卷端点（实测 2026-10-08）；
+  **`pdf`/`epub` 官方无单卷**（各作品 404）→ **本地拆分**：整部取到缓存（保留）再切分，
+  pdf 按目录（TOC）level-2 连续卷号取页范围＋卷首加整部第 1 页作封面＋子集目录重定，
+  epub 取 `juans/{NNN}.xhtml`＋卷首 `titlepage.xhtml`＋封面图＋原 OPF/NCX 裁剪＋assets 全留
+  （保留原包结构）；任一校验失败回失败通道。
+  单卷产物 `{官方根}/{fmt}/{ID}_{NNN}.html|.docx|.odt|.pdf|.epub` 或 `{ID}_{NNN}/`（zip 平展）。
+  `local_path`/`download_ebook`/`remote_info`/`copy_from_library`/`find_in_library` 均按条目键处理；
+  `official_state` 水位按条目（`source_mtime` 取 work 部分）。
 
 ## 6. 实施清单
 

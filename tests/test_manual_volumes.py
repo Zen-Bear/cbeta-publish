@@ -102,15 +102,15 @@ class ViewComboTest(unittest.TestCase):
         from PySide6.QtWidgets import QLabel
         self.assertFalse([lb for lb in win.findChildren(QLabel) if lb.text() == "分组:"])
 
-    def test_sel_buttons_narrow_combo_wide(self):
-        # 全选/不选缩窄（固定宽）；显示方式下拉放宽（最小宽）
+    def test_sel_buttons_narrow_combo_bounded(self):
+        # 全选/不选是窄固定宽；显示方式下拉不随窗口拉伸（否则挤到「移除」）
         win = self.win
         self.assertEqual(win.btn_coll_sel_all.minimumWidth(),
                          win.btn_coll_sel_all.maximumWidth())
         self.assertEqual(win.btn_coll_sel_none.minimumWidth(),
                          win.btn_coll_sel_none.maximumWidth())
         self.assertLessEqual(win.btn_coll_sel_all.maximumWidth(), 48)
-        self.assertGreaterEqual(win.coll_view_combo.minimumWidth(), 140)
+        self.assertLessEqual(win.coll_view_combo.maximumWidth(), 120)
 
     def test_flat_default_render(self):
         self.win._coll_view.clear()

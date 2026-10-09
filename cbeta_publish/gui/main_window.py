@@ -620,6 +620,9 @@ class MainWindow(QMainWindow):
         self.btn_coll_note=QPushButton("加说明页")
         self.btn_coll_note.setToolTip("设置当前丛书的说明页（与设置页「加丛书说明页」同源）")
         ch.addWidget(self.btn_coll_note)
+        self.btn_import_ids=QPushButton("导入ID…")
+        self.btn_import_ids.setToolTip("批量粘贴/文件/网页导入佛典编号，预览后新建丛书（可带注释）")
+        ch.addWidget(self.btn_import_ids)
         rv.addWidget(combo_row)
         mgmt=QWidget()
         mh=QHBoxLayout(mgmt)
@@ -686,7 +689,9 @@ class MainWindow(QMainWindow):
         self.coll_view_combo.addItem("按朝代", "dynasty")
         self.coll_view_combo.addItem("手工分册", "manual")
         self.coll_view_combo.setToolTip("书单显示方式：平铺／按刊本册／按部类／按作者／按朝代（只读视图）／手工分册（可编辑）")
-        self.coll_view_combo.setMinimumWidth(150)
+        self.coll_view_combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+        self.coll_view_combo.setMinimumWidth(0)
+        self.coll_view_combo.setMaximumWidth(110)   # 不随窗口拉伸（否则挤到「移除」）
         hb.addWidget(self.coll_view_combo)
         hb.addWidget(self.btn_remove)
         rv.addWidget(btn_box)
@@ -899,6 +904,7 @@ class MainWindow(QMainWindow):
         self.coll_tag_filter.currentIndexChanged.connect(self._on_coll_tag_filter)
         self.btn_blank.clicked.connect(self._new_blank_collection)
         self.btn_coll_note.clicked.connect(self._coll_note_page_dialog)
+        self.btn_import_ids.clicked.connect(self._import_ids_dialog)
         self.btn_rename.clicked.connect(self._rename_collection)
         self.btn_delete.clicked.connect(self._delete_collection)
         self.btn_save.clicked.connect(self._save_collections)
@@ -1620,10 +1626,12 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, lambda t=tag: self._refresh_coll_tree(
             filter_cat=self.coll_filter.currentData(), filter_tag=t))
 
-    def _work_item(self, wid, wtitle=""):
+    def _work_item(self, wid, wtitle="", note=""):
         # 统一的作品叶节点（各树共用；_item_payload 认 {"key": wid}）
         it=QTreeWidgetItem([wtitle or wid])
         it.setData(0, Qt.UserRole, {"key": wid, "title": wtitle or wid})
+        if note:
+            it.setToolTip(0, note)
         return it
 
     def _refresh_coll_tree(self, filter_cat=None, filter_tag=None):
@@ -1672,13 +1680,14 @@ class MainWindow(QMainWindow):
             else:
                 parent.addChild(item)
             # 列出经书名字（原来只有丛书名）
+            _notes=d.get("work_notes") or {}
             for wid in (d.get("work_ids", []) or []):
                 title=self.sutra.title_of(wid)
                 if title==wid:
                     m=self.mapping.resolve(wid)
                     if m:
                         title=m.get("name") or wid
-                item.addChild(self._work_item(wid, f"{title}"))
+                item.addChild(self._work_item(wid, f"{title}", note=_notes.get(wid, "")))
             return item
 
         # 分类 → 丛书（→ 书籍）；分类按 categories.json 顺序，空分类也显示
@@ -2450,11 +2459,12 @@ class MainWindow(QMainWindow):
             self.lbl_hint.setText((self.lbl_hint.text() or "") + "　【二栏】拖动/双击=直接加入右栏")
         self._refresh_current_tree()
 
-    def _book_info_text(self, w):
+    def _book_info_text(self, w, note=""):
         # 统一书籍信息文本：左栏预览 / 中栏列表 / 右栏书单 三处一致
         if not w:
             return ""
-        m=self.mapping.resolve(w) or {}
+        _work, _lab = work_id.split_entry(w)
+        m=self.mapping.resolve(_work) or {}
         title=self._display_title(w)
         lines=[f"{w} {title}".rstrip()]
         byline=m.get("byline","") or ""
@@ -2469,6 +2479,10 @@ class MainWindow(QMainWindow):
             if fname:
                 parts.append(f"文件：{fname}")
             lines.append("　".join(parts))
+        if _lab:
+            lines.append(f"卷子集：{_lab}")
+        if note:
+            lines.append(f"注释：{note}")
         return "\n".join(lines)
 
     def _tree_item_work(self, item):
@@ -2489,7 +2503,15 @@ class MainWindow(QMainWindow):
         # 点书（叶节点）才显示书籍信息；并激活「书籍信息」页签。其它节点不显示。
         key=self._tree_item_work(item) if item is not None else None
         if key:
-            self.detail.setText(self._book_info_text(key))
+            note=""
+            try:
+                par=item.parent()
+                cd=par.data(0, Qt.UserRole) if par is not None else None
+                if isinstance(cd, dict):
+                    note=(cd.get("work_notes") or {}).get(key, "")
+            except Exception:
+                note=""
+            self.detail.setText(self._book_info_text(key, note=note))
             self.tab_bottom.setCurrentIndex(0)
         else:
             self.detail.setText("")
@@ -2572,26 +2594,59 @@ class MainWindow(QMainWindow):
         return added
 
     # ---------- 书籍列表 ----------
+    @staticmethod
+    def _entry_work(e):
+        """条目键 → work id（`T0220:479` → `T0220`）。"""
+        return work_id.split_entry(e)[0]
+
+    @staticmethod
+    def _entry_juan(e):
+        """条目键 → 卷范围（无则 ""）。"""
+        return work_id.split_entry(e)[1]
+
+    def _entry_book_title(self, entry):
+        """条目合并/显示用标题：`work-id 书名（卷…）`（同右栏行，去序号）。"""
+        _work = self._entry_work(entry)
+        _lab = self._entry_juan(entry)
+        try:
+            t = self.sutra.title_of(_work)
+        except Exception:
+            t = _work
+        if t == _work:
+            try:
+                m = self.mapping.resolve(_work)
+            except Exception:
+                m = None
+            if m:
+                t = f"{_work} {m['name']}"
+        if _lab:
+            t = f"{t}（卷{_lab}）"
+        return t
+
     def _normalize_work(self, w):
-        return work_id.canonical_work(w)
+        return work_id.canonical_entry(w)
 
     def _is_work_id(self, w):
-        # 共享层作品编号 或 本仓文件名形态（T01n0001）；另兼容 catalog 命中
+        # 共享层作品编号 或 本仓文件名形态（T01n0001）或条目键（work:卷）；另兼容 catalog 命中
         if work_id.is_work_id(w):
             return True
-        return bool(self.mapping.work_exists(work_id.canonical_work(w)))
+        _work = work_id.split_entry(w)[0]
+        return bool(self.mapping.work_exists(work_id.canonical_work(_work)))
 
     def _display_title(self, w):
-        m=self.mapping.resolve(w)
-        title=self.sutra.title_of(w)
-        if title.startswith(w):
-            title=title[len(w):].strip()
+        _work, _lab = work_id.split_entry(w)
+        m=self.mapping.resolve(_work)
+        title=self.sutra.title_of(_work)
+        if title.startswith(_work):
+            title=title[len(_work):].strip()
         if not title and m:
             title=m["name"]
         if not title:
-            title=w
-        if title.startswith(w):
-            title=title[len(w):].strip()
+            title=_work
+        if title.startswith(_work):
+            title=title[len(_work):].strip()
+        if _lab:
+            title=f"{title}（卷{_lab}）"
         return title
 
     # ---------- 工作区（唯一内存目录；中栏与左栏面板两个视图） ----------
@@ -3569,6 +3624,79 @@ class MainWindow(QMainWindow):
         self._ws_remove(works)
         QMessageBox.information(self,"已创建",f"已加入（保存后落盘）：{target}")
 
+    def _import_ids_dialog(self):
+        """「导入ID…」：批量解析编号（粘贴/文件/网页）→ 预览勾选 → 新建丛书或加入当前丛书。"""
+        from cbeta_publish.gui.import_ids_dialog import ImportIdsDialog, ADD_RESULT
+        from PySide6.QtWidgets import QDialog as _QDialog
+        dlg=ImportIdsDialog(self, work_exists=self.mapping.work_exists,
+                            title_fn=self._display_title)
+        ret=dlg.exec()
+        rows=dlg.selected_rows()
+        if not rows:
+            self.detail.setText("未选择任何有效 ID（无有效编号或未勾选）")
+            return
+        if ret==ADD_RESULT:
+            return self._add_ids_to_coll(rows)
+        if ret!=_QDialog.Accepted:
+            return
+        res=self._ask_name_category("新建丛书")
+        if res is None:
+            return
+        name,cat=res
+        if self._name_taken(name):
+            self._wrap_box(QMessageBox.Warning, "重名", f"已有同名丛书「{name}」，请换一个名称。")
+            return
+        works=[]
+        notes={}
+        for r in rows:
+            w=r["work_id"]
+            j=str(r.get("juan","")).strip()
+            key=work_id.entry_key(w, j)
+            if key and key not in works:
+                works.append(key)          # 每条目一键（同部不同卷各自成条）
+            if r.get("note") and w not in notes:
+                notes[w]=r["note"]
+        c=create_collection(name, cat, [], works, work_notes=notes)
+        self._append_collection(c.to_dict())
+        self.detail.setText(f"已创建「{name}」：{len(works)} 部（保存后落盘）")
+
+    def _add_ids_to_coll(self, rows):
+        """「导入ID… → 加入丛书」：所选条目追加进当前丛书。
+
+        按条目键（`work:卷`）去重——同部不同卷各自成条；注释按 work 补入
+        （已有注释不覆盖）。仅内存＋标脏，保存后落盘。
+        """
+        data=self.coll_combo.currentData()
+        if self._is_coll_placeholder(data):
+            self._wrap_box(QMessageBox.Warning, "失败", "请先选择一个丛书")
+            return
+        d=self._coll_dict(data)
+        if d is None:
+            try:
+                d=self._read_coll(Path(data))
+            except Exception as e:
+                self._wrap_box(QMessageBox.Warning, "失败", f"读取丛书失败 {e}")
+                return
+        have=set(d.get("work_ids", []) or [])
+        added=[]
+        notes=d.setdefault("work_notes", {})
+        for r in rows:
+            key=work_id.entry_key(r["work_id"], r.get("juan", ""))
+            if not key or key in have:
+                continue
+            have.add(key)
+            d.setdefault("work_ids", []).append(key)
+            added.append(key)
+            if r.get("note") and r["work_id"] not in notes:
+                notes[r["work_id"]]=r["note"]
+        if not added:
+            self.detail.setText("所选书籍已在当前丛书中（已去重）")
+            return
+        d["updated_at"]=__import__("datetime").datetime.utcnow().isoformat()+"Z"
+        self._mark_coll_changed(str(data))
+        self._load_coll_works()
+        self.detail.setText(f"已加入 {len(added)} 部到当前丛书（去重后新增）")
+
     def _save_as_collection(self):
         # 另存为：当前丛书改名+分类，立即落盘（主要用于空白丛书转正式丛书）
         data=self.coll_combo.currentData()
@@ -3968,12 +4096,14 @@ class MainWindow(QMainWindow):
 
     def _ebook_path(self, w, fmt):
         """按当前来源返回该书的电子书路径（不存在则 None）：
-        两边同构 `{root}/{fmt}/…`，根分开（官方 cbeta_ebooks／自制 xml_to_ebooks_dir）。"""
+        两边同构 `{root}/{fmt}/…`，根分开（官方 cbeta_ebooks／自制 xml_to_ebooks_dir）。
+        w 可为条目键（`T0220:479`），按 work 部分寻址。"""
         from cbeta_publish.books import xml2pdf_bridge
+        _work=self._entry_work(w)
         if self._run_source()=="xml":
-            return xml2pdf_bridge.find_built(w, fmt, xml2pdf_bridge.xml_books_dir(self.config))
+            return xml2pdf_bridge.find_built(_work, fmt, xml2pdf_bridge.xml_books_dir(self.config))
         base=official_ebook_source.official_books_dir(self.config)
-        dest=official_ebook_source.local_path(w, fmt, base)
+        dest=official_ebook_source.local_path(w, fmt, base)   # 条目（含卷）→ 卷路径
         return dest if dest.exists() else None
 
     # ---------- 右栏书单：树/分组 ----------
@@ -4091,10 +4221,14 @@ class MainWindow(QMainWindow):
         from PySide6.QtGui import QPixmap
         from PySide6.QtWidgets import QCheckBox as _Chk
         icon_dir=Path(__file__).parent / "theme" / "icons"
-        title=self.sutra.title_of(w)   # 已含「编号 名称」
-        if title==w:                   # 未收录：退回经录名
-            m=self.mapping.resolve(w)
-            if m: title=f"{w} {m['name']}"
+        _work=self._entry_work(w)
+        _lab=self._entry_juan(w)
+        title=self.sutra.title_of(_work)   # 已含「编号 名称」
+        if title==_work:                   # 未收录：退回经录名
+            m=self.mapping.resolve(_work)
+            if m: title=f"{_work} {m['name']}"
+        if _lab:
+            title=f"{title}（卷{_lab}）"
         fmts_status=[]
         for fmt in fmts:
             exists=self._ebook_path(w, fmt) is not None
@@ -4126,6 +4260,11 @@ class MainWindow(QMainWindow):
         text_lab.missing=not any(ex for _,ex in fmts_status)
         if text_lab.missing:
             text_lab.setStyleSheet("color: gray;")
+        _cd=self._coll_dict(self.coll_combo.currentData())
+        _note=(_cd.get("work_notes") or {}).get(_work, "") if isinstance(_cd, dict) else ""
+        if _note:
+            item.setToolTip(0, _note)
+            text_lab.setToolTip(_note)
         hl.addWidget(text_lab)
         hl.addStretch()
         hl.activate()   # 先激活布局再取 sizeHint，否则图标被裁剪
@@ -4154,7 +4293,10 @@ class MainWindow(QMainWindow):
     def _on_coll_item_detail(self, item):
         if not self._coll_is_book(item):
             return
-        self.detail.setText(self._book_info_text(item.data(0, Qt.UserRole)))
+        w=item.data(0, Qt.UserRole)
+        d=self._coll_dict(self.coll_combo.currentData())
+        note=(d.get("work_notes") or {}).get(self._entry_work(w), "") if isinstance(d, dict) else ""
+        self.detail.setText(self._book_info_text(w, note=note))
         # 点书 → 激活「书籍信息」页签
         self.tab_bottom.setCurrentIndex(0)
 
@@ -4464,7 +4606,7 @@ class MainWindow(QMainWindow):
         """把当前「按刊本册/按部类」的分组结果拷贝进 manual_volumes（覆盖），转手工分册。"""
         mode=self._coll_display_mode()
         works=[w for w in (d.get("work_ids") or []) if w]
-        titles=[self.sutra.title_of(w) for w in works]
+        titles=[self.sutra.title_of(self._entry_work(w)) for w in works]
         groups=self._group_works(d, works, titles, works, mode=mode, depth=self._merge_depth())
         vols=[]
         for g in groups:
@@ -4850,7 +4992,14 @@ class MainWindow(QMainWindow):
             self.detail.setText("请至少选择一种格式 pdf/epub/docx")
             return
         dest_dir=official_ebook_source.official_books_dir(self.config)
-        pairs=[(w, f) for w in works for f in fmts]
+        pairs=[]
+        _unsupported=[]
+        for w in works:
+            for f in fmts:
+                if self._entry_juan(w) and not official_ebook_source.juan_supported(f):
+                    _unsupported.append(f"{w}.{f}")   # 卷条目 + 官方无单卷格式：跳过
+                    continue
+                pairs.append((w, f))
         ok=self._download_missing(pairs, dest_dir, title="下载/更新")
         st=getattr(self, "_dl_stats", {}) or {}
         # 记备齐水位：成功（含跳过未变）的 (work, fmt) 更新水位，避免批量重复下载
@@ -4870,6 +5019,12 @@ class MainWindow(QMainWindow):
         else:
             summary=f"下载完成 {st.get('ok',0)}/{st.get('total',len(pairs))} →"
         self._show_made_books("下载完成", entries, summary, out_dir=dest_dir)
+        if _unsupported:
+            self._wrap_box(QMessageBox.Information, "官方无单卷",
+                           "以下为卷条目，但该格式官方无单卷端点（仅 html/txt/txt_notes/docx/odt 有）：\n"
+                           + "\n".join(_unsupported[:15])
+                           + (f"\n…共 {len(_unsupported)} 项" if len(_unsupported) > 15 else "")
+                           + "\n\n如需按卷，请改用自制（XML）生成。")
         self._prompt_save_collection("下载完成，", str(data))
 
     def _on_make_button(self, regen_all):
@@ -4997,8 +5152,12 @@ class MainWindow(QMainWindow):
         from cbeta_publish.books import official_ebook_source as _oes
         from cbeta_publish.books import official_state as _ost
         pairs=[]
+        _unsupported=[]
         for fmt in fmts:
             for w in works:
+                if self._entry_juan(w) and not _oes.juan_supported(fmt):
+                    _unsupported.append(f"{w}.{fmt}")   # 卷条目 + 官方无单卷格式：跳过
+                    continue
                 if policy == "missing":
                     need = not _oes.local_path(w, fmt, dest_dir).exists()
                 elif policy == "all":
@@ -5007,10 +5166,12 @@ class MainWindow(QMainWindow):
                     need = _ost.stale(self.config, w, fmt, dest_dir)
                 if need:
                     pairs.append((w, fmt))
+        if _unsupported:
+            print("official no-juan skipped", len(_unsupported), _unsupported[:10])
         if pairs:
             title = "下载官方书" if policy == "missing" else "更新官方书"
             self._download_missing(pairs, dest_dir, title=title,
-                                   autoclose_ok=False, force=(policy == "all"))
+                                   autoclose_ok=True, force=(policy == "all"))
         failed = list((getattr(self, "_dl_stats", {}) or {}).get("failed") or [])
         for w, fmt in pairs:
             tag = f"{w}.{fmt}"
@@ -5268,11 +5429,14 @@ class MainWindow(QMainWindow):
                         d=None
                 works=(d.get("work_ids",[]) or []) if d else []
                 if works:
+                    from cbeta_publish.collection import id_import as _ii
                     slug=str(d.get("id") or d.get("name") or "")
                     vdir=_b.verify_coll_dir(self.config, slug)
                     vdir.mkdir(parents=True, exist_ok=True)
                     ids_file=vdir/f"{vdir.name}_ids.txt"
-                    ids_file.write_text("\n".join(works)+"\n", encoding="utf-8")
+                    _juans=(d.get("work_juan") or {}) if d else {}
+                    _tokens=[_ii.juan_token(w, _juans.get(w, "")) for w in works]
+                    ids_file.write_text("\n".join(_tokens)+"\n", encoding="utf-8")
                     argv+=["--ids-file",str(ids_file),"--out",str(vdir)]
                     # 校验根钉死到 {vdir}/验证（上游 GUI --verify-root 显式优先，
                     # 与进程内 CLI 路径一致；不受预设 source.verify_root 影响）
@@ -5360,16 +5524,18 @@ class MainWindow(QMainWindow):
         from cbeta_publish.books import verify_cache as _vc
         return _vc.records_path({"_config_path": str(getattr(self, "_config_path", ""))})
 
-    def _import_upstream_pass(self, w, f, inputs, base_dir, rpath, cache):
+    def _import_upstream_pass(self, w, f, inputs, base_dir, rpath, cache, juan=""):
         """从上游报告目录惰性导入 (w,f) 的通过记录；成功返回 True（已记库）。
 
         inputs: 当前源基名有序列表。cache: 本轮扫描缓存 {"reports": [...]|None}。
-        条件（缺一即跳过）：report.json 有效（schema1、`work` 匹配）＋该 fmt 有结论
-        ＋ verdict 接受档（strict 或 notes_only≤10）＋ `formal_outputs`/`inputs.xml_files`
+        juan: 期望卷标签（`""`＝整本）；须与报告 `juan.label` 一致。
+        条件（缺一即跳过）：report.json 有效（schema1、`work` 匹配）＋卷标签一致＋该 fmt
+        有结论 ＋ verdict 接受档（strict 或 notes_only≤10）＋ `formal_outputs`/`inputs.xml_files`
         非空 ＋ 按报告顺序映射本地源全命中 ＋ 现算指纹相等。接受档与 publish 导入同口径。
         """
         from cbeta_publish.books import xml2pdf_bridge as _b
         from cbeta_publish.books import verify_cache as _vc
+        _want_juan = str(juan or "")
         try:
             if "reports" not in cache:
                 rdir = _b.verify_reports_dir(self.config)
@@ -5385,6 +5551,8 @@ class MainWindow(QMainWindow):
                         continue
                     rj = _b._read_verify_json(jp)
                     if rj is None:
+                        continue
+                    if _b.verify_json_juan(jp) != _want_juan:
                         continue
                     info = (rj.get("fmts") or {}).get(f)
                     if not isinstance(info, dict):
@@ -5406,12 +5574,14 @@ class MainWindow(QMainWindow):
                     ordered = [byname[n] for n in _names]
                     fp_now = _b.verify_fingerprint(
                         w, f, self.config, preset=self._run_preset(),
-                        xml_files=[str(p) for p in ordered])
+                        xml_files=[str(p) for p in ordered],
+                        juan=_want_juan or None)
                     if not fp_now or fp_now != info.get("fingerprint"):
                         continue
                     _prod = _b.find_built(w, f, base_dir)
                     _vc.record_pass(rpath, w, f, fp_now,
                                     {"inputs": list(_names), "accept": tier,
+                                     "juan": _want_juan,
                                      "product": str(_prod) if _prod else ""})
                     return True
                 except Exception:
@@ -5452,28 +5622,32 @@ class MainWindow(QMainWindow):
         reuse_wanted=bool((self.config.get("xml2pdf", {}) or {}).get("verify_reuse", True))
         reuse=reuse_wanted and self._verify_reuse_enabled()
         preset=self._run_preset()
-        fps={}            # (work, fmt) -> (指纹, 输入基名有序列表)（与校验运行同形态）
+        fps={}            # (entry, fmt) -> (指纹, 输入基名有序列表, 卷标签)
         works_to_verify=[]
         works_fmts={}
-        skipped=[]        # [(work, [fmts])]：全部新鲜，直接跳过
+        works_juan={e: self._entry_juan(e).replace("、", ",") for e in works}   # 条目→卷（CLI 用 `,`）
+        skipped=[]        # [(entry, [fmts])]：全部新鲜，直接跳过
         _up_cache={}      # 上游报告扫描缓存（本轮一次）
         _up_imported=[]   # ["W.FMT"] 上游导入命中（记库后视为新鲜）
         if reuse:
             for w in works:
+                _work=self._entry_work(w)
+                _spec=self._entry_juan(w)
+                _lab=_b.juan_label(self.config, _spec) if _spec else ""
                 fresh_fmts, stale_fmts=[], []
-                _srcs=_b.work_source_files(self.config, w)
+                _srcs=_b.work_source_files(self.config, _work)
                 _inputs=[p.name for p in _srcs]
                 _xmls=[str(p) for p in _srcs]
                 for f in fmts:
-                    fp=_b.verify_fingerprint(w, f, self.config, preset=preset,
-                                             xml_files=_xmls)
+                    fp=_b.verify_fingerprint(_work, f, self.config, preset=preset,
+                                             xml_files=_xmls, juan=_spec or None)
                     if fp:
-                        fps[(w, f)]=(fp, _inputs)
-                    if (fp and _vc.is_fresh(rpath, w, f, fp, _inputs)
-                            and _b.find_built(w, f, base_dir) is not None):
+                        fps[(w, f)]=(fp, _inputs, _lab)
+                    if (fp and _vc.is_fresh(rpath, _work, f, fp, _inputs, juan=_lab)
+                            and _b.find_all_built_entry(_work, f, base_dir, _lab)):
                         fresh_fmts.append(f)
-                    elif self._import_upstream_pass(w, f, _inputs, base_dir,
-                                                   rpath, _up_cache):
+                    elif self._import_upstream_pass(_work, f, _inputs, base_dir,
+                                                   rpath, _up_cache, juan=_lab):
                         fresh_fmts.append(f)
                         _up_imported.append(f"{w}.{f}")
                     else:
@@ -5485,7 +5659,9 @@ class MainWindow(QMainWindow):
                     skipped.append((w, fresh_fmts))
         elif not regen_all:
             missing=[w for w in works
-                     if not any(_b.find_built(w, f, base_dir) is not None for f in fmts)]
+                     if not any(_b.find_all_built_entry(self._entry_work(w), f,
+                                                        base_dir, self._entry_juan(w))
+                                for f in fmts)]
             if not missing:
                 self.detail.setText("没有缺少的自制书（改用「重制」可全部重做）")
                 return
@@ -5501,11 +5677,14 @@ class MainWindow(QMainWindow):
         if regen_all and reuse:
             # 新鲜项：重生成但跳过校验（输入未变，原结论仍成立）
             for w, ff in skipped:
+                _work=self._entry_work(w)
+                _lab=self._entry_juan(w)
                 for f in ff:
                     try:
                         out, _reused=_b.ensure_one(
-                            w, f, base_dir, self.config, preset=preset,
-                            regen_all=True, name=_b.built_name(self.config, w))
+                            _work, f, base_dir, self.config, preset=preset,
+                            regen_all=True, name=_b.built_name(self.config, _work),
+                            juan=_lab or None)
                     except Exception as e:
                         print("regen fresh fail", w, f, e)
                         out=None
@@ -5525,7 +5704,8 @@ class MainWindow(QMainWindow):
         def on_prog(done, label, level):
             update(done, label, is_html=False)
         worker=VerifyWorker(works_to_verify, fmts, vdir, self.config,
-                              preset=preset, works_fmts=works_fmts)
+                              preset=preset, works_fmts=works_fmts,
+                              works_juan=works_juan)
         worker.progress.connect(on_prog)
         worker.finished_all.connect(lambda ok, tot, fl: result.update(ok=ok, failed=list(fl)))
         pstate["oncancel"]=worker.stop
@@ -5563,12 +5743,14 @@ class MainWindow(QMainWindow):
             _okf=imp.get("ok_files") or {}
             _tiers=imp.get("accept") or {}
             for w, flist in _okf.items():
+                _work=self._entry_work(w)
                 for f, _dest in flist:
                     _got=fps.get((w, f))
                     if _got:
-                        _fp, _inputs=_got
-                        _vc.record_pass(rpath, w, f, _fp,
+                        _fp, _inputs, _lab=_got
+                        _vc.record_pass(rpath, _work, f, _fp,
                                         {"inputs": _inputs, "product": _dest,
+                                         "juan": _lab,
                                          "accept": _tiers.get((w, f), "strict")})
         import html as _html
         def _dirlink(p):
@@ -5727,8 +5909,10 @@ class MainWindow(QMainWindow):
             _es="?" if _ex is None else str(_ex)
             return f"{_f} 缺{_ms}/多{_es}"
         for rp, stem in reports:
-            hit=next((w for w in works if _b._verify_stem_matches(stem, w)),
-                     None)
+            _rlab=_b.verify_json_juan(rp) or ""
+            hit=next((w for w in works
+                      if _b._verify_stem_matches(stem, w)
+                      and self._entry_juan(w)==_rlab), None)
             done_label=f"{stem or rp.name}"
             if hit is None:
                 skip_list.append(done_label)
@@ -6289,10 +6473,10 @@ class MainWindow(QMainWindow):
         return s or fallback
 
     def _pack_display_stem(self, work):
-        """打包显示名（不含扩展名）：与合并书名书签同款（`title_of`），
+        """打包显示名（不含扩展名）：与合并书名书签同款（条目 `work:卷` 含卷），
         取不到书名回退裸 id；文件名清洗。缓存不动。"""
         try:
-            t=(self.sutra.title_of(work) or "").strip()
+            t=(self._entry_book_title(work) or "").strip()
         except Exception:
             t=""
         if not t:
@@ -6395,8 +6579,8 @@ class MainWindow(QMainWindow):
                     return (1, self._pinyin_key(lab), "")
             buckets = {}
             for f, t, w in zip(ok, ok_titles, ok_works):
-                nw = self._normalize_work(w)
-                lab = wmap.get(w) or wmap.get(nw) or unknown
+                _aw = self._entry_work(w)
+                lab = wmap.get(_aw) or wmap.get(self._normalize_work(_aw)) or unknown
                 g = buckets.setdefault(lab, {"label": lab,
                                              "stem": self._safe_name(lab, fallback=unknown),
                                              "segments": [lab], "full_segments": [lab],
@@ -6410,23 +6594,24 @@ class MainWindow(QMainWindow):
         bulei_map = self._catalog_bulei_map() if mode == "catalog" else None
         buckets = {}
         for f, t, w in zip(ok, ok_titles, ok_works):
-            nw = self._normalize_work(w)
+            _aw = self._entry_work(w)
+            nw = self._normalize_work(_aw)
             if mode == "volume":
-                info = volume_map.get(w) or volume_map.get(nw)
+                info = volume_map.get(_aw) or volume_map.get(nw)
                 ed = (info or {}).get("edition") or ""
-                mlab = manual.get(w) or manual.get(nw)
+                mlab = manual.get(_aw) or manual.get(nw)
                 if mlab and mlab != ed:
                     key = ("m", mlab); label = mlab; stem = mlab; segs = [mlab]
                     full_segs = [mlab]
                     sortkey = (0, "", 0, mlab)
                 else:
-                    r = _cp.resolve(w, "volume", depth, volume_map=volume_map)
+                    r = _cp.resolve(_aw, "volume", depth, volume_map=volume_map)
                     key = ("v",) + tuple(r["segments"]); label = r["label"]; stem = r["stem"]
                     segs = list(r["segments"])
                     full_segs = list(r.get("full_segments") or segs)
                     sortkey = (1,) + tuple(r["order"])
             else:  # catalog（部类）
-                mbp = bulei_manual.get(w) or bulei_manual.get(nw)
+                mbp = bulei_manual.get(_aw) or bulei_manual.get(nw)
                 if mbp:
                     # 人工归属（从部类树拖入时记录）：优先用它，避免同书多部类被首个命中抢走
                     full_segs = [s for s in (_cp._clean_bulei_seg(x) for x in mbp) if s]
@@ -6436,7 +6621,7 @@ class MainWindow(QMainWindow):
                     key = ("b",) + tuple(segs)
                     sortkey = (0, tuple(segs))
                 else:
-                    r = _cp.resolve(w, "bulei", depth, bulei_map=bulei_map)
+                    r = _cp.resolve(_aw, "bulei", depth, bulei_map=bulei_map)
                     key = ("c",) + tuple(r["segments"]); label = r["label"]; stem = r["stem"]
                     segs = list(r["segments"])
                     full_segs = list(r.get("full_segments") or segs)
@@ -6732,7 +6917,7 @@ class MainWindow(QMainWindow):
         expected={}
         for w in works:
             try:
-                found=xml2pdf_bridge.work_source_files(self.config, w)
+                found=xml2pdf_bridge.work_source_files(self.config, self._entry_work(w))
             except Exception:
                 found=[]
             expected[w]=max(1, len(found))
@@ -6765,11 +6950,14 @@ class MainWindow(QMainWindow):
                             break
                         continue
                 _was_newer=xml2pdf_bridge.sources_newer(
-                    self.config, w,
-                    xml2pdf_bridge.find_all_built(w, fmt, xml_out))
+                    self.config, self._entry_work(w),
+                    xml2pdf_bridge.find_all_built(self._entry_work(w), fmt, xml_out))
+                _lab=self._entry_juan(w)
                 outs, reused = xml2pdf_bridge.ensure_products(
-                    w, fmt, xml_out, self.config, preset=preset, regen_all=regen_all,
-                    name=xml2pdf_bridge.built_name(self.config, w))
+                    self._entry_work(w), fmt, xml_out, self.config, preset=preset,
+                    regen_all=regen_all,
+                    name=xml2pdf_bridge.built_name(self.config, self._entry_work(w)),
+                    juan=_lab or None)
                 outs=[p for p in outs if p.exists()]
                 if outs:
                     ok_map[fmt][w]=outs
@@ -6778,7 +6966,8 @@ class MainWindow(QMainWindow):
                 if (fmt == "pdf" and _reuse_companion and not reused and outs
                         and "docx" in fmts):
                     adopted=xml2pdf_bridge.adopt_pdf_companions(
-                        w, outs, xml_out, drop_stale=regen_all)
+                        self._entry_work(w), outs, xml_out,
+                        drop_stale=(regen_all and not _lab))
                     if adopted:
                         _adopted_docx[w]=adopted
                 if reused:
@@ -6851,7 +7040,7 @@ class MainWindow(QMainWindow):
         for w in works:
             if run_source == "xml":
                 try:
-                    found = xml2pdf_bridge.work_source_files(self.config, w)
+                    found = xml2pdf_bridge.work_source_files(self.config, self._entry_work(w))
                 except Exception:
                     found = []
                 _made_counts[self._normalize_work(w)] = max(1, len(found))
@@ -6876,15 +7065,19 @@ class MainWindow(QMainWindow):
             for w in works:
                 if run_source=="xml":
                     # 只传 work id：XML 源解析归 xml2pdf（本地候选源→官方下载）。
-                    _hit = xml2pdf_bridge.find_all_built(w, fmt, xml_out)
-                    _srcnew = xml2pdf_bridge.sources_newer(self.config, w, _hit)
+                    _work=self._entry_work(w)
+                    _lab=self._entry_juan(w)
+                    _hit = xml2pdf_bridge.find_all_built(_work, fmt, xml_out)
+                    _srcnew = xml2pdf_bridge.sources_newer(self.config, _work, _hit)
                     outs, reused = xml2pdf_bridge.ensure_products(
-                        w, fmt, xml_out, self.config, preset=run_preset, regen_all=regen_all,
-                        name=xml2pdf_bridge.built_name(self.config, w))
+                        _work, fmt, xml_out, self.config, preset=run_preset,
+                        regen_all=regen_all,
+                        name=xml2pdf_bridge.built_name(self.config, _work),
+                        juan=_lab or None)
                     outs=[p for p in outs if p.exists()]
                     if outs:
                         made_paths[w]=outs
-                        ok.append(outs[0]); ok_titles.append(self.sutra.title_of(w)); ok_works.append(w)
+                        ok.append(outs[0]); ok_titles.append(self._entry_book_title(w)); ok_works.append(w)
                         format_inputs+=len(outs)
                     else:
                         failed.append(f"{w}.{fmt} XML转换失败")
@@ -6896,7 +7089,7 @@ class MainWindow(QMainWindow):
                     continue
                 dest=_official_dest(fmt, w)
                 if dest.exists():
-                    ok.append(dest); ok_titles.append(self.sutra.title_of(w)); ok_works.append(w)
+                    ok.append(dest); ok_titles.append(self._entry_book_title(w)); ok_works.append(w)
                     format_inputs+=1
                 elif skip_missing:
                     skipped.append(f"{w}.{fmt}")
@@ -7685,7 +7878,7 @@ class MainWindow(QMainWindow):
             g={"label": None, "stem": None, "segments": [], "full_segments": [],
                "works": list(avail_works)}
             return [(g, None, self._merge_basename(d, g, None, template=template, total=1))]
-        titles=[self.sutra.title_of(w) for w in avail_works]
+        titles=[self.sutra.title_of(self._entry_work(w)) for w in avail_works]
         groups=self._group_works(d, avail_works, titles, avail_works, mode=mode, depth=depth)
         out=[]
         for gidx, g in enumerate(groups, 1):

@@ -479,7 +479,7 @@ class MergeXmlSourceTest(unittest.TestCase):
         calls = []
         real = b.ensure_products
 
-        def fake(w, fmt, base, config, preset=None, regen_all=False, name=None):
+        def fake(w, fmt, base, config, preset=None, regen_all=False, name=None, juan=None):
             calls.append((w, fmt))
             d = Path(base) / fmt
             d.mkdir(parents=True, exist_ok=True)

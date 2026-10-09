@@ -86,29 +86,42 @@ def get(path, work: str, fmt: str):
 
 
 def _entry_sets(entry) -> list:
-    """记录内的输入集列表；兼容 schema1 遗留（{"fingerprint": …} 视为单集）。"""
+    """记录内的输入集列表；兼容 schema1 遗留（{"fingerprint": …} 视为单集）。
+
+    每集补 `juan`（卷标签，缺省 ""＝整本），供子集/整本隔离。
+    """
     if not isinstance(entry, dict):
         return []
     sets = entry.get("sets")
     if isinstance(sets, list):
-        return [s for s in sets if isinstance(s, dict)]
+        out = []
+        for s in sets:
+            if isinstance(s, dict):
+                s = dict(s)
+                s.setdefault("juan", "")
+                out.append(s)
+        return out
     if entry.get("fingerprint"):
-        return [{"fingerprint": entry.get("fingerprint"), "inputs": []}]
+        return [{"fingerprint": entry.get("fingerprint"), "inputs": [], "juan": ""}]
     return []
 
 
-def is_fresh(path, work: str, fmt: str, fingerprint, inputs=None) -> bool:
+def is_fresh(path, work: str, fmt: str, fingerprint, inputs=None, juan="") -> bool:
     """记录中存在输入集一致且指纹一致即新鲜；否则不新鲜。
 
     - fingerprint 为空一律不新鲜；
     - inputs 为 None 时只比指纹（兼容旧调用与 schema1 记录）；
-    - inputs 为列表时，要求某集的 inputs 与之**有序相等**且指纹一致。
+    - inputs 为列表时，要求某集的 inputs 与之**有序相等**且指纹一致；
+    - juan（卷标签，`""`＝整本）须相等：子集与整本、不同子集互不命中。
     """
     if not fingerprint:
         return False
+    j = str(juan or "")
     e = get(path, work, fmt)
     for s in _entry_sets(e):
         if s.get("fingerprint") != fingerprint:
+            continue
+        if str(s.get("juan") or "") != j:
             continue
         if inputs is None:
             return True
@@ -124,7 +137,8 @@ def record_pass(path, work: str, fmt: str, fingerprint: str, extra=None) -> bool
     """写入一条通过记录（按输入集合并旧值）；fingerprint 为空拒绝写入。
 
     extra 可带 `inputs`（XML 源基名有序列表）、`accept`（"strict"/"notes_only"，
-    缺省 strict）、`product`。同 inputs 的集被覆盖，不同 inputs 追加。
+    缺省 strict）、`product`、`juan`（卷标签，缺省 ""＝整本）。集身份＝(inputs, juan)：
+    同 inputs 同 juan 的集被覆盖，不同 inputs 或不同 juan 追加。
     """
     if not fingerprint:
         return False
@@ -132,6 +146,7 @@ def record_pass(path, work: str, fmt: str, fingerprint: str, extra=None) -> bool
         fp = str(fingerprint)
         inputs = []
         accept = "strict"
+        juan = ""
         if isinstance(extra, dict):
             try:
                 inputs = [str(x) for x in (extra.get("inputs") or [])]
@@ -139,6 +154,7 @@ def record_pass(path, work: str, fmt: str, fingerprint: str, extra=None) -> bool
                 inputs = []
             if extra.get("accept") in ("strict", "notes_only"):
                 accept = extra.get("accept")
+            juan = str(extra.get("juan") or "")
         d = load(path)
         works = d.setdefault("entries", {})
         entry = works.setdefault(str(work), {}).setdefault(str(fmt), {})
@@ -149,13 +165,15 @@ def record_pass(path, work: str, fmt: str, fingerprint: str, extra=None) -> bool
         rec = {
             "fingerprint": fp,
             "inputs": inputs,
+            "juan": juan,
             "verified_at": datetime.now().isoformat(timespec="seconds"),
         }
         prod = (extra or {}).get("product") if isinstance(extra, dict) else None
         if prod:
             rec["product"] = str(prod)
         for i, s in enumerate(sets):
-            if isinstance(s, dict) and [str(x) for x in (s.get("inputs") or [])] == inputs:
+            if isinstance(s, dict) and [str(x) for x in (s.get("inputs") or [])] == inputs \
+                    and str(s.get("juan") or "") == juan:
                 sets[i] = rec
                 break
         else:

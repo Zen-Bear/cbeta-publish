@@ -11,12 +11,14 @@ class VerifyWorker(QThread):
     finished_all = Signal(int, int, list)   # ok, total, failed list
 
     def __init__(self, works, fmts, out_dir, config, preset=None,
-                 works_fmts=None):
+                 works_fmts=None, works_juan=None):
         super().__init__()
         self.works = list(works or [])
         self.fmts = list(fmts or [])
         # 逐书待验格式（跳过复用时只验 stale 格式）；缺省=全书统一 fmts
         self.works_fmts = dict(works_fmts or {})
+        # 逐书卷范围 spec（P11 卷子集）；缺省=整本
+        self.works_juan = dict(works_juan or {})
         self.out_dir = Path(out_dir)
         self.config = config
         self.preset = preset
@@ -28,6 +30,7 @@ class VerifyWorker(QThread):
     def run(self):
         from cbeta_publish.books import xml2pdf_bridge as b
         from cbeta_publish.books.download_worker import REPLACE_LAST
+        from cbeta_publish.catalog.work_id import split_entry
         total = len(self.works)
         ok = 0
         failed = []
@@ -35,13 +38,15 @@ class VerifyWorker(QThread):
             for i, w in enumerate(self.works, 1):
                 if self._stop:
                     break
+                _work = split_entry(w)[0]
                 self.progress.emit(i - 1, f"生成并校验 {w} ...", "run")
                 wf = self.works_fmts.get(w, self.fmts) if self.works_fmts else self.fmts
-                report = b.verify_work(w, wf, self.out_dir, self.config,
-                                       preset=self.preset, stop=lambda: self._stop)
+                report = b.verify_work(_work, wf, self.out_dir, self.config,
+                                       preset=self.preset, stop=lambda: self._stop,
+                                       juan=self.works_juan.get(w, ""))
                 # 同一 work 可能有多个语义产物（如 TX0011 上/中下）：聚合全部相关报告，
                 # 避免只看最新一份而漏判另一份。
-                reports = b.work_verify_reports(self.out_dir, w, primary=report)
+                reports = b.work_verify_reports(self.out_dir, _work, primary=report)
                 fmts_status = {}
                 pending_all = {}
                 scopes = {}

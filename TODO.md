@@ -2,7 +2,7 @@
 
 > 设计文档：`docs/设计总案.md`（总方案）、`docs/UI设计.md`（UI）、
 > `docs/链路B-设计契约.md`（与 xml2pdf 的跨仓调用契约）。
-> 测试：`python -m unittest discover tests`（当前 676 项通过）。
+> 测试：`python -m unittest discover tests`（当前 739 项通过）。
 
 ## 约定（务必遵守）
 
@@ -197,7 +197,14 @@
 - 备注：上游 reason 文案变异→原样透出（同现行为）；schema 升级需人工跟进；不做 json 指纹与
   `verify_records.json` 交叉核对（维度不同）。
 
-### P9 — 批量 ID 建丛书（待办）
+### P9 — 批量 ID 建丛书（已完成，696 测试通过）
+- 落地：`collection/id_import.py`（`split_token`/`normalize_token`/`parse_id_lines`/
+  `classify`/`html_to_text`/`fetch_text`）＋`gui/import_ids_dialog.py`（`ImportIdsDialog`，
+  勾选/注释编辑/全选全不选/删除）＋`main_window`「导入ID…」按钮与 `_import_ids_dialog()`；
+  模型 `collection_model.py` 加 `work_notes`（键归一、按 work 剪枝、空值丢弃）；
+  卷范围并入 `work_ids` **条目键**（`work:卷`，同部多卷各自成条）；
+  左/右栏书籍行 tooltip 与「书籍信息」页注释行。测试 `tests/test_id_import.py`（13）＋
+  `tests/test_import_ids_dialog.py`（7，含建单集成与模型剪枝）。
 - 入口：右侧丛书面板加按钮「导入ID…」（`main_window` 现有按钮批，895–906 接线）→ `_import_ids_dialog()`。
 - 对话框 `gui/import_ids_dialog.py` `ImportIdsDialog`：单一 `QPlainTextEdit` 内容区，三种来源灌入并
   可继续手改——粘贴多行 `<work_id> [注释]…`；`从文件载入…`（.txt/.csv，utf-8-sig→gbk 回退）；
@@ -255,6 +262,44 @@
 - [x] 文档：链路B §5（验收档＋逐源复用＋报告根＋阈值 0）＋`docs/设计总案.md` 测试数同步。
 - 备注：旧报告（阈值 5）与旧记录全部失效，上游按 0 **重跑一次**后跨边复用生效；
   1–5 字正文差异的书从"自动入库"转为"人工检验"（符合验收档设计）。
+
+### P11 — 卷子集（已完成，708 测试通过）
+- 背景：上游已落地卷子集（`--juan`/`-i ID:范围`，2026-10-07）；publish 需让 token 全链
+  可走：ID 导入/书单 token → 自制/校验透传 → 子集产物入库与复用。上游指纹/报告卷维度
+  （本仓 P11 请求）2026-10-08 已实现。
+- [x] 上游指纹/报告卷维度（提案 `docs/上游-指纹juan入参提案.md`，§8 复核）：`verify_fingerprint(juan=)`
+  归一进 payload（`None` 逐字回归）＋`_official_superset` 卷限定（html/docx/txt_notes）＋
+  `report.json` 顶层 `juan{segments,label}` 恒输出＋CLI/GUI 全覆盖/无 milestone→`None` 归一
+  （顺带修无 milestone 仍加后缀的既有小 bug）；契约见上游 `docs/校验report.json说明.md`
+  §3/§4、`docs/校验说明书.md` §4.4。
+- [x] P11a 解析/透传：`id_import` token（`split_token`/`normalize_token` 已含 basename/长编号
+  `T25n1509`→`T1509`）＋`juan_token`（多段 `,`/`、`→`+`，避 ids-file 分隔冲突）；`xml2pdf_bridge`
+  `_id_juan_arg`＋`convert/convert_outputs/ensure_products/ensure_one/verify_work` 加 `juan=` 透传
+  （`juan` 非空时 `ensure_products` 恒走输出目录模式，由上游加 `（卷…）` 后缀）；`VerifyWorker`
+  加 `works_juan` 逐本透传；`_send_coll_to_verify` 子集项恒重验（复用隔离前）；独立窗 ids 文件写 token。
+- [x] P11b 入库/复用：`verify_cache` 集身份扩为 `(inputs, juan)`（`is_fresh`/`record_pass`
+  加 `juan`，缺省 `""`＝整本；同 inputs 不同 juan 分集）；`xml2pdf_bridge` `_read_verify_json`
+  读顶层 `juan`＋`verify_json_juan`＋`juan_segments`/`juan_label`（上游 `parse_juan_spec`/
+  `format_juan_label`，`、`→`,`）＋`verify_fingerprint(juan=)`＋`_verify_stem_matches` 头比对
+  （剥 `:范围`/`_NNN`）；`_send_coll_to_verify` 按卷标签算指纹/查库/记库、`_import_upstream_pass`
+  校报告 `juan.label`；`works_juan` 传 worker（CLI 用 `,`）。测试：缓存卷隔离、stem 头比对、
+  report.json 卷字段、`juan_label` 真值、子集不复用整本记录。
+- [x] P11c 文档/测试：契约 §5 卷子集段、UI 设计（导入ID 卷范围并入条目键）；
+  子集入库端到端（报告/产物带 `（卷…）` 后缀，导入保留上游名）＋隔离单测；测试数同步
+  `docs/设计总案.md`。
+- [x] P11d 条目键（每卷独立成书）：卷范围并入 `work_ids`（`work:卷`），同部多卷各自成条——
+  `work_id` 加 `split_entry`/`entry_key`/`canonical_entry`；`collection_model` 去 `work_juan`、
+  按条目去重/剪枝；「导入ID…」计数/建单按条目（29 行=29 条）；右栏书单/标题/打开按条目拆
+  `work`/卷显示；`_send_coll_to_verify`/`VerifyWorker`/`_ensure_xml_batch` 按条目拆 `work`＋卷透传；
+  `_do_import_verified` 按 `work`＋`juan.label` 命中条目；`find_all_built_entry` 按卷后缀寻址。
+- [x] P11e 官方按卷下载：`official_ebook_source` 按条目拆 `work`/卷——`html`/`txt_notes`/`txt`
+  与 `docx`/`odt`（`{canon}/{ID}/{ID}_{NNN}.{ext}`）有单卷端点（实测，docx 例 T0099:1）；
+  `pdf`/`epub` 官方无单卷 → **本地拆分**：整部取缓存（保留）再切（pdf 按 TOC 卷号页范围＋
+  子集目录重定，epub 取 `juans/{NNN}.xhtml`＋原 OPF/NCX 裁剪＋assets 全留，校验失败回失败通道）。
+  `official_state` 水位按条目。测试 `test_download.OfficialJuanTest`＋`OfficialSplitTest`。
+- [x] P11f 合并修复：`_prepare_official` 恢复 `autoclose_ok=True`（合并/ZIP/导出前置下载无错
+  3 秒自动关闭）；合并标题按条目（`_entry_book_title`＝右栏 `work-id 书名（卷…）`），
+  `ensure_products`/`_group_works`/分组标题按 work 部分归位。
 
 ## 备注
 

@@ -248,6 +248,104 @@ def cover_organizer(cover, source):
     return str(cover.get("organizer") or "").strip()
 
 
+#: 封面折行：行尾优先（留在行末）
+_WRAP_AFTER = set("、，；。！？…）》”’") | set(",;.!?)")
+#: 封面折行：行首优先（另起一行）
+_WRAP_BEFORE = set("（《“‘") | set("(['\"")
+#: 行首禁留（闭合标点不上行首）、行尾禁留（开放标点不下行末）
+_WRAP_NO_HEAD = set("）》”’，。！？；…") | set(",.!?;)]}")
+_WRAP_NO_TAIL = set("（《“‘") | set("([{\"")
+
+
+def _wrap_cjk_lines(text, width_fn, avail):
+    """CJK 优先断点折行 → 行列表（每行已 strip）。
+
+    断点优先级：`、`等之后、`（`等之前、`——`（对）前后；无则按字折
+    （ASCII 字母数字串不断开其内部；行首不留闭合标点）。
+    width_fn(s) 返回字符串宽度；avail 为行宽上限。量宽失败回退等字数切分。
+    """
+    s = str(text or "")
+    if not s:
+        return []
+    try:
+        if width_fn(s) <= avail:
+            return [s]
+    except Exception:
+        pass
+    chars = list(s)
+    n = len(chars)
+    try:
+        ws = [float(width_fn(c)) for c in chars]
+    except Exception:
+        ws = None
+    if not ws:
+        return [s]   # 量宽不可用：不折（调用方保证仅超宽才进）
+
+    def _is_word(ch):
+        return ("A" <= ch <= "Z") or ("a" <= ch <= "z") or ("0" <= ch <= "9")
+
+    def _breakable(j, start):
+        # 位置 j（在 chars[j] 前断）是否优先断点；start 为行首
+        if j <= start or j >= n:
+            return False
+        if chars[j] == " " or chars[j - 1] == " ":
+            return True
+        if s.startswith("——", j):
+            return True
+        if j >= 2 and s.startswith("——", j - 2):
+            return True   # 刚结束破折号对
+        if chars[j - 1] in _WRAP_AFTER and chars[j] not in _WRAP_NO_HEAD:
+            return True
+        if chars[j] in _WRAP_BEFORE:
+            return True
+        return False
+
+    lines = []
+    start = 0
+    while start < n:
+        while start < n and chars[start] == " ":
+            start += 1
+        if start >= n:
+            break
+        cur = 0.0
+        last = -1
+        i = start
+        while i < n:
+            step = 2 if s.startswith("——", i) else 1
+            wsum = sum(ws[i:i + step])
+            if cur + wsum > avail and i > start:
+                break
+            cur += wsum
+            j = i + step
+            if j < n and _breakable(j, start):
+                last = j
+            i = j
+            if i >= n:
+                break
+        if i >= n:
+            tail = s[start:].strip()
+            if tail:
+                lines.append(tail)
+            break
+        b = last if last > start else -1
+        if b < 0:
+            # 无优先断点：按字折，不断开 ASCII 串与 —— 对
+            b = i
+            if chars[i] not in (" ",) and _is_word(chars[i]):
+                j = i
+                while j > start and _is_word(chars[j - 1]):
+                    j -= 1
+                if j > start:
+                    b = j
+            if b < n and chars[b] in _WRAP_NO_HEAD and b > start:
+                b -= 1   # 闭合标点拉回本行
+            if b <= start:
+                b = i    # 保底，避免空行死循环
+        lines.append(s[start:b].strip())
+        start = b
+    return [ln for ln in lines if ln]
+
+
 def _cover_pdf(first_src: Path, title: str, out_path: Path, organizer: str="", config: dict=None):
     cfg=config or {}
     # 兼容新旧配置：优先 styles，其次 fonts/colors/sizes.ratios
@@ -413,13 +511,12 @@ def _cover_pdf(first_src: Path, title: str, out_path: Path, organizer: str="", c
                 total+=c.stringWidth(part, font, size)
             if idx < len(parts)-1:
                 total+=c.stringWidth(" ", "Helvetica", size)
-        # 若过宽，分行（文本区宽度 = 页宽 - 左右边距）
+        # 若过宽，折行（优先断点 `、`/`（`/破折号，无则按字；文本区宽度 = 页宽 - 左右边距）
         if total > avail:
-            # 简单按字符分行
-            max_chars=int(avail/(size*0.6))
-            lines=[]
-            for i in range(0, len(text), max_chars):
-                lines.append(text[i:i+max_chars])
+            lines = _wrap_cjk_lines(
+                text, lambda s: c.stringWidth(s, font, size), avail)
+            if not lines:
+                lines = [text]
             cur_y=y
             for line in lines:
                 # 对每行重新计算居中

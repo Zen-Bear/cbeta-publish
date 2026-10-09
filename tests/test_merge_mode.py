@@ -1255,5 +1255,41 @@ class CoverDateTextTest(unittest.TestCase):
             shutil.rmtree(d, ignore_errors=True)
 
 
+class CoverWrapTest(unittest.TestCase):
+    """封面标题优先断点折行（mock 字宽：CJK=10，ASCII=5）。"""
+
+    def _w(self, s):
+        return sum(10 if ord(c) > 127 else 5 for c in s)
+
+    def test_break_before_paren(self):
+        from cbeta_publish.books.ebook_merger import _wrap_cjk_lines
+        got = _wrap_cjk_lines("《藏要》第一辑（十一经三律十一论）", self._w, 100)
+        self.assertEqual(got, ["《藏要》第一辑", "（十一经三律十一论）"])
+
+    def test_break_after_ideographic_comma(self):
+        from cbeta_publish.books.ebook_merger import _wrap_cjk_lines
+        got = _wrap_cjk_lines("甲、乙、丙丁戊己庚", self._w, 60)
+        self.assertEqual(got[0], "甲、乙、")
+        self.assertTrue(all(g for g in got))
+
+    def test_no_break_before_closing(self):
+        # 行首不留 `）`
+        from cbeta_publish.books.ebook_merger import _wrap_cjk_lines
+        got = _wrap_cjk_lines("甲乙丙丁戊）己", self._w, 55)
+        self.assertFalse(any(g.startswith("）") for g in got))
+
+    def test_em_dash_kept_together(self):
+        # 破折号对不断开：每行含偶数个 `—`
+        from cbeta_publish.books.ebook_merger import _wrap_cjk_lines
+        got = _wrap_cjk_lines("甲乙——丙丁戊己庚", self._w, 55)
+        self.assertTrue(all(g.count("—") % 2 == 0 for g in got))
+        self.assertEqual("".join(got).count("—"), 2)
+
+    def test_fits_single_line(self):
+        from cbeta_publish.books.ebook_merger import _wrap_cjk_lines
+        self.assertEqual(_wrap_cjk_lines("甲乙", self._w, 100), ["甲乙"])
+        self.assertEqual(_wrap_cjk_lines("", self._w, 100), [])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -108,6 +108,19 @@ class PrepareOfficialTest(unittest.TestCase):
         self.assertEqual(sorted(rec), [("T0001", "pdf"), ("T0002", "pdf")])
         self.assertEqual(frec, [True])
 
+    def test_prepare_passes_autoclose_ok(self):
+        # 合并/ZIP/导出前置下载：无错 3 秒自动关闭（回归 P1 丢失的 autoclose_ok=True）
+        seen = {}
+
+        def fake(pairs, dest_dir, title="下载", autoclose_ok=False, force=False):
+            seen["autoclose_ok"] = autoclose_ok
+            self.win._dl_stats = {"ok": 0, "total": 0, "failed": [], "cancel": False}
+            return True
+
+        self.win._download_missing = fake
+        self.win._prepare_official(["T0001"], ["pdf"], self.dest, policy="all")
+        self.assertTrue(seen.get("autoclose_ok"))
+
     def test_watermark_written_on_success(self):
         rec = []
         self._patch(rec, failed=[])

@@ -67,6 +67,88 @@ class BridgeConvertLibTest(unittest.TestCase):
         self.assertFalse(nested.exists())     # 新布局已清
         self.assertTrue(old_top.exists())     # 顶层旧目录保留
 
+    def test_id_juan_arg(self):
+        import cbeta_publish.books.xml2pdf_bridge as b
+        self.assertEqual(b._id_juan_arg("T0349", "2-3"), "T0349:2-3")
+        self.assertEqual(b._id_juan_arg("T0349", ""), "T0349")
+        self.assertEqual(b._id_juan_arg("T0349", None), "T0349")
+        self.assertEqual(b._id_juan_arg("T0349:2-3", "9"), "T0349:2-3")
+        self.assertEqual(b._id_juan_arg("E:/x/a.xml", "2"), "E:/x/a.xml")
+
+    def test_convert_passes_juan(self):
+        import cbeta_publish.books.xml2pdf_bridge as b
+        calls, restore = self._patch_run()
+        try:
+            b.convert("T0349", None, self.dir / "o.pdf", self.cfg, fmt="pdf",
+                      juan="2-3")
+        finally:
+            restore()
+        self.assertEqual(calls[0][calls[0].index("-i") + 1], "T0349:2-3")
+
+    def test_verify_work_passes_juan(self):
+        import cbeta_publish.books.xml2pdf_bridge as b
+        calls = []
+        real = b._run_cli
+        b._run_cli = lambda argv: (calls.append(list(argv)) or 0)
+        try:
+            b.verify_work("T0349", ["pdf"], self.dir / "vj", self.cfg, juan="2-3")
+        finally:
+            b._run_cli = real
+        self.assertEqual(calls[0][calls[0].index("-i") + 1], "T0349:2-3")
+
+    def test_ensure_products_juan_forces_dir_mode(self):
+        import cbeta_publish.books.xml2pdf_bridge as b
+        calls, restore = self._patch_run()
+        real_src = b.work_source_files
+        b.work_source_files = lambda config, work: []
+        try:
+            b.ensure_products("T0349", "pdf", self.dir / "b", self.cfg, juan="2-3")
+        finally:
+            b.work_source_files = real_src
+            restore()
+        self.assertEqual(calls[0][calls[0].index("-i") + 1], "T0349:2-3")
+
+    def test_verify_stem_matches_head(self):
+        import cbeta_publish.books.xml2pdf_bridge as b
+        self.assertTrue(b._verify_stem_matches("T0001_001", "T0001"))
+        self.assertTrue(b._verify_stem_matches("T0349 书名", "T0349"))
+        self.assertTrue(b._verify_stem_matches("T0349:2-3", "T0349"))
+        self.assertFalse(b._verify_stem_matches("T185", "T1858"))
+
+    def test_read_verify_json_juan(self):
+        import json
+        import cbeta_publish.books.xml2pdf_bridge as b
+        d = self.dir / "vj"
+        d.mkdir()
+        rp = d / "T0349_校验报告.txt"
+        rp.write_text("x", encoding="utf-8")
+        (d / "report.json").write_text(json.dumps({
+            "schema": 1, "work": "T0349",
+            "juan": {"segments": [[2, 3]], "label": "2-3"},
+            "fmts": {"pdf": {"verdict": "pass", "fingerprint": "x"}},
+            "inputs": {"xml_files": [{"name": "S.xml"}]}}), encoding="utf-8")
+        rj = b._read_verify_json(rp)
+        self.assertEqual(rj["juan"]["label"], "2-3")
+        self.assertEqual(b.verify_json_juan(rp), "2-3")
+        (d / "report.json").write_text(json.dumps({
+            "schema": 1, "work": "T0349", "juan": None, "fmts": {}}),
+            encoding="utf-8")
+        self.assertEqual(b.verify_json_juan(rp), "")
+
+    def test_find_all_built_entry(self):
+        import cbeta_publish.books.xml2pdf_bridge as b
+        base = self.dir / "be"
+        (base / "pdf").mkdir(parents=True)
+        (base / "pdf" / "T0220 大寶積經.pdf").write_bytes(b"x")
+        (base / "pdf" / "T0220 大寶積經（卷479）.pdf").write_bytes(b"x")
+        (base / "pdf" / "T0220 大寶積經（卷523）.pdf").write_bytes(b"x")
+        self.assertEqual(
+            [p.name for p in b.find_all_built_entry("T0220", "pdf", base, "479")],
+            ["T0220 大寶積經（卷479）.pdf"])
+        self.assertEqual(
+            [p.name for p in b.find_all_built_entry("T0220", "pdf", base, "")],
+            ["T0220 大寶積經.pdf"])
+
     def test_verify_reports_dir_explicit_and_preset(self):
         import cbeta_publish.books.xml2pdf_bridge as b
         from pathlib import Path
