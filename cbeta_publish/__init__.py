@@ -13,7 +13,7 @@ APP_NAME = "CBETA 發佈管理器"
 APP_ID = "cbeta-publish"
 
 #: 语义化版本：主.次.补丁；功能迭代升次、修 bug 升补丁、不兼容改动升主
-__version__ = "0.1.0"
+__version__ = "0.5.0"
 
 #: 许可证
 __license__ = "GPL-3.0"
