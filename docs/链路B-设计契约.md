@@ -281,7 +281,9 @@ def convert_outputs(work_id, fmt, out_dir, config, preset=None, stop=None) -> li
   同部多卷各自成条），经全链透传——`bridge.convert/convert_outputs/ensure_products/
   verify_work` 加 `juan=`（`-i "ID:spec"`，`juan` 非空时 `ensure_products` 恒走输出目录模式，
   由上游加 `（卷…）` 后缀，寻址用 `find_all_built_entry`）；`VerifyWorker` 按条目拆 `work`/卷
-  透传。**复用按卷隔离**：`verify_records.json` 集身份＝`(inputs, juan)`（`juan` 缺省 `""`＝整本）；
+  透传。**整本与卷子集严格互斥**：整本寻址排除 `（卷…）` 尾缀、**绝不回退卷子集**
+  （否则整本会误把子集当自己的产物而复用，实际整本从未生成）；**复用按卷隔离**：
+  `verify_records.json` 集身份＝`(inputs, juan)`（`juan` 缺省 `""`＝整本）；
   指纹经 `verify_fingerprint(juan=)` 带上游卷维度，`report.json` 顶层 `juan.label` 参与
   惰性导入/入库匹配（`_do_import_verified` 按 `work`＋卷标签命中条目）；子集与整本、
   不同子集互不命中（上游契约见《上游-指纹juan入参提案.md》）。报告/产物目录名带 `（卷…）` 后缀，

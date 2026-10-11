@@ -955,6 +955,31 @@ class MadeBooksInfoTest(unittest.TestCase):
         self.assertEqual(win.tab_bottom.currentIndex(), 0)     # 切到书籍信息页
         self.assertEqual(win.detail_scroll.verticalScrollBar().value(), 0)   # 回到第一行
 
+    def test_report_tabs_use_visible_scrollbar_style(self):
+        # Windows 11 原生滚动条是无轨道细圆点、几乎不可见 → 报告页套经典可见样式
+        win = self.win
+        for sc in (win.made_scroll, win.detail_scroll):
+            qss = sc.styleSheet()
+            self.assertIn("QScrollBar:vertical", qss)
+            self.assertIn("QScrollBar::handle:vertical", qss)
+            self.assertIn("QScrollBar:horizontal", qss)
+
+    def test_show_made_books_multi_product_uses_real_names(self):
+        # 多源作品同一 (work,fmt) 多个产物：用真实文件名区分（不能几行同名）
+        win = self.win
+        d = self.tmp / "multi"
+        d.mkdir(exist_ok=True)
+        p1 = d / "T0220 大般若經(第1卷-第200卷).pdf"
+        p2 = d / "T0220 大般若經(第201卷-第400卷).pdf"
+        p1.write_bytes(b"x")
+        p2.write_bytes(b"x")
+        win._show_made_books("生成完成",
+                             [("T0220", "pdf", p1), ("T0220", "pdf", p2)],
+                             "生成完成 2 部 →", out_dir=d, made=True)
+        txt = win.made_detail.text()
+        self.assertIn("T0220 大般若經(第1卷-第200卷)（pdf）", txt)
+        self.assertIn("T0220 大般若經(第201卷-第400卷)（pdf）", txt)
+
     def test_show_made_books_made_tab_separate(self):
         # 自制报告写入独立「自制书籍报告」页签，不覆盖「书籍信息」
         win = self.win

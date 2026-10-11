@@ -24,6 +24,9 @@ X2P_DEFAULT_DIR = "E:/dev/cbeta/xml2pdf"
 XML_BOOKS_DEFAULT_DIR = str(PROJECT_ROOT / "cbeta_xml_ebooks")
 XML_WORK_DEFAULT_DIR = str(PROJECT_ROOT / "cbeta_xml")   # CBETA XML 目录（默认工作根，不可空）
 
+#: 卷子集产物的尾缀（上游按 `（卷…）` 命名）；整本寻址据此排除，二者严格互斥。
+_JUAN_SUFFIX_RE = re.compile(r"（卷[^）]*）$")
+
 
 def _abs(p, base=None):
     """目录统一为绝对路径：相对路径按工程根解析（与各目录默认值一致）。"""
@@ -562,11 +565,15 @@ def find_built(work: str, fmt: str, base_dir):
 
 
 def find_all_built_entry(work: str, fmt: str, base_dir, juan=""):
-    """条目产物：卷非空取带 `（卷…）` 后缀者；整本取无卷后缀者（回退全部）。"""
+    """条目产物：卷非空取带 `（卷…）` 尾缀者；整本取**不带**卷尾缀者。
+
+    整本与卷子集严格互斥：整本寻址绝不回退卷子集文件（否则整本会误把子集
+    当自己的产物而复用，实际整本从未生成）。
+    """
     allp = find_all_built(work, fmt, base_dir)
     j = str(juan or "").strip()
     if not j:
-        return [p for p in allp if "（卷" not in p.stem] or allp
+        return [p for p in allp if not _JUAN_SUFFIX_RE.search(p.stem)]
     suffix = f"（卷{j}）"
     return [p for p in allp if p.stem.endswith(suffix)]
 

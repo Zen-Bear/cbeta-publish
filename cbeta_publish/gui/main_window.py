@@ -22,6 +22,26 @@ from cbeta_publish import APP_NAME, __version__
 WORK_RE = re.compile(r"[A-Z]+[0-9A-Za-z]+")
 CONFIG_PATH = app_root() / "config" / "app.json"
 
+#: 报告页（自制书籍报告/书籍信息）滚动条样式：Windows 11 风格滚动条是无轨道细圆点、
+#: 几乎看不见，报告页改用经典可见滚动条（带轨道＋明显滑块）。
+REPORT_SCROLL_QSS = (
+    "QScrollBar:vertical { background: #f0f0f0; width: 6px; margin: 0px; }"
+    "QScrollBar::handle:vertical { background: #b0b0b0; min-height: 12px;"
+    " border-radius: 2px; }"
+    "QScrollBar::handle:vertical:hover { background: #8f8f8f; }"
+    "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }"
+    "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical"
+    " { background: transparent; }"
+    "QScrollBar:horizontal { background: #f0f0f0; height: 6px; margin: 0px; }"
+    "QScrollBar::handle:horizontal { background: #b0b0b0; min-width: 12px;"
+    " border-radius: 2px; }"
+    "QScrollBar::handle:horizontal:hover { background: #8f8f8f; }"
+    "QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal"
+    " { width: 0px; }"
+    "QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal"
+    " { background: transparent; }"
+)
+
 #: 独立窗输出 → publish 导入的简明规则（「制作书籍 → 导入说明…」弹窗；
 #: 完整规范见 docs/链路B-设计契约.md §9）
 VERIFY_IMPORT_RULES_HTML = """\
@@ -797,6 +817,7 @@ class MainWindow(QMainWindow):
         self.detail_scroll=QScrollArea()
         self.detail_scroll.setWidgetResizable(True)
         self.detail_scroll.setFrameShape(QScrollArea.NoFrame)
+        self.detail_scroll.setStyleSheet(REPORT_SCROLL_QSS)
         self.detail_scroll.setWidget(self.detail)
         book_layout.addWidget(self.detail_scroll)
         self.tab_bottom.addTab(book_page, "书籍信息")
@@ -806,6 +827,8 @@ class MainWindow(QMainWindow):
         self.made_scroll=QScrollArea()
         self.made_scroll.setWidgetResizable(True)
         self.made_scroll.setFrameShape(QScrollArea.NoFrame)
+        # Windows 11 风格滚动条是无轨道的细圆点、几乎看不见 → 报告页用经典可见滚动条
+        self.made_scroll.setStyleSheet(REPORT_SCROLL_QSS)
         self.made_scroll.setWidget(self.made_detail)
         made_layout.addWidget(self.made_scroll)
         self.tab_bottom.addTab(made_page, "自制书籍报告")
@@ -4112,7 +4135,14 @@ class MainWindow(QMainWindow):
         for w, fmt, p in entries:
             try:
                 pp=Path(p)
-                label=f"{w} {self._display_title(w)}（{fmt}）"
+                _stem=pp.stem
+                _work=self._entry_work(w)
+                # 自制产物文件名自带书名/来源/卷（如 `T0220 大般若經(第1卷-第200卷)`）：
+                # 照实显示真实文件名（多源作品才区分得开）；官方缓存名（`T0220` 等）补标题。
+                if _stem.startswith(_work + " ") or _stem.startswith(_work + "（"):
+                    label=f"{_stem}（{fmt}）"
+                else:
+                    label=f"{w} {self._display_title(w)}（{fmt}）"
                 href=_QU.fromLocalFile(str(pp.resolve())).toString()
                 parts.append(f'<a href="{href}">{_html.escape(label)}</a>')
             except Exception:

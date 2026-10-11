@@ -191,6 +191,22 @@ class BridgeConvertLibTest(unittest.TestCase):
             [p.name for p in b.find_all_built_entry("T0220", "pdf", base, "")],
             ["T0220 大寶積經.pdf"])
 
+    def test_find_all_built_entry_whole_excludes_subset(self):
+        # 整本寻址绝不回退卷子集文件；书名中间含「（卷」但非尾缀者仍算整本
+        import cbeta_publish.books.xml2pdf_bridge as b
+        base = self.dir / "be2"
+        (base / "pdf").mkdir(parents=True)
+        (base / "pdf" / "T0220 大般若經（卷479）.pdf").write_bytes(b"x")
+        (base / "pdf" / "T0220 大般若經（卷523）.pdf").write_bytes(b"x")
+        self.assertEqual(b.find_all_built_entry("T0220", "pdf", base, ""), [])
+        self.assertEqual(
+            [p.name for p in b.find_all_built_entry("T0220", "pdf", base, "479")],
+            ["T0220 大般若經（卷479）.pdf"])
+        (base / "pdf" / "T0220 大般若經（卷上中下）别集.pdf").write_bytes(b"x")
+        self.assertEqual(
+            [p.name for p in b.find_all_built_entry("T0220", "pdf", base, "")],
+            ["T0220 大般若經（卷上中下）别集.pdf"])
+
     def test_verify_reports_dir_explicit_and_preset(self):
         import cbeta_publish.books.xml2pdf_bridge as b
         from pathlib import Path
@@ -982,6 +998,36 @@ class BridgeBuiltNamingTest(unittest.TestCase):
         self.assertTrue(reused)
         self.assertEqual(outs, [built])
         self.assertEqual(calls, [])   # 未重生成
+
+    def test_ensure_products_whole_book_ignores_subset_files(self):
+        # 整本条目不得把卷子集文件当自己的产物复用（T0220 600 卷实为 T05/06/07 三会分档，
+        # 恰好 3 个源＋3 个卷子集文件时曾误判"已齐"而复用，整本从未生成）
+        import cbeta_publish.books.xml2pdf_bridge as b
+        srcdir = self.work / "T0220 大般若經"
+        srcdir.mkdir(parents=True, exist_ok=True)
+        for name in ("T05n0220.xml", "T06n0220.xml", "T07n0220.xml"):
+            (srcdir / name).write_bytes(b"x")
+        base = self.dir / "whole"
+        (base / "pdf").mkdir(parents=True)
+        for j in ("479", "523", "556"):
+            (base / "pdf" / f"T0220 大般若經（卷{j}）.pdf").write_bytes(b"x")
+        whole = base / "pdf" / "T0220 大般若經.pdf"
+        calls = []
+        real = b.convert_outputs
+
+        def fake(work, fmt, out_dir, config, preset=None, juan=None):
+            calls.append((work, fmt, juan))
+            whole.write_bytes(b"whole")
+            return [whole]
+
+        b.convert_outputs = fake
+        try:
+            outs, reused = b.ensure_products("T0220", "pdf", base, self.cfg)
+        finally:
+            b.convert_outputs = real
+        self.assertFalse(reused)          # 必须重制，不能复用子集
+        self.assertEqual(outs, [whole])
+        self.assertEqual(calls, [("T0220", "pdf", None)])
 
     def test_ensure_one_with_name(self):
         # name 透传：直生目标用带书名（L2），复用仍命中
