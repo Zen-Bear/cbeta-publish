@@ -102,17 +102,18 @@ class DownloadLogTest(unittest.TestCase):
         self.assertNotIn("下载记录", names)
 
     def test_tabs_are_book_info_then_coll_info(self):
-        # 右下页签：① 书籍信息 ② 丛书信息 ③ E书目录（原「下载记录」已删除）
+        # 右下页签：① 书籍信息 ② 自制书籍报告 ③ 丛书信息 ④ E书目录
         win = self.win
         tb = win.tab_bottom
-        self.assertEqual(tb.count(), 3)
-        self.assertEqual([tb.tabText(i) for i in range(3)],
-                         ["书籍信息", "丛书信息", "E书目录"])
-        self.assertTrue(tb.widget(0).isAncestorOf(win.detail))
-        self.assertTrue(tb.widget(1).isAncestorOf(win.lbl_coll_info))
-        self.assertTrue(tb.widget(2).isAncestorOf(win.lbl_cache_dir))
-        self.assertTrue(tb.widget(2).isAncestorOf(win.lbl_xml_dir))
-        self.assertTrue(tb.widget(2).isAncestorOf(win.lbl_out_dir))
+        self.assertEqual(tb.count(), 4)
+        self.assertEqual([tb.tabText(i) for i in range(4)],
+                         ["书籍信息", "自制书籍报告", "丛书信息", "E书目录"])
+        self.assertTrue(tb.widget(win._tab_book).isAncestorOf(win.detail))
+        self.assertTrue(tb.widget(win._tab_made).isAncestorOf(win.made_detail))
+        self.assertTrue(tb.widget(win._tab_coll).isAncestorOf(win.lbl_coll_info))
+        self.assertTrue(tb.widget(3).isAncestorOf(win.lbl_cache_dir))
+        self.assertTrue(tb.widget(3).isAncestorOf(win.lbl_xml_dir))
+        self.assertTrue(tb.widget(3).isAncestorOf(win.lbl_out_dir))
 
     def test_click_book_activates_book_tab(self):
         # 三栏点书 → 显示书籍信息并切到「书籍信息」页签；点分组节点 → 清空且不切页签
@@ -434,13 +435,14 @@ class MergeXmlSourceTest(unittest.TestCase):
             return Path(out)
         b.convert = fake_convert
         try:
-            ok_map, failed, cancelled = win._ensure_xml_batch(["T0001", "T9999"], ["pdf"])
+            ok_map, failed, cancelled, short = win._ensure_xml_batch(["T0001", "T9999"], ["pdf"])
         finally:
             b.convert = real
         self.assertFalse(cancelled)
         self.assertIn("T0001", ok_map["pdf"])
         self.assertEqual(len(failed), 1)
         self.assertIn("T9999", failed[0])
+        self.assertEqual(short, [])
 
     def test_ensure_xml_batch_flattens_multi_products(self):
         # 同一 work 的多个自制产物都要进入 ok_map，不能只留第一项。
@@ -455,12 +457,104 @@ class MergeXmlSourceTest(unittest.TestCase):
         real = b.ensure_products
         b.ensure_products = lambda *a, **k: ([one, two], True)
         try:
-            ok_map, failed, cancelled = win._ensure_xml_batch(["TX0011"], ["pdf"])
+            ok_map, failed, cancelled, short = win._ensure_xml_batch(["TX0011"], ["pdf"])
         finally:
             b.ensure_products = real
         self.assertFalse(cancelled)
         self.assertEqual(failed, [])
+        self.assertEqual(short, [])
         self.assertEqual(ok_map["pdf"]["TX0011"], [one, two])
+
+    def test_ensure_xml_batch_reports_short(self):
+        # 2 源只产出 1 个（非空）：不算失败，但记 short 缺产物清单
+        import cbeta_publish.books.xml2pdf_bridge as b
+        win = self.win
+        out_dir = self._xml_env()
+        one = out_dir / "pdf" / "T0001 上.pdf"
+        one.parent.mkdir(parents=True, exist_ok=True)
+        one.write_bytes(b"a")
+        real_src, real_ens = b.work_source_files, b.ensure_products
+        b.work_source_files = lambda config, work: [one, out_dir / "x.xml"]
+        b.ensure_products = lambda *a, **k: ([one], False)
+        try:
+            ok_map, failed, cancelled, short = win._ensure_xml_batch(["T0001"], ["pdf"])
+        finally:
+            b.work_source_files, b.ensure_products = real_src, real_ens
+        self.assertFalse(cancelled)
+        self.assertEqual(failed, [])
+        self.assertEqual(len(short), 1)
+        self.assertIn("T0001.pdf", short[0])
+        self.assertIn("缺1个产物", short[0])
+
+    def test_ensure_xml_batch_subset_single_unit(self):
+        # 卷子集不按源数预期：3 源单卷只产 1 个，不记 short（T0220 三会分档实测）
+        import cbeta_publish.books.xml2pdf_bridge as b
+        win = self.win
+        out_dir = self._xml_env()
+        one = out_dir / "pdf" / "T0220 大般若經（卷479）.pdf"
+        one.parent.mkdir(parents=True, exist_ok=True)
+        one.write_bytes(b"a")
+        real_src, real_ens = b.work_source_files, b.ensure_products
+        b.work_source_files = lambda config, work: [
+            out_dir / "T05n0220.xml", out_dir / "T06n0220.xml",
+            out_dir / "T07n0220.xml"]
+        b.ensure_products = lambda *a, **k: ([one], False)
+        try:
+            ok_map, failed, cancelled, short = win._ensure_xml_batch(
+                ["T0220:479"], ["pdf"])
+        finally:
+            b.work_source_files, b.ensure_products = real_src, real_ens
+        self.assertFalse(cancelled)
+        self.assertEqual(failed, [])
+        self.assertEqual(short, [])
+        self.assertEqual(ok_map["pdf"]["T0220:479"], [one])
+
+    def test_ensure_xml_batch_popup_counts_lines(self):
+        # 自制弹窗：首行=计划每格式本数；收尾行前=实际每格式本数
+        import cbeta_publish.books.xml2pdf_bridge as b
+        win = self.win
+        out_dir = self._xml_env()
+        one = out_dir / "pdf" / "T0001 上.pdf"
+        one.parent.mkdir(parents=True, exist_ok=True)
+        one.write_bytes(b"a")
+        real_src, real_ens = b.work_source_files, b.ensure_products
+        b.work_source_files = lambda config, work: [out_dir / "T01n0001.xml"]
+        b.ensure_products = lambda *a, **k: ([one], True)
+        labels = []
+        finished = []
+        real_mp = win._make_progress
+
+        def fake_mp(title, total):
+            def update(done, label="", is_html=False):
+                if label:
+                    labels.append(str(label))
+                return True
+            return object(), update, {
+                "finish": lambda lines=None: finished.extend(lines or []),
+                "cancel": False}
+        win._make_progress = fake_mp
+        try:
+            win._ensure_xml_batch(["T0001"], ["pdf", "epub"])
+        finally:
+            win._make_progress = real_mp
+            b.work_source_files, b.ensure_products = real_src, real_ens
+        self.assertEqual(labels[0], "1 部 x 2 格式 (pdf+epub) = 2 部")   # 计划
+        self.assertIn("1 部 x 2 格式 (pdf+epub) = 2 部", finished)      # 实际
+        self.assertIn("完成 2/2", finished[-1])
+        self.assertIn("#1a7f37", finished[-1])                         # 全成功→绿
+
+    def test_make_progress_first_line_no_blank(self):
+        # 进度窗日志从第一行开始写（不再先插一个空段）
+        from PySide6.QtWidgets import QTextBrowser
+        win = self.win
+        dlg, update, st = win._make_progress("t", 2)
+        try:
+            update(0, "第一行")
+            update(1, "第二行")
+            log = dlg.findChild(QTextBrowser)
+            self.assertEqual(log.toPlainText().splitlines()[:2], ["第一行", "第二行"])
+        finally:
+            dlg.close()
 
     def test_expand_group_files_preserves_all_products(self):
         # 分组合并时，一个 work 的多个自制产物都要进入同一个分组。
@@ -500,7 +594,7 @@ class MergeXmlSourceTest(unittest.TestCase):
         win.config.setdefault("xml2pdf", {})["reuse_pdf_companion"] = True
         calls, restore = self._patch_render_with_companion(True)
         try:
-            ok_map, failed, cancelled = win._ensure_xml_batch(["T0001"], ["pdf", "docx"])
+            ok_map, failed, cancelled, short = win._ensure_xml_batch(["T0001"], ["pdf", "docx"])
         finally:
             restore()
             if old is None:
@@ -509,6 +603,7 @@ class MergeXmlSourceTest(unittest.TestCase):
                 win.config["xml2pdf"]["reuse_pdf_companion"] = old
         self.assertFalse(cancelled)
         self.assertEqual(failed, [])
+        self.assertEqual(short, [])
         self.assertEqual(calls, [("T0001", "pdf")])       # docx 未渲染
         docx = ok_map["docx"]["T0001"]
         self.assertEqual([p.name for p in docx], ["T0001.docx"])

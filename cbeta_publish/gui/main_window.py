@@ -590,6 +590,14 @@ class MainWindow(QMainWindow):
             Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard
             | Qt.LinksAccessibleByMouse | Qt.LinksAccessibleByKeyboard)
         self.detail.linkActivated.connect(self._open_publish_link)
+        # 自制书籍报告：独立页签，保留最近一次自制/重制结果（不被下载/校验等覆盖）
+        self.made_detail=QLabel("")
+        self.made_detail.setWordWrap(True)
+        self.made_detail.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        self.made_detail.setTextInteractionFlags(
+            Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard
+            | Qt.LinksAccessibleByMouse | Qt.LinksAccessibleByKeyboard)
+        self.made_detail.linkActivated.connect(self._open_publish_link)
         splitter.addWidget(mid)
 
         right=QWidget()
@@ -696,6 +704,7 @@ class MainWindow(QMainWindow):
         hb.addWidget(self.btn_remove)
         rv.addWidget(btn_box)
         publish_group = QGroupBox("发布")
+        self.publish_group = publish_group
         pg = QVBoxLayout(publish_group)
         pg.setContentsMargins(6, 6, 6, 6)
         pg.setSpacing(4)
@@ -791,6 +800,15 @@ class MainWindow(QMainWindow):
         self.detail_scroll.setWidget(self.detail)
         book_layout.addWidget(self.detail_scroll)
         self.tab_bottom.addTab(book_page, "书籍信息")
+        made_page=QWidget()
+        made_layout=QVBoxLayout(made_page)
+        made_layout.setContentsMargins(0,0,0,0)
+        self.made_scroll=QScrollArea()
+        self.made_scroll.setWidgetResizable(True)
+        self.made_scroll.setFrameShape(QScrollArea.NoFrame)
+        self.made_scroll.setWidget(self.made_detail)
+        made_layout.addWidget(self.made_scroll)
+        self.tab_bottom.addTab(made_page, "自制书籍报告")
         info_page=QWidget()
         info_layout=QVBoxLayout(info_page)
         info_layout.setContentsMargins(0,0,0,0)
@@ -844,13 +862,32 @@ class MainWindow(QMainWindow):
             "丛书", lambda: self._out_dir(), "lbl_out_dir"))
         ebook_layout.addStretch()
         self.tab_bottom.addTab(ebook_page, "E书目录")
-        self.btn_tab_toggle=QPushButton("▾")
-        self.btn_tab_toggle.setFixedWidth(28)
-        self.btn_tab_toggle.setToolTip("最小化/恢复下方窗格")
-        self.btn_tab_toggle.clicked.connect(self._toggle_tab_pane)
-        self.tab_bottom.setCornerWidget(self.btn_tab_toggle, Qt.TopRightCorner)
-        self._tab_expanded=True
-        self._tab_full_h=0
+        self._tab_book=self.tab_bottom.indexOf(book_page)
+        self._tab_made=self.tab_bottom.indexOf(made_page)
+        self._tab_coll=self.tab_bottom.indexOf(info_page)
+        # 双箭头：△ 收起「发布」栏（放大书籍信息）/ 复原；▽ 收起书籍信息栏 / 复原。
+        # 三态：normal（双箭头）/ pub_collapsed（仅▽）/ info_collapsed（仅△）。
+        self.btn_pane_up=QPushButton("△")
+        self.btn_pane_up.clicked.connect(self._pane_up)
+        self.btn_pane_down=QPushButton("▽")
+        self.btn_pane_down.clicked.connect(self._pane_down)
+        for _b in (self.btn_pane_up, self.btn_pane_down):
+            _b.setFixedSize(16, 16)
+            _f=_b.font()
+            _f.setPointSize(7)
+            _b.setFont(_f)
+            # 样式表字号优先于 setFont：设置保存时 apply_ui_fonts 统一改字体也不放大箭头
+            _b.setStyleSheet("QPushButton { padding: 0px; font-size: 7pt; }")
+        _pane_toggle=QWidget()
+        _ptl=QHBoxLayout(_pane_toggle)
+        _ptl.setContentsMargins(0,0,0,0)
+        _ptl.setSpacing(0)
+        _ptl.addWidget(self.btn_pane_up)
+        _ptl.addWidget(self.btn_pane_down)
+        self.tab_bottom.setCornerWidget(_pane_toggle, Qt.TopRightCorner)
+        self._pane_state="normal"
+        self._pane_full_h=0
+        self._apply_pane_state()
         QTimer.singleShot(0, self._fix_tab_height)
         rv.addWidget(self.tab_bottom)
         splitter.addWidget(right)
@@ -1115,30 +1152,61 @@ class MainWindow(QMainWindow):
         self._render_search_to_left()
 
     def _fix_tab_height(self):
-        # 下方页签高度固定（≈原「下载记录」高），切页时上面元素不再伸缩
+        # 书籍信息栏常态高度固定（≈原「下载记录」高），切页时上面元素不再伸缩
         try:
             bar=self.tab_bottom.tabBar().height() or self.tab_bottom.tabBar().sizeHint().height()
-            self._tab_full_h=bar+104
-            if self._tab_expanded:
-                self.tab_bottom.setFixedHeight(self._tab_full_h)
+            self._pane_full_h=bar+104
+            if self._pane_state=="normal":
+                self.tab_bottom.setFixedHeight(self._pane_full_h)
         except Exception:
             pass
 
-    def _toggle_tab_pane(self):
-        # 右上角箭头：最小化只留标题行 / 恢复
+    def _pane_up(self):
+        # △：常态→收起「发布」栏（放大书籍信息）；书籍信息已收起→复原
+        if self._pane_state=="info_collapsed":
+            self._pane_state="normal"
+        elif self._pane_state=="normal":
+            self._pane_state="pub_collapsed"
+        self._apply_pane_state()
+
+    def _pane_down(self):
+        # ▽：常态→收起书籍信息栏；「发布」栏已收起→复原
+        if self._pane_state=="pub_collapsed":
+            self._pane_state="normal"
+        elif self._pane_state=="normal":
+            self._pane_state="info_collapsed"
+        self._apply_pane_state()
+
+    def _apply_pane_state(self):
+        # 三态：normal（双箭头）/ pub_collapsed（仅▽）/ info_collapsed（仅△）
         try:
             bar=self.tab_bottom.tabBar().height() or 24
-            if self._tab_expanded:
-                self._tab_full_h=self.tab_bottom.height()
+            if not self._pane_full_h:
+                self._fix_tab_height()
+            full=self._pane_full_h or bar+104
+            try:
+                pub_h=self.publish_group.sizeHint().height()
+            except Exception:
+                pub_h=0
+            st=self._pane_state
+            if st=="pub_collapsed":
+                self.publish_group.setVisible(False)
+                self.tab_bottom.setFixedHeight(full+pub_h)
+            elif st=="info_collapsed":
+                self.publish_group.setVisible(True)
                 self.tab_bottom.setFixedHeight(bar+2)
-                self.btn_tab_toggle.setText("▸")
-                self._tab_expanded=False
             else:
-                if not self._tab_full_h:
-                    self._fix_tab_height()
-                self.tab_bottom.setFixedHeight(self._tab_full_h or bar+104)
-                self.btn_tab_toggle.setText("▾")
-                self._tab_expanded=True
+                self.publish_group.setVisible(True)
+                self.tab_bottom.setFixedHeight(full)
+            self.btn_pane_up.setVisible(st!="pub_collapsed")
+            self.btn_pane_down.setVisible(st!="info_collapsed")
+            if st=="normal":
+                self.btn_pane_up.setToolTip("收起「发布」栏，放大书籍信息栏")
+                self.btn_pane_down.setToolTip("收起书籍信息栏")
+            elif st=="pub_collapsed":
+                self.btn_pane_down.setToolTip("复原书籍信息栏和「发布」栏")
+            else:
+                self.btn_pane_up.setToolTip("复原书籍信息栏")
         except Exception as e:
             print(e)
 
@@ -2512,7 +2580,7 @@ class MainWindow(QMainWindow):
             except Exception:
                 note=""
             self.detail.setText(self._book_info_text(key, note=note))
-            self.tab_bottom.setCurrentIndex(0)
+            self.tab_bottom.setCurrentIndex(self._tab_book)
         else:
             self.detail.setText("")
 
@@ -2816,7 +2884,7 @@ class MainWindow(QMainWindow):
             return
         self.detail.setText(self._book_info_text(item.data(Qt.UserRole)))
         # 点书 → 激活「书籍信息」页签
-        self.tab_bottom.setCurrentIndex(0)
+        self.tab_bottom.setCurrentIndex(self._tab_book)
 
     def _on_list_double_add(self, item):
         # 中栏双击书 = 加入右栏（移动），与左栏工作区双击一致
@@ -3985,22 +4053,42 @@ class MainWindow(QMainWindow):
         except Exception as e:
             print(e)
 
-    def _show_made_books(self, header, entries, summary, out_dir=None):
-        """在「书籍信息」页签列出刚下载/自制的书籍（每项可点击打开），末行给总结。
+    @staticmethod
+    def _fmt_counts_line(counts):
+        """本数行：`29 部 x 3 格式 (pdf+epub+docx) = 87 部`。
 
-        entries: [(work, fmt, path)]；summary: 末行文本；out_dir: 末行附目录链接（可点开）。
+        counts: {fmt: n}；按 pdf/epub/docx/其它 稳定序。各格式本数相等时用
+        紧凑式 `N 部 x K 格式 (...)`；不等则逐格式列出。
+        """
+        if not counts:
+            return ""
+        order={"pdf": 0, "epub": 1, "docx": 2}
+        keys=sorted(counts, key=lambda f: (order.get(f, 9), f))
+        total=sum(counts.values())
+        if len({counts[f] for f in keys}) == 1:
+            n=counts[keys[0]]
+            return (f"{n} 部 x {len(keys)} 格式 "
+                    f"({'+'.join(keys)}) = {total} 部")
+        return "、".join(f"{f} {counts[f]} 部" for f in keys) + f"，共 {total} 部"
+
+    def _show_made_books(self, header, entries, summary, out_dir=None,
+                           convert_path=None, ok=None, made=False):
+        """列出刚下载/自制的书籍（每项可点击打开）。
+
+        首两行固定为「本数行 + 总结行」：本数行 `N 部 x K 格式 (…) = M 部`；
+        总结行附目录链接、ok 非空时按成功/失败着绿/红色。其下逐项列产物（可点开）；
+        convert_path 非空时总结行下给总转换报告链接。
+        made=True → 写入「自制书籍报告」页签（保留最近一次自制结果）；否则「书籍信息」。
         """
         import html as _html
         from PySide6.QtCore import QUrl as _QU
-        parts=[f"<b>{_html.escape(header)}</b>"]
-        for w, fmt, p in entries:
-            try:
-                pp=Path(p)
-                label=f"{w} {self._display_title(w)}（{fmt}）"
-                href=_QU.fromLocalFile(str(pp.resolve())).toString()
-                parts.append(f'<a href="{href}">{_html.escape(label)}</a>')
-            except Exception:
-                continue
+        _counts={}
+        for _w, fmt, _p in entries:
+            _counts[fmt]=_counts.get(fmt, 0)+1
+        parts=[]
+        _stats=self._fmt_counts_line(_counts)
+        if _stats:
+            parts.append(_html.escape(_stats))
         line=_html.escape(summary)
         if out_dir is not None:
             try:
@@ -4009,13 +4097,34 @@ class MainWindow(QMainWindow):
                 line+=f' <a href="{href}">{_html.escape(str(dp))}</a>'
             except Exception:
                 pass
+        if ok is not None:
+            _color="#1a7f37" if ok else "#c0392b"
+            line=f'<span style="color:{_color}">{line}</span>'
         parts.append(line)
-        self.detail.setText("<br>".join(parts))
-        self.tab_bottom.setCurrentIndex(0)
+        if convert_path is not None:
+            try:
+                cp=Path(convert_path)
+                href=_QU.fromLocalFile(str(cp.resolve())).toString()
+                parts.append(f'总转换报告：<a href="{href}">'
+                             f'{_html.escape(cp.name)}</a>')
+            except Exception:
+                pass
+        for w, fmt, p in entries:
+            try:
+                pp=Path(p)
+                label=f"{w} {self._display_title(w)}（{fmt}）"
+                href=_QU.fromLocalFile(str(pp.resolve())).toString()
+                parts.append(f'<a href="{href}">{_html.escape(label)}</a>')
+            except Exception:
+                continue
+        view=self.made_detail if made else self.detail
+        scroll=self.made_scroll if made else self.detail_scroll
+        view.setText("<br>".join(parts))
+        self.tab_bottom.setCurrentIndex(self._tab_made if made else self._tab_book)
         # 回到第一行（不然滚到末尾）
         try:
-            self.detail_scroll.verticalScrollBar().setValue(0)
-            self.detail_scroll.horizontalScrollBar().setValue(0)
+            scroll.verticalScrollBar().setValue(0)
+            scroll.horizontalScrollBar().setValue(0)
         except Exception:
             pass
 
@@ -4298,7 +4407,7 @@ class MainWindow(QMainWindow):
         note=(d.get("work_notes") or {}).get(self._entry_work(w), "") if isinstance(d, dict) else ""
         self.detail.setText(self._book_info_text(w, note=note))
         # 点书 → 激活「书籍信息」页签
-        self.tab_bottom.setCurrentIndex(0)
+        self.tab_bottom.setCurrentIndex(self._tab_book)
 
     def eventFilter(self, obj, event):
         # 命中：复选框切换 _selected；P/E 图标双击打开电子书
@@ -5018,7 +5127,8 @@ class MainWindow(QMainWindow):
             summary=f"下载未全部完成 {st.get('ok',0)}/{st.get('total',len(pairs))} →"
         else:
             summary=f"下载完成 {st.get('ok',0)}/{st.get('total',len(pairs))} →"
-        self._show_made_books("下载完成", entries, summary, out_dir=dest_dir)
+        self._show_made_books("下载完成", entries, summary, out_dir=dest_dir,
+                              ok=bool(ok))
         if _unsupported:
             self._wrap_box(QMessageBox.Information, "官方无单卷",
                            "以下为卷条目，但该格式官方无单卷端点（仅 html/txt/txt_notes/docx/odt 有）：\n"
@@ -5054,22 +5164,30 @@ class MainWindow(QMainWindow):
             return self._send_coll_to_verify(regen_all=bool(regen_all))
         title="重新生成全部自制电子书" if regen_all else "生成自制电子书"
         from cbeta_publish.books import xml2pdf_bridge
-        ok_map, failed, cancelled = self._ensure_xml_batch(
+        ok_map, failed, cancelled, short = self._ensure_xml_batch(
             works, fmts, title=title, regen_all=bool(regen_all))
         n=sum(len(v) for v in ok_map.values())
         base=xml2pdf_bridge.xml_books_dir(self.config)
         entries=[(w, fmt, p) for fmt, m in ok_map.items()
                  for w, paths in m.items() for p in self._made_paths(paths)]
+        _short_txt = ("；缺产物 %d：%s" % (len(short), "、".join(short[:10]))
+                      + ("…" if len(short) > 10 else "")) if short else ""
         if cancelled:
             summary=f"已取消（已完成 {n} 部）"
         elif failed:
             self._wrap_box(QMessageBox.Warning, "部分失败",
                            f"完成 {n} 部，失败 {len(failed)}：\n" + "\n".join(failed[:10]))
-            summary=f"生成完成 {n} 部，失败 {len(failed)} →"
+            summary=f"生成完成 {n} 部，失败 {len(failed)}{_short_txt} →"
         else:
-            summary=f"{'重制' if regen_all else '生成'}完成 {n} 部 →"
+            summary=f"{'重制' if regen_all else '生成'}完成 {n} 部{_short_txt} →"
+        _conv_path=None
+        if xml2pdf_bridge.convert_report_enabled(self.config):
+            _conv_path=xml2pdf_bridge.write_convert_summary(
+                base, d.get("name"), works=works)
+        _ok=(not failed) and (not cancelled) and (not short)
         self._show_made_books("生成完成" if not regen_all else "重制完成",
-                              entries, summary, out_dir=base)
+                              entries, summary, out_dir=base,
+                              convert_path=_conv_path, ok=_ok, made=True)
         self._load_coll_works()
 
     def _on_download_button(self):
@@ -5774,6 +5892,12 @@ class MainWindow(QMainWindow):
         _sum_path=_b.write_verify_summary(vdir, d.get("name"), works=works_to_verify)
         if _sum_path is not None:
             summary.append("总验证报告：" + _flink(_sum_path))
+        _conv_path=None
+        if _b.convert_report_enabled(self.config):
+            _conv_path=_b.write_convert_summary(vdir, d.get("name"),
+                                                works=works_to_verify)
+            if _conv_path is not None:
+                summary.append("总转换报告：" + _flink(_conv_path))
         if result["failed"]:
             summary.append(_warn(f"未通过 {len(result['failed'])}：{', '.join(result['failed'][:10])}"))
         summary.append(f"已自动导入 {len(imp['ok'])} 部 → " + _dirlink(base))
@@ -5787,15 +5911,17 @@ class MainWindow(QMainWindow):
             summary.append("已取消。")
         pstate["finish"](summary)
         self._load_coll_works()
-        self._show_verify_results(imp, vdir, base, summary_path=_sum_path)
+        self._show_verify_results(imp, vdir, base, summary_path=_sum_path,
+                                  convert_path=_conv_path)
         self._maybe_review_failed(imp, vdir, base, allow_delete=True)
 
-    def _show_verify_results(self, imp, vdir, base, summary_path=None):
+    def _show_verify_results(self, imp, vdir, base, summary_path=None,
+                               convert_path=None):
         """把逐本/逐格式校验结果写入「书籍信息」页签（含目录/文件链接），并切到该页。
 
         已入库条目列出每部书入库了哪个格式文件（可点开），如：
         ・T1852（docx/pdf）；未入 epub
-        summary_path 非空时首行给出总验证报告链接。
+        summary_path 非空时首行给出总验证报告链接；convert_path 非空时给出总转换报告链接。
         """
         import html as _html
         from PySide6.QtCore import QUrl as _QU
@@ -5810,6 +5936,8 @@ class MainWindow(QMainWindow):
                "验证输出目录：" + _dirlink(vdir)]
         if summary_path is not None:
             parts.append("总验证报告：" + _filelink(summary_path, Path(summary_path).name))
+        if convert_path is not None:
+            parts.append("总转换报告：" + _filelink(convert_path, Path(convert_path).name))
         if imp["ok"]:
             parts.append(f"<b>已入库 {len(imp['ok'])} 部</b>")
             _okf = imp.get("ok_files") or {}
@@ -5839,7 +5967,7 @@ class MainWindow(QMainWindow):
             parts += [f"跳过 {len(imp['skip'])} 部（不在丛书中）"]
         parts.append("已入库目录：" + _dirlink(base))
         self.detail.setText("<br>".join(parts))
-        self.tab_bottom.setCurrentIndex(0)
+        self.tab_bottom.setCurrentIndex(self._tab_book)
         try:
             self.detail_scroll.verticalScrollBar().setValue(0)
         except Exception:
@@ -6841,7 +6969,8 @@ class MainWindow(QMainWindow):
             log.moveCursor(QTextCursor.End)
             c=log.textCursor()
             c.setCharFormat(QTextCharFormat())
-            c.insertBlock()
+            if not log.document().isEmpty():     # 首行不先插空段（否则首行总空一行）
+                c.insertBlock()
             log.setTextCursor(c)
             log.insertHtml(content)
             c2=log.textCursor()
@@ -6899,8 +7028,10 @@ class MainWindow(QMainWindow):
     def _ensure_xml_batch(self, works, fmts, title="生成（自制）", regen_all=False):
         """确保 works×fmts 的自制书存在（默认仅缺；regen_all=True 为「重制」显式指定）。
 
-        返回 (ok_map, failed, cancelled)：ok_map = {fmt: {work: [Path...]}}。
+        返回 (ok_map, failed, cancelled, short)：ok_map = {fmt: {work: [Path...]}}。
         同一 work 可能对应多个源 XML，因此一个 work 也可能有多个产物。
+        short 为静默少产清单（`outs` 非空但少于预期源数，不算失败、不阻塞流程）：
+        `[f"{w}.{fmt} 缺n个产物（预期{exp}/实得{len}）"]`。
         """
         from cbeta_publish.books import xml2pdf_bridge
         xml_out=xml2pdf_bridge.xml_books_dir(self.config)
@@ -6914,8 +7045,14 @@ class MainWindow(QMainWindow):
             regen_all=True
         ok_map={f: {} for f in fmts}
         failed=[]
+        short=[]
         expected={}
         for w in works:
+            if self._entry_juan(w):
+                # 卷子集：产物数无法按源数预估（单卷只落在一个源文件里），
+                # 按 1 个 tracking unit 计；空产物仍走 failed，只有整本才做缺数比对
+                expected[w]=1
+                continue
             try:
                 found=xml2pdf_bridge.work_source_files(self.config, self._entry_work(w))
             except Exception:
@@ -6925,6 +7062,8 @@ class MainWindow(QMainWindow):
         done=[0]
         dlg, update, pstate = self._make_progress(title, total)
         if fmts:
+            _per=sum(expected.values())
+            update(0, self._fmt_counts_line({f: _per for f in fmts}))
             _ptag="（本次临时）" if getattr(self, "_tmp_preset", None) is not None else ""
             update(0, f"来源：自制｜生成：{'全部重新生成' if regen_all else '仅生成缺少'}"
                       f"｜预设：{(Path(preset).name if preset else '出厂默认')}{_ptag}")
@@ -6961,6 +7100,9 @@ class MainWindow(QMainWindow):
                 outs=[p for p in outs if p.exists()]
                 if outs:
                     ok_map[fmt][w]=outs
+                    if len(outs) < expected[w]:
+                        short.append(f"{w}.{fmt} 缺{expected[w]-len(outs)}个产物"
+                                     f"（预期{expected[w]}/实得{len(outs)}）")
                 else:
                     failed.append(f"{w}.{fmt} XML转换失败")
                 if (fmt == "pdf" and _reuse_companion and not reused and outs
@@ -6984,9 +7126,19 @@ class MainWindow(QMainWindow):
             if cancelled:
                 break
         actual=sum(len(paths) for m in ok_map.values() for paths in m.values())
-        pstate["finish"]([f"完成 {actual}/{total}"
-                          + (f"，失败 {len(failed)}" if failed else "")])
-        return ok_map, failed, cancelled
+        _finish=self._fmt_counts_line(
+            {f: sum(len(paths) for paths in ok_map.get(f, {}).values())
+             for f in fmts})
+        _lines=[x for x in (_finish,) if x]
+        _all_ok = (not failed) and (not cancelled) and (not short)
+        _done=(f"完成 {actual}/{total}"
+               + (f"，失败 {len(failed)}" if failed else "")
+               + (f"，缺产物 {len(short)}" if short else ""))
+        import html as _html
+        _color="#1a7f37" if _all_ok else "#c0392b"
+        _lines.append(f'<span style="color:{_color}">{_html.escape(_done)}</span>')
+        pstate["finish"](_lines)
+        return ok_map, failed, cancelled, short
 
     def _resolve_editnotes(self, d, cover_cfg):
         """解析全局「加编辑说明页」+ 丛书「加丛书说明页」→ (editnotes, problems)。
@@ -7311,7 +7463,7 @@ class MainWindow(QMainWindow):
             _sum.append("无输出。")
         pstate["finish"](_sum)
         self._load_coll_works()
-        self.tab_bottom.setCurrentIndex(1)   # 合并完成：切到「丛书信息」显示产物与链接
+        self.tab_bottom.setCurrentIndex(self._tab_coll)   # 合并完成：切到「丛书信息」显示产物与链接
         if success:
             self.detail.setText(f"合并成功 {len(success)} 个文件 → {out_dir}"
                                 + (f"（跳过 {len(skipped)}）" if skipped else "")
@@ -7457,11 +7609,12 @@ class MainWindow(QMainWindow):
         for _p, d in selected:
             all_works.extend(d.get("work_ids") or [])
         failed = []
+        _short = []
         if run_source == "official":
             _sm, failed = self._prepare_official(all_works, fmts, dest_dir,
                                                  policy=official_policy)
         else:
-            _ok, failed, cancelled = self._ensure_xml_batch(
+            _ok, failed, cancelled, _short = self._ensure_xml_batch(
                 all_works, fmts, title="生成（批量更新）",
                 regen_all=(self_policy == "all"))
             if cancelled:
@@ -7481,7 +7634,9 @@ class MainWindow(QMainWindow):
                                             run_source=run_source)
         self._show_batch_summary("批量更新完成", results, key="update")
         self.detail.setText(f"批量更新完成：成功 {sum(1 for r in results if r['status']=='ok')}"
-                            f" / 共 {len(results)}")
+                            f" / 共 {len(results)}"
+                            + (f"；缺产物 {len(_short)}：{'、'.join(_short[:10])}"
+                               + ("…" if len(_short) > 10 else "") if _short else ""))
 
     def _write_batch_update_report(self, results, fmts, official_policy, self_policy,
                                      run_source=None):
@@ -7525,6 +7680,7 @@ class MainWindow(QMainWindow):
         zip_fmts = opts["zip_fmts"]
         prepare_fmts = list(dict.fromkeys(merge_fmts + zip_fmts))
         prep_failed = []
+        prep_short = []
         purge_marks = {}
         # 阶段零 清除上次输出（勾选时）：删 output_dir/{丛书名}/ 并清发布标记
         if opts.get("purge"):
@@ -7579,7 +7735,7 @@ class MainWindow(QMainWindow):
                 _sm, prep_failed = self._prepare_official(
                     all_works, prepare_fmts, dest_dir, policy=opts["official_policy"])
             else:
-                _ok, prep_failed, cancelled = self._ensure_xml_batch(
+                _ok, prep_failed, cancelled, prep_short = self._ensure_xml_batch(
                     all_works, prepare_fmts, title="生成（批量备齐）",
                     regen_all=(opts["self_policy"] == "all"))
                 if cancelled:
@@ -7722,9 +7878,13 @@ class MainWindow(QMainWindow):
                 pass
         self._load_coll_works()
         self._show_batch_summary("批量合并完成", results, key="merge")
-        self.tab_bottom.setCurrentIndex(1)
+        self.tab_bottom.setCurrentIndex(self._tab_coll)
         self.detail.setText(f"批量合并完成：成功 {_n_ok} / 共 {len(results)}"
-                            + ("，有失败（见丛书信息页签/报告）" if _n_bad else ""))
+                            + ("，有失败（见丛书信息页签/报告）" if _n_bad else "")
+                            + (f"；备齐缺产物 {len(prep_short)}："
+                               f"{'、'.join(prep_short[:10])}"
+                               + ("…" if len(prep_short) > 10 else "")
+                               if prep_short else ""))
 
     def _write_batch_merge_report(self, results, opts, prep_failed):
         import datetime
@@ -7795,7 +7955,7 @@ class MainWindow(QMainWindow):
                         f"产物 {len(files)}{('：' + links + more) if links else ''}"
                         f"{miss}{extra}")
         self.lbl_coll_info.setText("<br>".join(rows) or "无内容")
-        self.tab_bottom.setCurrentIndex(1)
+        self.tab_bottom.setCurrentIndex(self._tab_coll)
 
     def _pack_avail_fmts(self):
         """打包（ZIP/导出）可选格式：官方源 7 种，自制源 pdf/epub/docx。"""
@@ -7993,7 +8153,7 @@ class MainWindow(QMainWindow):
         dest_dir=official_ebook_source.official_books_dir(self.config)
         # 按来源准备素材：官方=缺则下载；自制=缺则生成（改过预设可选全部重生成）
         if self._run_source()=="xml":
-            ok_map, gen_failed, gen_cancelled = self._ensure_xml_batch(works, fmts, title="生成（ZIP 前）")
+            ok_map, gen_failed, gen_cancelled, gen_short = self._ensure_xml_batch(works, fmts, title="生成（ZIP 前）")
             if gen_cancelled:
                 self._wrap_box(QMessageBox.Warning, "已取消", "已取消生成，未打包。")
                 return
@@ -8001,6 +8161,9 @@ class MainWindow(QMainWindow):
                 self._wrap_box(QMessageBox.Warning, "未全部生成",
                                "有 %d 部生成失败，已取消打包：\n%s" % (len(gen_failed), "\n".join(gen_failed[:5])))
                 return
+            if gen_short:
+                self._wrap_box(QMessageBox.Information, "部分缺产物",
+                               "有 %d 项缺产物（继续打包已有）：\n%s" % (len(gen_short), "\n".join(gen_short[:10])))
             src_map = {fmt: dict(ok_map.get(fmt) or {}) for fmt in fmts}
         else:
             from cbeta_publish.books import official_state as _ost
@@ -8063,7 +8226,7 @@ class MainWindow(QMainWindow):
             self._last_publish[str(data)]=[(Path(s).name, s) for s in success]
         self._load_coll_works()
         if success:
-            self.tab_bottom.setCurrentIndex(1)   # ZIP完成，切到丛书信息页显示发布结果
+            self.tab_bottom.setCurrentIndex(self._tab_coll)   # ZIP完成，切到丛书信息页显示发布结果
             succ_txt="\n".join(success[:3]) + (f"\n... 共 {len(success)} 个文件" if len(success)>3 else "")
             fail_txt=("\n失败:\n" + "\n".join(failed[:5]) + (f"\n... 共 {len(failed)} 项失败" if len(failed)>5 else "")) if failed else ""
             self._wrap_box(QMessageBox.Information, "成功", "ZIP 成功:\n" + succ_txt + fail_txt)
@@ -8118,7 +8281,7 @@ class MainWindow(QMainWindow):
         dest_dir=official_ebook_source.official_books_dir(self.config)
         # 按来源准备素材：官方=缺则下载；自制=缺则生成（改过预设可选全部重生成）
         if self._run_source()=="xml":
-            ok_map, gen_failed, gen_cancelled = self._ensure_xml_batch(works, fmts, title="生成（导出前）")
+            ok_map, gen_failed, gen_cancelled, gen_short = self._ensure_xml_batch(works, fmts, title="生成（导出前）")
             if gen_cancelled:
                 self._wrap_box(QMessageBox.Warning, "已取消", "已取消生成，未导出。")
                 return
@@ -8126,6 +8289,9 @@ class MainWindow(QMainWindow):
                 self._wrap_box(QMessageBox.Warning, "未全部生成",
                                "有 %d 部生成失败，已取消导出：\n%s" % (len(gen_failed), "\n".join(gen_failed[:5])))
                 return
+            if gen_short:
+                self._wrap_box(QMessageBox.Information, "部分缺产物",
+                               "有 %d 项缺产物（继续导出已有）：\n%s" % (len(gen_short), "\n".join(gen_short[:10])))
             src_map = {fmt: dict(ok_map.get(fmt) or {}) for fmt in fmts}
         else:
             from cbeta_publish.books import official_state as _ost
@@ -8278,7 +8444,7 @@ class MainWindow(QMainWindow):
             self._last_publish[str(data)]=[("导出目录", target)]
         self._load_coll_works()
         if success:
-            self.tab_bottom.setCurrentIndex(1)   # 导出完成，切到丛书信息页显示发布结果
+            self.tab_bottom.setCurrentIndex(self._tab_coll)   # 导出完成，切到丛书信息页显示发布结果
             self._wrap_box(QMessageBox.Information, "成功", f"导出成功 {len(success)} 文件到:\n{target}\n" + "\n".join(success[:3]) + ("\n..." if len(success)>3 else "") + ("\n失败:\n" + "\n".join(failed[:5]) + (f"\n... 共 {len(failed)} 项失败" if len(failed)>5 else "") if failed else ""))
             self._prompt_save_collection("导出完成，", str(data))
         else:

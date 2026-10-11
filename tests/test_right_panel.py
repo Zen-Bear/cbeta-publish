@@ -946,8 +946,60 @@ class MadeBooksInfoTest(unittest.TestCase):
         self.assertIn("生成完成 1 部", txt)
         self.assertIn("T0001", txt)
         self.assertIn("made", txt)                             # 目录也可点开
+        # 首两行＝本数行、总结行（各一次，无标题行）；产物列其后
+        self.assertEqual(txt.count("1 部 x 1 格式 (pdf) = 1 部"), 1)
+        self.assertLess(txt.index("1 部 x 1 格式 (pdf) = 1 部"),
+                        txt.index("生成完成 1 部"))
+        self.assertLess(txt.index("生成完成 1 部"), txt.index("T0001"))
+        self.assertNotIn("生成完成\n", txt)                    # 无单独标题行
         self.assertEqual(win.tab_bottom.currentIndex(), 0)     # 切到书籍信息页
         self.assertEqual(win.detail_scroll.verticalScrollBar().value(), 0)   # 回到第一行
+
+    def test_show_made_books_made_tab_separate(self):
+        # 自制报告写入独立「自制书籍报告」页签，不覆盖「书籍信息」
+        win = self.win
+        d = self.tmp / "made2"
+        d.mkdir(exist_ok=True)
+        p1 = d / "T0001.pdf"
+        p1.write_bytes(b"x")
+        win.detail.setText("书籍信息原内容")
+        win._show_made_books("生成完成", [("T0001", "pdf", p1)],
+                             "生成完成 1 部 →", out_dir=d, made=True)
+        self.assertIn("T0001", win.made_detail.text())
+        self.assertIn("1 部 x 1 格式 (pdf) = 1 部", win.made_detail.text())
+        self.assertEqual(win.detail.text(), "书籍信息原内容")     # 未覆盖
+        self.assertEqual(win.tab_bottom.currentIndex(), win._tab_made)
+
+    def test_pane_arrows_state_machine(self):
+        # 双箭头三态：normal（双箭头）/ pub_collapsed（仅▼）/ info_collapsed（仅▲）
+        win = self.win
+        win._pane_state="normal"; win._apply_pane_state()
+        self.assertTrue(win.btn_pane_up.isVisibleTo(win))
+        self.assertTrue(win.btn_pane_down.isVisibleTo(win))
+        self.assertIn("收起「发布」栏", win.btn_pane_up.toolTip())
+        self.assertIn("收起书籍信息栏", win.btn_pane_down.toolTip())
+        # ▲ → 收起「发布」栏：上箭头消失，仅下箭头（tooltip=复原）
+        win._pane_up()
+        self.assertEqual(win._pane_state, "pub_collapsed")
+        self.assertFalse(win.btn_pane_up.isVisibleTo(win))
+        self.assertTrue(win.btn_pane_down.isVisibleTo(win))
+        self.assertIn("复原", win.btn_pane_down.toolTip())
+        self.assertFalse(win.publish_group.isVisibleTo(win))
+        # ▼ → 复原
+        win._pane_down()
+        self.assertEqual(win._pane_state, "normal")
+        self.assertTrue(win.btn_pane_up.isVisibleTo(win))
+        self.assertTrue(win.publish_group.isVisibleTo(win))
+        # ▼ → 收起书籍信息栏：下箭头消失，仅上箭头（tooltip=复原）
+        win._pane_down()
+        self.assertEqual(win._pane_state, "info_collapsed")
+        self.assertFalse(win.btn_pane_down.isVisibleTo(win))
+        self.assertTrue(win.btn_pane_up.isVisibleTo(win))
+        self.assertIn("复原", win.btn_pane_up.toolTip())
+        # ▲ → 复原
+        win._pane_up()
+        self.assertEqual(win._pane_state, "normal")
+        self.assertTrue(win.btn_pane_down.isVisibleTo(win))
 
     def test_detail_link_opens(self):
         from PySide6.QtGui import QDesktopServices

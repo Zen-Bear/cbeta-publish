@@ -49,15 +49,19 @@ class IdRow:
 def split_token(text):
     """token → (head, 卷范围 spec | None)。
 
-    与上游 `pycbeta.juan.split_id_juan` 同义：`:`/`：` 优先于 `_NNN`；
-    `T0001_001` → ("T0001", "1")；无分隔符 → (原文, None)。
-    head 合法性不校验（交 `normalize_token`）。
+    与上游 `pycbeta.juan.split_id_juan` 同义，并扩展 bulei.txt 卷区间写法：
+    `:`/`：` 优先；`T0310_017..018` → ("T0310", "17-18")（归一为 `parse_juan_spec`
+    可读的 `NNN-MMM`，上游 `-i ID:spec` 直通）；`T0001_001` → ("T0001", "1")；
+    无分隔符 → (原文, None)。head 合法性不校验（交 `normalize_token`）。
     """
     s = (text or "").strip()
     m = re.match(r"^([^:：]+)[:：](.*)$", s)
     if m:
         spec = m.group(2).strip()
         return m.group(1).strip(), (spec or None)
+    m = re.match(r"^(.+?)_(\d{1,4})\.\.(\d{1,4})$", s)
+    if m:
+        return m.group(1), f"{int(m.group(2))}-{int(m.group(3))}"
     m2 = re.match(r"^(.+)_(\d{1,3})$", s)
     if m2:
         return m2.group(1), str(int(m2.group(2)))

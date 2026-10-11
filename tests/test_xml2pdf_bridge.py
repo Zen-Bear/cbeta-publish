@@ -115,6 +115,48 @@ class BridgeConvertLibTest(unittest.TestCase):
         self.assertTrue(b._verify_stem_matches("T0349:2-3", "T0349"))
         self.assertFalse(b._verify_stem_matches("T185", "T1858"))
 
+    def test_convert_report_flag(self):
+        # 默认关 → --no-convert-report；开 → --convert-report（显式覆盖预设）
+        import cbeta_publish.books.xml2pdf_bridge as b
+        self.assertFalse(b.convert_report_enabled(self.cfg))
+        calls, restore = self._patch_run()
+        try:
+            b.convert("T0349", None, self.dir / "o.pdf", self.cfg, fmt="pdf")
+        finally:
+            restore()
+        self.assertIn("--no-convert-report", calls[0])
+        self.assertNotIn("--convert-report", calls[0])
+        cfg2 = {"xml2pdf": {"path": str(self.x2p), "convert_report": True}}
+        self.assertTrue(b.convert_report_enabled(cfg2))
+        calls, restore = self._patch_run()
+        try:
+            b.verify_work("T0349", ["pdf"], self.dir / "vc", cfg2)
+        finally:
+            restore()
+        self.assertIn("--convert-report", calls[0])
+
+    def test_convert_reports_and_summary(self):
+        import cbeta_publish.books.xml2pdf_bridge as b
+        d = self.dir / "cr"
+        vd = d / "验证" / "T0001 大般若經（验证）"
+        vd.mkdir(parents=True)
+        (vd / "T0001 大般若經_转换报告.txt").write_text("注记甲", encoding="utf-8")
+        (vd / "T0001 大般若經_转换报告_pdf.txt").write_bytes(b"detail")
+        (d / "T0002 X_转换报告.txt").write_text("注记乙", encoding="utf-8")
+        got = b.convert_reports(d)
+        # 只收每本合并件，不收分格式明细
+        self.assertEqual(sorted(p.name for p, _s in got),
+                         ["T0001 大般若經_转换报告.txt", "T0002 X_转换报告.txt"])
+        out = b.write_convert_summary(d, "测", works=["T0001"])
+        self.assertIsNotNone(out)
+        self.assertEqual(out.name, "总转换报告.txt")
+        text = out.read_text(encoding="utf-8")
+        self.assertIn("注记甲", text)
+        self.assertNotIn("注记乙", text)   # works 过滤
+        self.assertIsNone(b.write_convert_summary(self.dir / "empty", "测"))
+        # 汇总文件自身不参与下次合并
+        self.assertEqual(len(b.convert_reports(d)), 2)
+
     def test_read_verify_json_juan(self):
         import json
         import cbeta_publish.books.xml2pdf_bridge as b
@@ -910,6 +952,36 @@ class BridgeBuiltNamingTest(unittest.TestCase):
         import cbeta_publish.books.xml2pdf_bridge as b
         self.assertEqual(b.work_dir_of(self.cfg, "T0001").name, "T0001 中論")
         self.assertIsNone(b.work_dir_of(self.cfg, "T000"))  # 前缀不算
+
+    def test_ensure_products_subset_reuses_despite_multi_source(self):
+        # 多源 work（T0220 三会分档）的单卷子集只落在一个源文件里、正确只产 1 个：
+        # 不得按源数判"产物不全"而每轮重制（复用失败实测）
+        import os
+        import time
+        import cbeta_publish.books.xml2pdf_bridge as b
+        srcdir = self.work / "T0220 大般若經"
+        srcdir.mkdir(parents=True, exist_ok=True)
+        for name in ("T05n0220.xml", "T06n0220.xml", "T07n0220.xml"):
+            (srcdir / name).write_bytes(b"x")
+        base = self.dir / "subset"
+        (base / "pdf").mkdir(parents=True)
+        built = base / "pdf" / "T0220 大般若經（卷479）.pdf"
+        built.write_bytes(b"x")
+        now = time.time()
+        for name in ("T05n0220.xml", "T06n0220.xml", "T07n0220.xml"):
+            os.utime(srcdir / name, (now - 100, now - 100))
+        os.utime(built, (now, now))
+        calls = []
+        real = b._run_cli
+        b._run_cli = lambda argv: (calls.append(list(argv)) or 0)
+        try:
+            outs, reused = b.ensure_products("T0220", "pdf", base, self.cfg,
+                                             juan="479")
+        finally:
+            b._run_cli = real
+        self.assertTrue(reused)
+        self.assertEqual(outs, [built])
+        self.assertEqual(calls, [])   # 未重生成
 
     def test_ensure_one_with_name(self):
         # name 透传：直生目标用带书名（L2），复用仍命中

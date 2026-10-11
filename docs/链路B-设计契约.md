@@ -112,7 +112,8 @@ def convert_outputs(work_id, fmt, out_dir, config, preset=None, stop=None) -> li
     "path": "E:/dev/cbeta/xml2pdf",                    // cbeta-xml2pdf 仓库（预设目录=其 presets/）
     "cbeta_ebook": "E:/dev/cbeta/publish/cbeta_xml",   // CBETA XML 目录（--cbeta-ebook；不可空，空则用默认）
     "preset": "",                                    // 默认预设名（presets/ 下 stem）；空=对面默认
-    "verify_build": false                            // 制作书籍：true=自制/重制后校验并仅导入通过项
+    "verify_build": false,                           // 制作书籍：true=自制/重制后校验并仅导入通过项
+    "convert_report": false                          // 转换报告：true=生成上游渲染注记并合并（默认关）
   }
 }
 ```
@@ -166,6 +167,12 @@ def convert_outputs(work_id, fmt, out_dir, config, preset=None, stop=None) -> li
   （`bridge.ensure_products(regen_all=False)`）。需整体重生成时先点右栏 `[重制]`
   （`regen_all=True`；「调整…」临时预设亦强制重生成）。**不用 mtime/哈希推断过期**。
   两边目录互不混淆；ZIP/导出同样按来源取目录。
+  自制批量（`_ensure_xml_batch`）按源数计预期：某格式产物非空但少于预期源数时
+  记 `short` 缺产物清单（非失败、不阻塞），各入口展示（单次结果页／批量明细／
+  ZIP·导出提示）；**卷子集按 1 个 tracking unit 计**（单卷只落在一个源文件里，
+  且复用不按源数判"不全"，不误报/不重制）；结果页**首两行**为本数行
+  `N 部 x K 格式 (pdf+epub+…) = M 部`（各格式数不等则逐格式列出）与总结行，自制弹窗
+  首行/收尾行前同式；弹窗「完成 …」行全成功绿/否则红（结果页总结行同色）。
 - **PDF 伴生 docx 复用**（`xml2pdf.reuse_pdf_companion`，默认开；设置页「自制E书」）：
   `docx2pdf` 管线在 PDF 成功产出时，必在输出根附一份同内容、同 stem 的 docx
   （上游唯一目的是给 `--verify-only` 定位；无条件覆盖写）。publish 从不用 verify-only，
@@ -257,9 +264,10 @@ def convert_outputs(work_id, fmt, out_dir, config, preset=None, stop=None) -> li
     保留上游产物名；入库即被 `ensure_products` 的产物齐全检查复用），
     未通过的格式跳过、不拖累通过者（如 docx 过、epub 没过 → 入 docx＋被覆盖的 pdf）。
     上/中下等多源语义产物按各自报告目录精确入库，不互相覆盖或误套报告。
-   未判定标注原因（如 `T1858 未判定（epub无基线）`）；失败标签带数
-   （如 `T1859 校验未通过（epub 缺48/多97）`）。结果页每部书列出入库了哪个格式文件
-   （可点开；人工放行的标"人工放行"）。
+    未判定标注原因（如 `T1858 未判定（epub无基线）`）；失败标签带数
+    （如 `T1859 校验未通过（epub 缺48/多97）`）。结果页每部书列出入库了哪个格式文件
+    （可点开；人工放行的标"人工放行"）。转换报告开时另拼 `总转换报告.txt` 并给链接
+    （见 §9 末）。
    **人工检验**：导入（自动/手动）后，未通过＋未判定项弹框询问，可看报告后勾选放行入库
    （左勾选列表＋右报告预览＋"打开产物/报告/校验目录"链接；本 session 放行过的不再重复询问）。
    未放行项在**托管校验目录**内删除（外部目录只导入不删）。
@@ -367,11 +375,16 @@ publish 的「自制/重制（校验）」产物目录天然符合本规范；�
    - `{stem}_verify_report.txt`（独立窗旧命名；`stem` = work id，如 `T0032`）；
    - `report.txt`（CLI 旧命名；work 取父目录名去 `（验证）` 后缀后的首 token，
      如 `T0032 四谛经（验证）` → `T0032`）。
-   另有**机读结论** `report.json`（与 txt 同目录、每次覆盖写、`fail/undetermined/error`
-   照写；上游 2026-10-07 起 CLI/GUI 统一名，旧 JSON 名不再发现）与**转换报告**
-   `{name}_转换报告.txt`（及 `{fmt}/` 下按格式的同名文件，
-   `output.convert_report` 控制，默认开）：只记录渲染特殊处理，**不是校验判据**，
-   不参与导入扫描、不算产物。
+    另有**机读结论** `report.json`（与 txt 同目录、每次覆盖写、`fail/undetermined/error`
+    照写；上游 2026-10-07 起 CLI/GUI 统一名，旧 JSON 名不再发现）与**转换报告**
+    `{name}_转换报告.txt`（及 `{fmt}/` 下按格式的同名文件，
+    `output.convert_report` 控制，默认开）：只记录渲染特殊处理，**不是校验判据**，
+    不参与导入扫描、不算产物。publish 侧另有总开关 `xml2pdf.convert_report`
+    （默认关；开则进程内调用显式 `--convert-report`，关则显式 `--no-convert-report`，
+    均覆盖预设值；独立窗不用此键，走其自有复选框）。开时跑完合并为
+    `总转换报告.txt`（校验流落校验目录、普通自制流落自制书根，覆盖写；
+    只收每本合并件、不收 `_转换报告_{fmt}.txt` 明细，自身不参与下次合并），
+    结果页给文件链接。
 3. 同一书多份报告并存时，以 **mtime 最新者**为准（同刻优先 `report.txt`）。
    只转换、未校验的产物**没有判据，一律不入库**。
 4. 总报告 `总验证报告.txt`（`bridge.write_verify_summary`，固定名覆盖写）：

@@ -153,7 +153,7 @@ class PackDirFormatTest(unittest.TestCase):
             names = sorted(z.namelist())
         stem = self.win._pack_display_stem("T0001")
         self.assertEqual(names, [f"{stem}/T0001-toc.txt", f"{stem}/T0001.txt"])
-        self.assertEqual(self.win.tab_bottom.currentIndex(), 1)   # 切到丛书信息页
+        self.assertEqual(self.win.tab_bottom.currentIndex(), self.win._tab_coll)   # 切到丛书信息页
 
     def test_export_copies_dir_tree(self):
         target = self.tmp / "xout"
@@ -167,7 +167,7 @@ class PackDirFormatTest(unittest.TestCase):
         stem = self.win._pack_display_stem("T0001")
         self.assertEqual((target / stem / "T0001.txt").read_text(encoding="utf-8"), "經文")
         self.assertTrue((target / stem / "T0001-toc.txt").is_file())
-        self.assertEqual(self.win.tab_bottom.currentIndex(), 1)   # 切到丛书信息页
+        self.assertEqual(self.win.tab_bottom.currentIndex(), self.win._tab_coll)   # 切到丛书信息页
 
     def test_cancel_chooses_nothing(self):
         win = self.win

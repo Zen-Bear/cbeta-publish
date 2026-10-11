@@ -77,6 +77,23 @@ def _id_juan_arg(src, juan=None):
     return f"{s}:{j}"
 
 
+def convert_report_enabled(config) -> bool:
+    """转换报告开关（`xml2pdf.convert_report`，默认关）。
+
+    开时进程内 CLI 显式 `--convert-report`（覆盖预设值）；关时显式
+    `--no-convert-report`（上游默认开，不显式关不住）。
+    """
+    try:
+        return bool(_cfg(config).get("convert_report", False))
+    except Exception:
+        return False
+
+
+def _convert_report_arg(config):
+    return ["--convert-report"] if convert_report_enabled(config) \
+        else ["--no-convert-report"]
+
+
 def _run_cli_convert(src, fmt, output, config, preset, juan=None):
     """构造一次 CLI 调用并返回 `(退出码, 输出尾部)`；调用前不检查停机，由调用方决定。"""
     x2p = _x2p_root(config)
@@ -86,6 +103,7 @@ def _run_cli_convert(src, fmt, output, config, preset, juan=None):
     _ensure_path(str(x2p))
     run_wrap = write_run_wrapper(config, preset) if preset else None
     argv = ["-i", _id_juan_arg(src, juan), "-f", fmt, "-o", str(output)]
+    argv += _convert_report_arg(config)
     if run_wrap is not None:
         argv += ["--config", str(run_wrap)]
     elif preset:
@@ -590,11 +608,12 @@ def sources_newer(config, work: str, built_list) -> bool:
         return True
 
 
-def _outputs_current(existing, sources, fresh: bool) -> bool:
+def _outputs_current(existing, sources, fresh: bool, subset: bool = False) -> bool:
     if not existing:
         return False
-    if sources and len(existing) < len(sources):
+    if not subset and sources and len(existing) < len(sources):
         # 已有多源但产物不全：保守重制，避免沿用被覆盖的旧产物。
+        # （卷子集除外：单卷只落在一个源文件里，产物数不按源数比对。）
         return False
     return fresh
 
@@ -618,7 +637,8 @@ def ensure_products(work: str, fmt: str, base_dir, config, preset=None,
     existing = find_all_built_entry(work, fmt, base_dir, juan)
     sources = work_source_files(config, work)
     if not regen_all and _outputs_current(
-            existing, sources, not sources_newer(config, work, existing)):
+            existing, sources, not sources_newer(config, work, existing),
+            subset=bool(juan)):
         return existing, True
     if not juan and sources and len(sources) == 1 and len(existing) <= 1:
         target = existing[0] if existing else xml_dest(work, fmt, base_dir, name)
@@ -770,6 +790,7 @@ def verify_work(work: str, fmts, out_dir, config: dict, preset=None, stop=None,
     _dl = max(0, min(50, _dl))
     argv = ["-i", _id_juan_arg(str(work), juan), "-f", fmt_arg, "-o", str(out_dir), "--verify",
             "--verify-max-diff", str(_maxd), "--verify-diff-lines", str(_dl)]
+    argv += _convert_report_arg(config)
     # 校验根钉死到 `{out_dir}/验证`：CLI `--verify-root` 显式优先，预设
     # `source.verify_root` 劫持不到（报告才能落回 publish 托管区）
     argv += ["--verify-root", str(out_dir / VERIFY_ROOT_NAME)]
@@ -1655,6 +1676,98 @@ def write_verify_summary(vdir, coll_name=None, works=None):
             *bodies]
     try:
         out = vdir / VERIFY_SUMMARY_FILENAME
+        out.write_text("\n".join(head) + "\n", encoding="utf-8")
+        return out
+    except OSError:
+        return None
+
+
+#: 总转换报告固定名（覆盖写；不命中任何校验发现模式与产物识别，不参与导入扫描）
+CONVERT_SUMMARY_FILENAME = "总转换报告.txt"
+
+
+def _convert_group_key(path, stem: str):
+    """转换报告分组：`(验证)` 目录内按目录区分语义产物；其余按文件名 stem。"""
+    parent = Path(path).parent
+    if parent.name.endswith("（验证）"):
+        return ("dir", parent.name[:-len("（验证）")])
+    return ("file", stem)
+
+
+def convert_reports(out_dir):
+    """列出 out_dir 下全部转换报告 [(Path, stem)]，**每个语义产物只取最新一份**。
+
+    只收每本已合并的 `{name}_转换报告.txt`（`{name}_转换报告_{fmt}.txt` 系分格式明细，
+    不同名，不收）；`(验证)/` 内按目录分组，其余按文件名 stem；同组取最新。
+    stem 取文件名去后缀（`{id 书名}[（卷…）]`）或父目录名前缀。
+    """
+    import re as _re
+    out = Path(out_dir)
+    by_group = {}
+
+    def _collect(p, stem):
+        if not stem:
+            return
+        key = _convert_group_key(p, stem)
+        prev = by_group.get(key)
+        if prev is None:
+            by_group[key] = (p, stem)
+        else:
+            newest = _newest_report([prev[0], p])
+            by_group[key] = (p, stem) if newest is p else prev
+
+    try:
+        for p in out.rglob("*_转换报告.txt"):
+            if p.name == CONVERT_SUMMARY_FILENAME:
+                continue   # 汇总文件自身不参与下次合并
+            if _re.search(r"_转换报告_[A-Za-z0-9]+\.txt$", p.name):
+                continue   # 分格式明细，不收
+            stem = p.name[:-len("_转换报告.txt")]
+            if not stem:
+                continue
+            if p.parent.name.endswith("（验证）"):
+                stem = p.parent.name[:-len("（验证）")] or stem
+            _collect(p, stem)
+    except Exception:
+        pass
+    return [(p, stem) for p, stem in by_group.values()]
+
+
+def write_convert_summary(vdir, coll_name=None, works=None):
+    """合并转换报告为总报告（固定名覆盖写；无报告返回 None）。
+
+    只读报告不搬产物；全文区按 stem 排序拼接各报告原文。
+    works 非空时只汇总这些 work 的报告。
+    """
+    import datetime as _dt
+    vdir = Path(vdir)
+    try:
+        reports = sorted(convert_reports(vdir), key=lambda r: r[1])
+    except Exception:
+        return None
+    if works is not None:
+        _ws = {str(w) for w in (works or [])}
+        reports = [(rp, stem) for rp, stem in reports
+                   if any(_verify_stem_matches(stem, w) for w in _ws)]
+    if not reports:
+        return None
+    bodies = []
+    for rp, stem in reports:
+        label = stem or rp.name
+        try:
+            text = rp.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            text = ""
+        bodies.append(f"===== {label}（{rp.name}）=====\n{text.rstrip()}")
+    head = [f"总转换报告",
+            f"丛书：{coll_name or vdir.name}",
+            f"时间：{_dt.datetime.now().isoformat(timespec='seconds')}",
+            f"共 {len(reports)} 份",
+            "（上游渲染注记：每本一份，拼转换特殊处理；不是校验判据）",
+            "--- 全文 ---",
+            *bodies]
+    try:
+        out = vdir / CONVERT_SUMMARY_FILENAME
         out.write_text("\n".join(head) + "\n", encoding="utf-8")
         return out
     except OSError:

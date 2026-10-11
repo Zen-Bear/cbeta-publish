@@ -88,7 +88,7 @@ class BatchUpdateTest(unittest.TestCase):
         self.win.config["default_source"] = "xml"
         calls = []
         self.win._ensure_xml_batch = lambda works, fmts, title="", regen_all=False: (
-            calls.append((list(works), list(fmts), regen_all)) or ({}, ["T0003.pdf"], False))
+            calls.append((list(works), list(fmts), regen_all)) or ({}, ["T0003.pdf"], False, []))
         self.win._run_batch_update(self._selected(), "stale", "all", False)
         self.assertEqual(len(calls), 1)
         self.assertTrue(calls[0][2])   # regen_all True
@@ -109,7 +109,7 @@ class BatchUpdateTest(unittest.TestCase):
         self.win.config["default_source"] = "official"
         calls = []
         self.win._ensure_xml_batch = lambda works, fmts, title="", regen_all=False: (
-            calls.append(1) or ({}, [], False))
+            calls.append(1) or ({}, [], False, []))
         self.win._run_batch_update(self._selected(), "stale", "missing", False,
                                    run_source="xml")
         self.assertEqual(len(calls), 1)

@@ -53,6 +53,7 @@ DEFAULT_CONFIG = {
                 "cbeta_ebook": str(PROJECT_ROOT / "cbeta_xml"),
                 "preset": "", "verify_build": False,
                 "verify_max_diff": 0, "verify_diff_lines": 5, "verify_reuse": True,
+                "convert_report": False,
                 "reuse_pdf_companion": True},
     "catalog": {"filters": {"tripitaka": {"hidden": []}, "dynasty": {"hidden": []}, "vol": {"hidden": []}}},
     "cover": {
@@ -560,6 +561,12 @@ class SettingsDialog(QDialog):
         for _i, _rb in enumerate((self.rb_build_verify, self.rb_build_noverify)):
             _bvb.addWidget(_rb)
             self.build_verify_group.addButton(_rb, _i)
+        self.chk_convert_report = QCheckBox("转换报告")
+        self.chk_convert_report.setChecked(bool(
+            (self._cfg.get("xml2pdf", {}) or {}).get("convert_report", False)))
+        self.chk_convert_report.setToolTip(
+            "自制/重制时生成上游转换报告（渲染注记，默认关）；开则跑完合并为总转换报告，结果页可打开")
+        _bvb.addWidget(self.chk_convert_report)
         _bvb.addStretch()
         (self.rb_build_verify if (self._cfg.get("xml2pdf", {}) or {}).get("verify_build")
          else self.rb_build_noverify).setChecked(True)
@@ -1062,6 +1069,7 @@ class SettingsDialog(QDialog):
         self.sp_verify_maxdiff.setValue(max(0, min(50, int(x2p.get("verify_max_diff", 0) or 0))))
         self.sp_verify_difflines.setValue(max(0, min(50, int(x2p.get("verify_diff_lines", 5) or 5))))
         self.chk_verify_reuse.setChecked(bool(x2p.get("verify_reuse", True)))
+        self.chk_convert_report.setChecked(bool(x2p.get("convert_report", False)))
         self.chk_reuse_pdf_docx.setChecked(bool(x2p.get("reuse_pdf_companion", True)))
         cover = c.setdefault("cover", {})
         self._migrate_series_imprint(cover)
@@ -1773,6 +1781,7 @@ class SettingsDialog(QDialog):
             "verify_max_diff": self.sp_verify_maxdiff.value(),
             "verify_diff_lines": self.sp_verify_difflines.value(),
             "verify_reuse": self.chk_verify_reuse.isChecked(),
+            "convert_report": self.chk_convert_report.isChecked(),
             "reuse_pdf_companion": self.chk_reuse_pdf_docx.isChecked(),
         })
         # 封面/版式

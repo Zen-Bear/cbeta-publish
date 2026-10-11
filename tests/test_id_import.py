@@ -14,6 +14,9 @@ class TokenTest(unittest.TestCase):
         self.assertEqual(ii.split_token("T0001:1_002"), ("T0001", "1_002"))
         self.assertEqual(ii.split_token("T0001"), ("T0001", None))
         self.assertEqual(ii.split_token(""), ("", None))
+        # bulei 卷区间：归一为 parse_juan_spec 可读形
+        self.assertEqual(ii.split_token("T0310_017..018"), ("T0310", "17-18"))
+        self.assertEqual(ii.split_token("T11n0310_050..060"), ("T11n0310", "50-60"))
 
     def test_normalize_token(self):
         self.assertEqual(ii.normalize_token("T0001"), "T0001")
@@ -39,11 +42,13 @@ class TokenTest(unittest.TestCase):
         self.assertEqual(ii.token_juan("T0349:2-3"), "2-3")
         self.assertEqual(ii.token_juan("T11n0310_050"), "50")
         self.assertEqual(ii.token_juan("T11n0310_050.xml"), "50")
+        self.assertEqual(ii.token_juan("T0310_017..018"), "17-18")
         self.assertEqual(ii.token_juan("T0001"), "")
 
     def test_long_basename_juan(self):
         self.assertEqual(ii.normalize_token("T11n0310_050"), "T0310")
         self.assertEqual(ii.normalize_token("T11n0310_050.xml"), "T0310")
+        self.assertEqual(ii.normalize_token("T0310_017..018"), "T0310")
 
 
 class ParseLinesTest(unittest.TestCase):

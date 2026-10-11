@@ -485,6 +485,23 @@ class SettingsDialogTest(unittest.TestCase):
         d2 = SettingsDialog(cfg, None)
         self.assertTrue(d2.rb_build_verify.isChecked())
 
+    def test_convert_report_default_off_and_roundtrip(self):
+        # 转换报告：默认关；落盘回读（与上游 GUI 开关同义，publish 侧透传 CLI 覆盖预设）
+        dlg = self._dlg()
+        try:
+            self.assertFalse(dlg.chk_convert_report.isChecked())
+            dlg.chk_convert_report.setChecked(True)
+            self.assertTrue(dlg._collect()["xml2pdf"]["convert_report"])
+            cfg = copy.deepcopy(DEFAULT_CONFIG)
+            cfg["xml2pdf"]["convert_report"] = True
+            d2 = SettingsDialog(cfg, None)
+            try:
+                self.assertTrue(d2.chk_convert_report.isChecked())
+            finally:
+                d2.close()
+        finally:
+            dlg.close()
+
     def test_reuse_pdf_companion_default_and_roundtrip(self):
         # PDF 伴生复用：默认开；落盘回读
         dlg = self._dlg()

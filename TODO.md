@@ -2,7 +2,7 @@
 
 > 设计文档：`docs/设计总案.md`（总方案）、`docs/UI设计.md`（UI）、
 > `docs/链路B-设计契约.md`（与 xml2pdf 的跨仓调用契约）。
-> 测试：`python -m unittest discover tests`（当前 739 项通过）。
+> 测试：`python -m unittest discover tests`（当前 752 项通过）。
 
 ## 约定（务必遵守）
 
@@ -300,6 +300,51 @@
 - [x] P11f 合并修复：`_prepare_official` 恢复 `autoclose_ok=True`（合并/ZIP/导出前置下载无错
   3 秒自动关闭）；合并标题按条目（`_entry_book_title`＝右栏 `work-id 书名（卷…）`），
   `ensure_products`/`_group_works`/分组标题按 work 部分归位。
+
+### P12 — 部类深层叶子补齐（已完成，742 测试通过）
+- 背景：`category.json` 把 `T0220c,21-23` 等当无子节点叶子，深层卷区间叶
+  （`T0220_401..537` 等 18 组＋新书叶）只在 `bulei.txt` 有，部类树缺席；
+  旧 `merge_missing_children` 只补顶层数字分组。
+- [x] 递归 additive 合并：标题命中深入；未命中走新颖门控（文档链接永不 graft；
+  含新区卷间对／全新经号整棵接入；余下跳过）；顶层保持旧语义（数字缺失整棵接入），
+  两遍式（先整棵补齐再深入门控，跨分支重复天然去重）；`_PAIR_RE` 带词界
+  （`N70_1cont` 之类帮助路径不算卷）。 graft 总量 +66 节点（曾裸递归 +5564，已收敛）。
+- [x] 定序：深层 graft 无序号时按经号排（`T0220_*` 只看 `T0220`，排到 `T0221` 前，
+  不盲追加尾部）；数字仍按值。
+- [x] 测试：合成深层 graft＋幂等＋定序；真数据回归 18 组卷区间叶＋文档零 graft＋卷叶序；
+  `test_by_catalog` 等目录组全绿。
+
+### P13 — 转换报告开关＋合并（已完成）
+- 背景：上游 `output.convert_report`（GUI 默认开）＋CLI 双开关；publish 从未透传，
+  实际按预设默认生成、报告堆积且被导入链排除。设置「自制书籍→制作书籍」行加复选，
+  默认关。
+- [x] 配置 `xml2pdf.convert_report=false`（模板＋DEFAULT_CONFIG）；设置复选＋回写；
+  桥接 `_run_cli_convert`/`verify_work` 显式 `--convert-report`／`--no-convert-report`
+  （覆盖预设；独立窗不传，用其自有框）。
+- [x] 合并：`bridge.convert_reports`（只收每本 `{name}_转换报告.txt`，不收
+  `{name}_转换报告_{fmt}.txt` 明细；`总转换报告.txt` 自排除）＋`write_convert_summary`；
+  校验流落 `vdir/总转换报告.txt`、普通流落 `xml_out/总转换报告.txt`（覆盖写），
+  结果页（`_show_verify_results`／`_show_made_books`）给文件链接。
+- [x] 文档：链路B §5/§9、UI设计（设置行）。
+
+### P14 — 自制缺产物清单（已完成）
+- 背景：`_ensure_xml_batch` 仅 `outs` 为空记 failed；非空但少于预期源数静默
+  （`完成 87/105` 无失败也无清单）。确认为 bug，非行为变更。
+- [x] 返回 4 元组 `(ok_map, failed, cancelled, short)`，`short` 记
+  `w.fmt 缺n个产物（预期/实得）`；5 调用方解包＋展示（单次/批量更新/批量备齐/
+  ZIP/导出）；short 永不阻塞流程（ZIP/导出只提示不取消）。
+- [x] 卷子集按 1 个 tracking unit 计预期（单卷只落在一个源文件里，不误报缺产物）。
+- [x] 卷子集复用修复：多源 work 的单卷产物不再按源数判"产物不全"而每轮重制
+  （`_outputs_current(subset=bool(juan))`；T0220 三会分档实测）。
+- [x] 信息栏本数行：结果页（下载/自制）**首两行**＝本数行 `N 部 x K 格式 (pdf+epub+…) = M 部`
+  （各格式数不等则逐格式列出）＋总结行（产物列其后）；自制弹窗首行（计划）＋收尾行前
+  （实际）同式；弹窗「完成 …」行全成功绿/否则红；进度日志首行不再空行；结果页总结行同色。
+- [x] 新增「自制书籍报告」页签：自制/重制结果写入独立页签（保留最近一次，不被下载/校验覆盖）；
+  页签序号改用 `_tab_book/_tab_made/_tab_coll`。
+- [x] 书籍信息栏右上角改双箭头三态：`normal`（`△` 收起「发布」栏放大书籍信息 / `▽` 收起书籍信息栏）
+  / `pub_collapsed`（仅 `▽`：复原两栏）/ `info_collapsed`（仅 `△`：复原书籍信息栏）；
+  tooltip 随状态变化（`_pane_up/_pane_down/_apply_pane_state`）。
+- [x] 文档：链路B §5；`_merge_one_coll` 直调处列后续可选。
 
 ## 备注
 
