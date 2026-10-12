@@ -9,6 +9,7 @@ from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtWidgets import QApplication, QGroupBox, QLabel  # noqa: E402
 
 from cbeta_publish.gui.main_window import MainWindow  # noqa: E402
@@ -981,7 +982,7 @@ class MadeBooksInfoTest(unittest.TestCase):
         self.assertIn("T0220 大般若經(第201卷-第400卷)（pdf）", txt)
 
     def test_show_made_books_made_tab_separate(self):
-        # 自制报告写入独立「自制书籍报告」页签，不覆盖「书籍信息」
+        # 自制报告写入独立「自制报告」页签，不覆盖「书籍信息」
         win = self.win
         d = self.tmp / "made2"
         d.mkdir(exist_ok=True)
@@ -1194,6 +1195,221 @@ class CollNoteDialogTest(unittest.TestCase):
         QTimer.singleShot(0, act)
         win._coll_note_page_dialog()
         self.assertEqual(d["edit_note"], {"file": "", "enabled": False})
+
+
+class CollTreeOpenTest(unittest.TestCase):
+    """左栏「丛书」视图：右键丛书 → 「打开丛书」在右栏打开（跨分类自动切过滤）。"""
+
+    def setUp(self):
+        _ensure_app()
+        self.tmp = Path(tempfile.mkdtemp())
+        cdir = self.tmp / "collections"
+        (cdir / "custom").mkdir(parents=True)
+        (cdir / "theme").mkdir(parents=True)
+        (cdir / "categories.json").write_text(json.dumps({
+            "categories": [{"id": "custom", "name": "自訂"},
+                           {"id": "theme", "name": "主题"}]},
+            ensure_ascii=False), encoding="utf-8")
+        (cdir / "tags.json").write_text('{"tags": []}', encoding="utf-8")
+        (cdir / "custom" / "甲.json").write_text(json.dumps(
+            {"id": "甲", "name": "甲", "category": "custom", "tags": [],
+             "work_ids": ["T0001"]}, ensure_ascii=False), encoding="utf-8")
+        (cdir / "theme" / "乙.json").write_text(json.dumps(
+            {"id": "乙", "name": "乙", "category": "theme", "tags": [],
+             "work_ids": ["T0002"]}, ensure_ascii=False), encoding="utf-8")
+        cfg = json.loads((ROOT / "config" / "app.json").read_text(encoding="utf-8"))
+        cfg["mulu_dir"] = str(ROOT / "mulu")
+        cfg["collections_dir"] = str(cdir)
+        cfg["update_interval"] = "manual"
+        cfg["_config_path"] = str(self.tmp / "app.json")
+        self.win = MainWindow(cfg)
+        self.win.nav_combo.setCurrentText("丛书")
+        self.win._refresh_coll_tree()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _coll_item(self, name):
+        for i in range(self.win.tree.topLevelItemCount()):
+            cat = self.win.tree.topLevelItem(i)
+            for j in range(cat.childCount()):
+                ch = cat.child(j)
+                d = ch.data(0, Qt.UserRole)
+                if isinstance(d, dict) and d.get("name") == name:
+                    return ch
+        return None
+
+    def _category_item(self, cid):
+        for i in range(self.win.tree.topLevelItemCount()):
+            it = self.win.tree.topLevelItem(i)
+            data = it.data(0, Qt.UserRole)
+            if isinstance(data, dict) and data.get("is_cat") and data.get("category") == cid:
+                return it
+        return None
+
+    def test_tree_item_coll_returns_path(self):
+        it = self._coll_item("乙")
+        self.assertIsNotNone(it)
+        pair = self.win._tree_item_coll(it)
+        self.assertIsNotNone(pair)
+        path, d = pair
+        self.assertTrue(str(path).endswith("乙.json"))
+        self.assertEqual(d.get("category"), "theme")
+        # 分类节点不是丛书节点
+        self.assertIsNone(self.win._tree_item_coll(self.win.tree.topLevelItem(0)))
+
+    def test_open_collection_switches_filter_and_selects(self):
+        path = str(Path(self.win.config["collections_dir"]) / "theme" / "乙.json")
+        # 右栏过滤到 custom（不含乙）→ 打开乙应自动切到 theme 并选中
+        for i in range(self.win.coll_cat_filter.count()):
+            if self.win.coll_cat_filter.itemData(i) == "custom":
+                self.win.coll_cat_filter.setCurrentIndex(i)
+                break
+        _ensure_app().processEvents()
+        ok = self.win._open_collection_in_right(path)
+        self.assertTrue(ok)
+        self.assertEqual(str(self.win.coll_combo.currentData()), path)
+        self.assertEqual(self.win.coll_cat_filter.currentData(), "theme")
+
+    def test_context_menu_shows_open_collection(self):
+        import PySide6.QtWidgets as qw
+        it = self._coll_item("乙")
+        self.win.show()
+        self.win.tree.scrollToItem(it)
+        for _ in range(4):
+            _ensure_app().processEvents()
+        shown = []
+
+        class CapMenu(qw.QMenu):
+            def exec(self, *a, **k):
+                shown.append(self)
+                return None
+
+        real = qw.QMenu
+        qw.QMenu = CapMenu
+        try:
+            self.win._on_tree_context_menu(
+                self.win.tree.visualItemRect(it).center())
+        finally:
+            qw.QMenu = real
+        self.assertEqual(len(shown), 1)
+        acts = [a.text() for a in shown[0].actions() if not a.isSeparator()]
+        self.assertEqual(acts[0], "乙")          # 标题行（禁用）
+        self.assertIn("打开丛书", acts)
+        self.assertIn("移动到部类…", acts)
+        self.assertIn("改名…", acts)
+        self.assertIn("删除", acts)
+        # 触发「打开丛书」→ 右栏选中该丛书
+        act = next(a for a in shown[0].actions() if a.text() == "打开丛书")
+        act.trigger()
+        self.assertTrue(str(self.win.coll_combo.currentData()).endswith("乙.json"))
+
+    def test_move_collection_to_category(self):
+        cdir = Path(self.win.config["collections_dir"])
+        old = cdir / "custom" / "甲.json"
+        self.assertTrue(old.is_file())
+        ok = self.win._move_collection_to_category(str(old), "theme")
+        self.assertTrue(ok)
+        new = cdir / "theme" / "甲.json"
+        self.assertTrue(new.is_file())
+        self.assertFalse(old.exists())
+        # 内存 + 磁盘分类更新
+        self.assertEqual(self.win._coll_dict(str(new)).get("category"), "theme")
+        self.assertEqual(json.loads(new.read_text(encoding="utf-8"))["category"], "theme")
+        # 右栏已选中移动后的丛书
+        self.assertEqual(str(self.win.coll_combo.currentData()), str(new))
+        # 左栏树刷新后仍能找到该丛书（现挂在新分类下）
+        self.win._refresh_coll_tree()
+        it = self._coll_item("甲")
+        self.assertIsNotNone(it)
+        self.assertEqual(it.parent().data(0, Qt.UserRole).get("category"), "theme")
+        # 同部类再移动 → 不动
+        self.assertFalse(self.win._move_collection_to_category(str(new), "theme"))
+
+    def test_context_menu_move_triggers(self):
+        import PySide6.QtWidgets as qw
+        it = self._coll_item("甲")          # custom
+        self.win.show()
+        self.win.tree.scrollToItem(it)
+        for _ in range(4):
+            _ensure_app().processEvents()
+        shown = []
+
+        class CapMenu(qw.QMenu):
+            def exec(self, *a, **k):
+                shown.append(self)
+                return None
+
+        real = qw.QMenu
+        qw.QMenu = CapMenu
+        self.win._ask_category = lambda *a, **k: "theme"
+        try:
+            self.win._on_tree_context_menu(
+                self.win.tree.visualItemRect(it).center())
+        finally:
+            qw.QMenu = real
+        act = next(a for a in shown[0].actions() if a.text() == "移动到部类…")
+        act.trigger()
+        self.assertTrue(
+            (Path(self.win.config["collections_dir"]) / "theme" / "甲.json").is_file())
+
+    def test_tree_move_coll_on_drop(self):
+        from PySide6.QtCore import QPointF
+        src = self._coll_item("甲")             # custom
+        tgt = self._category_item("theme")      # 主题分类节点
+        self.assertIsNotNone(src)
+        self.assertIsNotNone(tgt)
+        self.win.show()
+        self.win.tree.scrollToItem(tgt)
+        for _ in range(4):
+            _ensure_app().processEvents()
+
+        class _Ev:
+            def __init__(self, pos):
+                self._pos = pos
+
+            def position(self):
+                return QPointF(self._pos)
+
+            def pos(self):
+                return self._pos
+
+        self.win._tree_drag_items = [src]
+        pos = self.win.tree.visualItemRect(tgt).center()
+        self.assertTrue(self.win._tree_move_coll_on_drop(_Ev(pos)))
+        self.assertTrue(
+            (Path(self.win.config["collections_dir"]) / "theme" / "甲.json").is_file())
+        # 拖书叶/无目标 → 不处理
+        self.win._tree_drag_items = []
+        self.assertFalse(self.win._tree_move_coll_on_drop(_Ev(pos)))
+
+    def test_tree_coll_rename_reuses_right_panel(self):
+        import PySide6.QtWidgets as qw
+        cdir = Path(self.win.config["collections_dir"])
+        path = cdir / "custom" / "甲.json"
+        real = qw.QInputDialog.getText
+        qw.QInputDialog.getText = staticmethod(lambda *a, **k: ("甲改", True))
+        try:
+            self.win._tree_coll_rename(str(path))
+        finally:
+            qw.QInputDialog.getText = real
+        self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["name"], "甲改")
+        # 右栏 combo 文案同步
+        self.assertEqual(str(self.win.coll_combo.currentData()), str(path))
+        self.assertEqual(self.win.coll_combo.currentText(), "甲改")
+
+    def test_tree_coll_delete_reuses_right_panel(self):
+        import PySide6.QtWidgets as qw
+        cdir = Path(self.win.config["collections_dir"])
+        path = cdir / "custom" / "甲.json"
+        real = qw.QMessageBox.question
+        qw.QMessageBox.question = staticmethod(lambda *a, **k: qw.QMessageBox.Yes)
+        try:
+            self.win._tree_coll_delete(str(path))
+        finally:
+            qw.QMessageBox.question = real
+        self.assertFalse(path.exists())
+        self.assertIsNone(self.win._coll_dict(str(path)))
 
 
 if __name__ == "__main__":

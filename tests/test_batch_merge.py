@@ -330,7 +330,9 @@ class BatchMergeFailureUXTest(unittest.TestCase):
         rep = self._report_text()
         self.assertIn("缺素材", rep)
         self.assertIn("自动备齐", rep)  # reason 归因进报告
-        self.assertIn("缺素材", self.win.lbl_coll_info.text())  # 页签可见
+        self.assertIn("缺素材", self.win.batch_detail.text())  # 批处理报告页签可见
+        self.assertEqual(self.win.tab_bottom.currentIndex(),
+                         self.win._tab_batch)
         self.assertTrue(self.finished)  # 失败停留（调了 finish）
         self.assertEqual(self.closed, [])
 
@@ -347,6 +349,36 @@ class BatchMergeFailureUXTest(unittest.TestCase):
         self.win._run_batch_merge(self._selected(), _opts(zip=False))
         self.assertEqual(self.finished, [])
         self.assertTrue(self.closed)  # 成功仍直接关
+
+    def test_batch_report_tab_shows_report_and_link(self):
+        # 批量合并 → 切到「批处理报告」页，显示本次报告 + 落盘报告链接
+        self.win.config["default_source"] = "official"
+        self.win._run_batch_merge(self._selected(), _opts())
+        txt = self.win.batch_detail.text()
+        self.assertIn("批量合并完成", txt)
+        self.assertIn("批量合并报告.txt", txt)   # 落盘报告可点链接
+        self.assertEqual(self.win.tab_bottom.currentIndex(),
+                         self.win._tab_batch)
+
+    def test_batch_report_lists_all_files_numbered_per_coll(self):
+        # 「N 个文件」+ 逐文件一行带序号（每部从 1 重起），列出全部不省略
+        files = [f"/tmp/x/f{i}.pdf" for i in range(1, 8)]   # 7 个（>5，验证不再截断）
+        self.win._merge_one_coll = lambda data, d, works, **kw: {
+            "success": list(files), "skipped": [], "failed": [],
+            "cancelled": False, "out_dir": "/tmp/x"}
+        self.win._zip_one_coll = lambda d, works, **kw: {
+            "success": [], "failed": [], "cancelled": False}
+        self.win.config["default_source"] = "official"
+        self.win._run_batch_merge(self._selected(), _opts(zip=False))
+        txt = self.win.batch_detail.text()
+        self.assertIn("7 个文件", txt)
+        self.assertNotIn("产物 ", txt)       # 旧文案已改
+        self.assertNotIn("…共", txt)         # 不再省略
+        self.assertIn("1. ", txt)
+        self.assertIn("7. ", txt)
+        self.assertIn("f7.pdf", txt)
+        # 每部序号从 1 重起：两个丛书各出现一次「1.」
+        self.assertEqual(txt.count("&nbsp;&nbsp;&nbsp;&nbsp;1. "), 2)
 
 
 class BatchDialogTest(unittest.TestCase):
@@ -487,6 +519,59 @@ class BatchDialogTest(unittest.TestCase):
         self.assertEqual(calls, [])
         dlg._on_list_clicked(it, 2)          # 「分册」列：进入编辑
         self.assertEqual(calls, [it])
+
+    def test_batch_open_restores_and_remembers_options(self):
+        # 上次选项 → 构造参数 initial_state；本次选项 → config 落盘（下次启动重用）
+        from cbeta_publish.gui import batch_dialogs as bd
+        captured = {}
+
+        class FakeDlg:
+            def __init__(self, *a, **k):
+                captured["initial_state"] = k.get("initial_state")
+
+            def exec(self):
+                from PySide6.QtWidgets import QDialog
+                return QDialog.Accepted
+
+            def selected_items(self):
+                return [("p", {"name": "甲", "work_ids": ["T0001"]})]
+
+            def effective_mode(self):
+                return "update"
+
+            def official_policy(self):
+                return "all"
+
+            def self_policy(self):
+                return "all"
+
+            def save_report(self):
+                return False
+
+            def run_source(self):
+                return "xml"
+
+            def state(self):
+                return {"mode": "merge", "source": "xml", "unchecked": ["p2"],
+                        "merge": True, "zip": False, "auto_prepare": False,
+                        "purge": True, "official_policy": "all",
+                        "self_policy": "all", "save_report": False}
+
+        self.win.config["batch_options"] = {"mode": "update", "source": "official"}
+        self.win._run_batch_update = lambda *a, **k: None
+        real = bd.BatchDialog
+        bd.BatchDialog = FakeDlg
+        try:
+            self.win._batch_open()
+        finally:
+            bd.BatchDialog = real
+        self.assertEqual(captured["initial_state"],
+                         {"mode": "update", "source": "official"})
+        self.assertEqual(self.win.config["batch_options"]["mode"], "merge")
+        self.assertTrue(self.win.config["batch_options"]["purge"])
+        # 已落盘：下次启动可重用
+        saved = json.loads(Path(self.win._config_path).read_text(encoding="utf-8"))
+        self.assertEqual(saved["batch_options"]["source"], "xml")
 
 
 if __name__ == "__main__":

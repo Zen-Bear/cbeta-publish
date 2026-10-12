@@ -102,18 +102,19 @@ class DownloadLogTest(unittest.TestCase):
         self.assertNotIn("下载记录", names)
 
     def test_tabs_are_book_info_then_coll_info(self):
-        # 右下页签：① 书籍信息 ② 自制书籍报告 ③ 丛书信息 ④ E书目录
+        # 右下页签：书籍信息 | 丛书信息 | 自制报告 | 批处理报告 | E书目录
         win = self.win
         tb = win.tab_bottom
-        self.assertEqual(tb.count(), 4)
-        self.assertEqual([tb.tabText(i) for i in range(4)],
-                         ["书籍信息", "自制书籍报告", "丛书信息", "E书目录"])
+        self.assertEqual(tb.count(), 5)
+        self.assertEqual([tb.tabText(i) for i in range(5)],
+                         ["书籍信息", "丛书信息", "自制报告", "批处理报告", "E书目录"])
         self.assertTrue(tb.widget(win._tab_book).isAncestorOf(win.detail))
-        self.assertTrue(tb.widget(win._tab_made).isAncestorOf(win.made_detail))
         self.assertTrue(tb.widget(win._tab_coll).isAncestorOf(win.lbl_coll_info))
-        self.assertTrue(tb.widget(3).isAncestorOf(win.lbl_cache_dir))
-        self.assertTrue(tb.widget(3).isAncestorOf(win.lbl_xml_dir))
-        self.assertTrue(tb.widget(3).isAncestorOf(win.lbl_out_dir))
+        self.assertTrue(tb.widget(win._tab_made).isAncestorOf(win.made_detail))
+        self.assertTrue(tb.widget(win._tab_batch).isAncestorOf(win.batch_detail))
+        self.assertTrue(tb.widget(4).isAncestorOf(win.lbl_cache_dir))
+        self.assertTrue(tb.widget(4).isAncestorOf(win.lbl_xml_dir))
+        self.assertTrue(tb.widget(4).isAncestorOf(win.lbl_out_dir))
 
     def test_click_book_activates_book_tab(self):
         # 三栏点书 → 显示书籍信息并切到「书籍信息」页签；点分组节点 → 清空且不切页签

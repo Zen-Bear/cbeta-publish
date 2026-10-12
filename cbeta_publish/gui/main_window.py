@@ -22,8 +22,8 @@ from cbeta_publish import APP_NAME, __version__
 WORK_RE = re.compile(r"[A-Z]+[0-9A-Za-z]+")
 CONFIG_PATH = app_root() / "config" / "app.json"
 
-#: 报告页（自制书籍报告/书籍信息）滚动条样式：Windows 11 风格滚动条是无轨道细圆点、
-#: 几乎看不见，报告页改用经典可见滚动条（带轨道＋明显滑块）。
+#: 报告页（书籍信息/丛书信息/自制报告/批处理报告）滚动条样式：
+#: Windows 11 风格滚动条是无轨道细圆点、几乎看不见，报告页改用经典可见滚动条（带轨道＋明显滑块）。
 REPORT_SCROLL_QSS = (
     "QScrollBar:vertical { background: #f0f0f0; width: 6px; margin: 0px; }"
     "QScrollBar::handle:vertical { background: #b0b0b0; min-height: 12px;"
@@ -41,6 +41,10 @@ REPORT_SCROLL_QSS = (
     "QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal"
     " { background: transparent; }"
 )
+
+#: 批量处理报告落盘文件名（output_dir 下）；「批处理报告」页据此提供链接。
+BATCH_UPDATE_REPORT = "批量更新报告.txt"
+BATCH_MERGE_REPORT = "批量合并报告.txt"
 
 #: 独立窗输出 → publish 导入的简明规则（「制作书籍 → 导入说明…」弹窗；
 #: 完整规范见 docs/链路B-设计契约.md §9）
@@ -610,7 +614,7 @@ class MainWindow(QMainWindow):
             Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard
             | Qt.LinksAccessibleByMouse | Qt.LinksAccessibleByKeyboard)
         self.detail.linkActivated.connect(self._open_publish_link)
-        # 自制书籍报告：独立页签，保留最近一次自制/重制结果（不被下载/校验等覆盖）
+        # 自制报告：独立页签，保留最近一次自制/重制结果（不被下载/校验等覆盖）
         self.made_detail=QLabel("")
         self.made_detail.setWordWrap(True)
         self.made_detail.setAlignment(Qt.AlignTop | Qt.AlignLeft)
@@ -618,6 +622,14 @@ class MainWindow(QMainWindow):
             Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard
             | Qt.LinksAccessibleByMouse | Qt.LinksAccessibleByKeyboard)
         self.made_detail.linkActivated.connect(self._open_publish_link)
+        # 批处理报告：独立页签，保留最近一次批量更新/批量合并的本次报告
+        self.batch_detail=QLabel("")
+        self.batch_detail.setWordWrap(True)
+        self.batch_detail.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        self.batch_detail.setTextInteractionFlags(
+            Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard
+            | Qt.LinksAccessibleByMouse | Qt.LinksAccessibleByKeyboard)
+        self.batch_detail.linkActivated.connect(self._open_publish_link)
         splitter.addWidget(mid)
 
         right=QWidget()
@@ -808,7 +820,8 @@ class MainWindow(QMainWindow):
         pg.addWidget(publish_box)
         self._sync_source_preset_ui()   # 依赖上面按钮存在（来源=自制时换按钮）
         rv.addWidget(publish_group)
-        # 右下页签：① 书籍信息 ② 丛书信息 ③ E书目录（原「下载记录」页签已删除）
+        # 右下页签：书籍信息 | 丛书信息 | 自制报告 | 批处理报告 | E书目录
+        # （原「下载记录」页签已删除）
         self.tab_bottom=QTabWidget()
         from PySide6.QtWidgets import QScrollArea
         book_page=QWidget()
@@ -821,6 +834,15 @@ class MainWindow(QMainWindow):
         self.detail_scroll.setWidget(self.detail)
         book_layout.addWidget(self.detail_scroll)
         self.tab_bottom.addTab(book_page, "书籍信息")
+        info_page=QWidget()
+        info_layout=QVBoxLayout(info_page)
+        info_layout.setContentsMargins(0,0,0,0)
+        self.info_scroll=QScrollArea()
+        self.info_scroll.setWidgetResizable(True)
+        self.info_scroll.setFrameShape(QScrollArea.NoFrame)
+        self.info_scroll.setWidget(self.lbl_coll_info)
+        info_layout.addWidget(self.info_scroll)
+        self.tab_bottom.addTab(info_page, "丛书信息")
         made_page=QWidget()
         made_layout=QVBoxLayout(made_page)
         made_layout.setContentsMargins(0,0,0,0)
@@ -831,16 +853,18 @@ class MainWindow(QMainWindow):
         self.made_scroll.setStyleSheet(REPORT_SCROLL_QSS)
         self.made_scroll.setWidget(self.made_detail)
         made_layout.addWidget(self.made_scroll)
-        self.tab_bottom.addTab(made_page, "自制书籍报告")
-        info_page=QWidget()
-        info_layout=QVBoxLayout(info_page)
-        info_layout.setContentsMargins(0,0,0,0)
-        self.info_scroll=QScrollArea()
-        self.info_scroll.setWidgetResizable(True)
-        self.info_scroll.setFrameShape(QScrollArea.NoFrame)
-        self.info_scroll.setWidget(self.lbl_coll_info)
-        info_layout.addWidget(self.info_scroll)
-        self.tab_bottom.addTab(info_page, "丛书信息")
+        self.tab_bottom.addTab(made_page, "自制报告")
+        # 批处理报告页：显示本次批量更新/合并报告；报告落盘时给可点链接
+        batch_page=QWidget()
+        batch_layout=QVBoxLayout(batch_page)
+        batch_layout.setContentsMargins(0,0,0,0)
+        self.batch_scroll=QScrollArea()
+        self.batch_scroll.setWidgetResizable(True)
+        self.batch_scroll.setFrameShape(QScrollArea.NoFrame)
+        self.batch_scroll.setStyleSheet(REPORT_SCROLL_QSS)
+        self.batch_scroll.setWidget(self.batch_detail)
+        batch_layout.addWidget(self.batch_scroll)
+        self.tab_bottom.addTab(batch_page, "批处理报告")
         # E书目录页：官方/自制/丛书 三个可点链接（悬停看全路径，右侧显示完整路径）
         from cbeta_publish.books import xml2pdf_bridge as _xb
         self._dir_refreshers=[]
@@ -886,8 +910,9 @@ class MainWindow(QMainWindow):
         ebook_layout.addStretch()
         self.tab_bottom.addTab(ebook_page, "E书目录")
         self._tab_book=self.tab_bottom.indexOf(book_page)
-        self._tab_made=self.tab_bottom.indexOf(made_page)
         self._tab_coll=self.tab_bottom.indexOf(info_page)
+        self._tab_made=self.tab_bottom.indexOf(made_page)
+        self._tab_batch=self.tab_bottom.indexOf(batch_page)
         # 双箭头：△ 收起「发布」栏（放大书籍信息）/ 复原；▽ 收起书籍信息栏 / 复原。
         # 三态：normal（双箭头）/ pub_collapsed（仅▽）/ info_collapsed（仅△）。
         self.btn_pane_up=QPushButton("△")
@@ -1012,6 +1037,8 @@ class MainWindow(QMainWindow):
         self.tree.dragEnterEvent = lambda e: self._tree_drag_enter(e)
         self.tree.dragMoveEvent = lambda e: self._drop_move(e, self.tree)
         self.tree.dropEvent = lambda e: self._tree_drop(e)
+        self.tree.mousePressEvent = self._tree_mouse_press   # 记住按下项：丛书节点可拖到分类节点移动部类
+        self._tree_drag_items=[]
 
         self._load_bulei()
         self._load_collections()
@@ -1763,9 +1790,10 @@ class MainWindow(QMainWindow):
         if filter_tag:
             rows=[(p,d) for p,d in rows if filter_tag in (d.get("tags",[]) or [])]
 
-        def _add_coll(parent, d):
+        def _add_coll(parent, path, d):
             item=QTreeWidgetItem([f"{d.get('name')} [{self._cat_name(d.get('category',''))}] {len(d.get('work_ids',[]))}部"])
             item.setData(0, Qt.UserRole, d)
+            item.setData(0, Qt.UserRole+1, str(path))   # 丛书节点存路径：右键「打开丛书」
             if parent is None:
                 self.tree.addTopLevelItem(item)
             else:
@@ -1802,7 +1830,7 @@ class MainWindow(QMainWindow):
             cat_item.setData(0, Qt.UserRole, {"category": cid, "is_cat": True})
             self.tree.addTopLevelItem(cat_item)
             for p,d in members:
-                _add_coll(cat_item, d)
+                _add_coll(cat_item, p, d)
         self._expand_tree()
         # 分类节点默认展开（集合节点不展开）
         for i in range(self.tree.topLevelItemCount()):
@@ -2535,17 +2563,17 @@ class MainWindow(QMainWindow):
         self.coll_tag_filter.setVisible(mode=="丛书")
         # 左栏状态栏：操作提示（按模式）
         if mode=="部类":
-            self.lbl_hint.setText("提示：拖动或双击单本书加入工作区；右键打开本地书")
+            self.lbl_hint.setText("提示：拖动或双击单本书加入工作区；右键书籍、丛书打开菜单")
         elif mode=="三藏":
-            self.lbl_hint.setText("提示：经/律/论/藏外；拖动或双击单本书加入工作区；右键打开本地书")
+            self.lbl_hint.setText("提示：经/律/论/藏外；拖动或双击单本书加入工作区；右键书籍、丛书打开菜单")
         elif mode=="朝代":
-            self.lbl_hint.setText("提示：按朝代浏览；拖动或双击单本书加入工作区；右键打开本地书")
+            self.lbl_hint.setText("提示：按朝代浏览；拖动或双击单本书加入工作区；右键书籍、丛书打开菜单")
         elif mode=="刊本":
-            self.lbl_hint.setText("提示：依刊本（藏经版本）→ 册 → 经；拖动或双击单本书加入工作区；右键打开本地书")
+            self.lbl_hint.setText("提示：依刊本（藏经版本）→ 册 → 经；拖动或双击单本书加入工作区；右键书籍、丛书打开菜单")
         elif mode=="作者":
             self.lbl_hint.setText("提示：拖动或双击作者（其全部作品）加入工作区")
         elif mode=="丛书":
-            self.lbl_hint.setText("提示：双击丛书追加其书目到工作区；拖入右栏加入丛书；右键打开本地书")
+            self.lbl_hint.setText("提示：双击丛书追加其书目到工作区；拖入右栏加入丛书；右键书籍、丛书打开菜单")
         if self._layout_mode()=="two":
             self.lbl_hint.setText((self.lbl_hint.text() or "") + "　【二栏】拖动/双击=直接加入右栏")
         self._refresh_current_tree()
@@ -2589,6 +2617,57 @@ class MainWindow(QMainWindow):
             if m and self._is_work_id(m.group(0)):
                 return m.group(0)
         return None
+
+    def _tree_item_coll(self, item):
+        # 左栏「丛书」视图的丛书节点：返回 (path, d)；分类/书籍等节点返回 None
+        if item is None:
+            return None
+        data=item.data(0, Qt.UserRole)
+        if not (isinstance(data, dict) and isinstance(data.get("work_ids"), list)
+                and not data.get("is_cat")):
+            return None
+        path=item.data(0, Qt.UserRole+1)
+        if not path:
+            return None
+        return str(path), data
+
+    def _open_collection_in_right(self, path):
+        """在右栏打开指定丛书：必要时切分类过滤，选中该丛书并载入书单。
+
+        返回 True 表示右栏已选中该丛书（左栏「丛书」右键「打开丛书」用）。
+        """
+        if not path:
+            return False
+        d=self._coll_dict(str(path))
+        cid=(d or {}).get("category")
+        try:
+            cur=self.coll_cat_filter.currentData()
+            if cur is not None and cur != cid:
+                idx=None
+                for i in range(self.coll_cat_filter.count()):
+                    if self.coll_cat_filter.itemData(i)==cid:
+                        idx=i; break
+                if idx is None:
+                    idx=0   # 目标分类不在下拉：「分类：全部」
+                self.coll_cat_filter.blockSignals(True)
+                self.coll_cat_filter.setCurrentIndex(idx)
+                self.coll_cat_filter.blockSignals(False)
+        except Exception:
+            pass
+        self._sync_combo(select_path=str(path))
+        return str(self.coll_combo.currentData()) == str(path)
+
+    def _tree_coll_rename(self, path):
+        """左栏右键「改名…」：在右栏打开该丛书后重用右栏改名流程。"""
+        if not self._open_collection_in_right(path):
+            return
+        self._rename_collection()
+
+    def _tree_coll_delete(self, path):
+        """左栏右键「删除」：在右栏打开该丛书后重用右栏删除流程。"""
+        if not self._open_collection_in_right(path):
+            return
+        self._delete_collection()
 
     def _on_tree_preview(self, item, col):
         # 点书（叶节点）才显示书籍信息；并激活「书籍信息」页签。其它节点不显示。
@@ -3149,9 +3228,50 @@ class MainWindow(QMainWindow):
     def _tree_drag_enter(self, e):
         e.acceptProposedAction()
 
+    def _tree_mouse_press(self, e):
+        # 记住按下项（供 _tree_move_coll_on_drop 判断拖的是否丛书节点）；调用基类保留默认行为
+        try:
+            it=self.tree.itemAt(e.position().toPoint())
+        except Exception:
+            it=self.tree.itemAt(e.pos())
+        self._tree_drag_items=[it] if it is not None else []
+        from PySide6.QtWidgets import QTreeWidget as _TW
+        _TW.mousePressEvent(self.tree, e)
+
+    def _tree_move_coll_on_drop(self, e):
+        """树内拖拽：丛书节点拖到分类节点（或另一分类下的丛书节点）→ 移动丛书的部类。
+
+        返回 True 表示已处理（发生了移动）。
+        """
+        items=list(getattr(self, "_tree_drag_items", None) or [])
+        colls=[self._tree_item_coll(it) for it in items]
+        colls=[c for c in colls if c is not None]
+        if len(items)!=1 or len(colls)!=1:
+            return False
+        path, d = colls[0]
+        try:
+            pos=e.position().toPoint()
+        except Exception:
+            pos=e.pos()
+        target=self.tree.itemAt(pos)
+        if target is None:
+            return False
+        tpair=self._tree_item_coll(target)
+        if tpair is not None:
+            cat=(tpair[1] or {}).get("category")
+        else:
+            tdata=target.data(0, Qt.UserRole)
+            if isinstance(tdata, dict) and tdata.get("is_cat"):
+                cat=tdata.get("category")
+            else:
+                return False   # 拖到书叶/空白等：忽略
+        if not cat or cat==(d or {}).get("category"):
+            return False
+        return self._move_collection_to_category(path, cat)
+
     def _tree_drop(self, e):
         # 右栏拖入目录树 = 从丛书移除（书进工作区）；工作区/中栏拖入 = 从工作区移出；
-        # 树自身内部拖拽忽略
+        # 树自身内部拖拽：丛书节点 → 移到目标分类；其它忽略
         if e.source() is self.coll_list:
             works=self._coll_dragged_works(e)
             if works:
@@ -3161,7 +3281,10 @@ class MainWindow(QMainWindow):
             e.ignore()
             return
         if e.source() is self.tree:
-            e.ignore()
+            if self._tree_move_coll_on_drop(e):
+                e.acceptProposedAction()
+            else:
+                e.ignore()
             return
         if e.source() is self.list or e.source() is getattr(self, "ws_tree", None):
             works=self._tree_drop_works(e)
@@ -3849,6 +3972,112 @@ class MainWindow(QMainWindow):
         self._refresh_coll_tree_if_visible()   # 左栏「丛书」视图同步（改名+分类）
         self.detail.setText(f"已另存为「{name}」（分类 {self._cat_name(cat)}）")
 
+    def _ask_category(self, title, default_name="", current_id=None):
+        # 只选部类（含「＋ 新建分类…」）；返回 cat_id 或 None
+        from PySide6.QtWidgets import (QDialog, QFormLayout, QDialogButtonBox,
+                                       QComboBox as _Cmb)
+        cdir=Path(self.config["collections_dir"])
+        try:
+            cm=CategoryManager(cdir/"categories.json")
+            cats=cm.all()
+        except Exception:
+            cats=[]
+        dlg=QDialog(self)
+        dlg.setWindowTitle(title)
+        form=QFormLayout(dlg)
+        if default_name:
+            form.addRow("丛书", QLabel(default_name))
+        cat_combo=_Cmb()
+        cat_combo.addItem("＋ 新建分类…", "__new__")
+        for c in cats:
+            cat_combo.addItem(
+                c['name'] if not c.get('description')
+                else f"{c['name']} ({c['description']})", c["id"])
+        if current_id:
+            for i in range(cat_combo.count()):
+                if cat_combo.itemData(i)==current_id:
+                    cat_combo.setCurrentIndex(i)
+                    break
+        form.addRow("移动到部类", cat_combo)
+        btns=QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        btns.accepted.connect(dlg.accept)
+        btns.rejected.connect(dlg.reject)
+        form.addRow(btns)
+        if dlg.exec()!=QDialog.Accepted:
+            return None
+        cat=cat_combo.currentData()
+        if cat=="__new__":
+            cid2=self._ask_cat_fields("新建分类")
+            if cid2 is None:
+                return None
+            return cid2
+        return cat
+
+    def _move_coll_prompt(self, path, d=None):
+        """左栏右键「移动到部类…」：只选部类（不改名），确定即移动。"""
+        if d is None:
+            d=self._coll_dict(str(path)) or {}
+        cat=self._ask_category("移动到部类", d.get("name",""), d.get("category"))
+        if cat is None:
+            return False
+        return self._move_collection_to_category(path, cat)
+
+    def _move_collection_to_category(self, path, cat):
+        """把丛书 JSON 移到目标部类目录（名称不变），同步内存/右栏/左栏。返回是否成功。"""
+        old_p=str(path)
+        p=Path(old_p)
+        d=self._coll_dict(old_p)
+        if d is None:
+            try:
+                d=self._read_coll(p)
+            except Exception as e:
+                self.detail.setText(f"移动失败：读取丛书失败 {e}")
+                return False
+        name=d.get("name","")
+        if not name:
+            self.detail.setText("移动失败：丛书名为空")
+            return False
+        if (d.get("category") or "")==(cat or ""):
+            self.detail.setText(f"「{name}」已在该部类")
+            return False
+        cdir=Path(self.config["collections_dir"])
+        cat_dir=cdir/cat
+        target=cat_dir/f"{name}.json"
+        taken={os.path.normcase(str(x)) for x in cat_dir.glob("*.json")}
+        if os.path.normcase(str(target)) in taken:
+            base=target.stem
+            i=1
+            while os.path.normcase(str(target)) in taken:
+                target=cat_dir/f"{base}_{i}.json"
+                i+=1
+        d["category"]=cat
+        d["slug"]=slugify(cat, name)
+        d["updated_at"]=__import__("datetime").datetime.utcnow().isoformat()+"Z"
+        try:
+            cat_dir.mkdir(parents=True, exist_ok=True)
+            content=json.dumps(d, ensure_ascii=False, indent=2)
+            target.write_text(content, encoding="utf-8")
+        except Exception as e:
+            self.detail.setText(f"移动失败 {e}")
+            return False
+        if str(target)!=old_p:
+            p.unlink(missing_ok=True)
+        for i,(pp,dd) in enumerate(self._collections):
+            if str(pp)==old_p:
+                self._collections[i]=(target,d)
+                break
+        self._coll_originals.pop(old_p, None)
+        self._coll_originals[str(target)]=content
+        self._changed_colls.discard(old_p)
+        self._changed_colls.discard(str(target))
+        if not self._changed_colls:
+            self._coll_changed=False
+        self._sync_combo(select_path=str(target))
+        self._write_index()
+        self._refresh_coll_tree_if_visible()
+        self.detail.setText(f"已移动「{name}」到部类 {self._cat_name(cat)}")
+        return True
+
     def _save_collections(self):
         if not self._changed_colls:
             self.detail.setText("没有未保存的丛书")
@@ -4101,7 +4330,7 @@ class MainWindow(QMainWindow):
         首两行固定为「本数行 + 总结行」：本数行 `N 部 x K 格式 (…) = M 部`；
         总结行附目录链接、ok 非空时按成功/失败着绿/红色。其下逐项列产物（可点开）；
         convert_path 非空时总结行下给总转换报告链接。
-        made=True → 写入「自制书籍报告」页签（保留最近一次自制结果）；否则「书籍信息」。
+        made=True → 写入「自制报告」页签（保留最近一次自制结果）；否则「书籍信息」。
         """
         import html as _html
         from PySide6.QtCore import QUrl as _QU
@@ -4961,12 +5190,36 @@ class MainWindow(QMainWindow):
         return files[0] if files else None
 
     def _on_tree_context_menu(self, pos):
-        # 左栏右键“打开本地书”：存在性检查后按源分组列格式菜单；不动选择区
+        # 左栏右键：丛书节点 → 「打开丛书」；书叶 → “打开本地书”（按源分组列格式菜单）
         from PySide6.QtWidgets import QMenu
         from PySide6.QtGui import QDesktopServices
         from PySide6.QtCore import QUrl
         item = self.tree.itemAt(pos)
-        work = self._tree_item_work(item) if item is not None else None
+        if item is None:
+            return
+        # 「丛书」视图的丛书节点：右键 → 在右栏打开该丛书
+        coll = self._tree_item_coll(item)
+        if coll is not None:
+            path, d = coll
+            menu = QMenu(self.tree)
+            header = menu.addAction(d.get("name", ""))
+            header.setEnabled(False)
+            act = menu.addAction("打开丛书")
+            act.triggered.connect(
+                lambda _c=False, p=path: self._open_collection_in_right(p))
+            act_move = menu.addAction("移动到部类…")
+            act_move.triggered.connect(
+                lambda _c=False, p=path, dd=d: self._move_coll_prompt(p, dd))
+            act_rename = menu.addAction("改名…")
+            act_rename.triggered.connect(
+                lambda _c=False, p=path: self._tree_coll_rename(p))
+            menu.addSeparator()
+            act_del = menu.addAction("删除")
+            act_del.triggered.connect(
+                lambda _c=False, p=path: self._tree_coll_delete(p))
+            menu.exec(self.tree.viewport().mapToGlobal(pos))
+            return
+        work = self._tree_item_work(item)
         if not work:
             return
         try:
@@ -7506,11 +7759,12 @@ class MainWindow(QMainWindow):
     def _batch_items(self):
         return [(p, d) for p, d in self._collections if (d.get("work_ids") or [])]
 
-    def _batch_side_fmts(self):
-        """当前来源下 ZIP 默认格式（受可用格式限制）。"""
+    def _batch_side_fmts(self, source=None):
+        """当前来源下 ZIP 默认格式（受可用格式限制）。source 缺省=右栏当前来源。"""
         df = (self.config.get("default_formats", {}) or {})
-        side = "xml" if self._run_source() == "xml" else "official"
-        return [f for f in (df.get(side) or []) if f in self._pack_avail_fmts()]
+        src = source or self._run_source()
+        side = "xml" if src == "xml" else "official"
+        return [f for f in (df.get(side) or []) if f in self._pack_avail_fmts(source=src)]
 
     @staticmethod
     def _batch_failed_works(works, failed):
@@ -7603,9 +7857,11 @@ class MainWindow(QMainWindow):
                           preview_fn=lambda d, mm, dep, tpl: self._merge_preview(
                               d.get("work_ids") or [], mm, dep,
                               coll=d.get("name", ""), name_template=tpl, d=d),
-                          global_cfg=gmc)
+                          global_cfg=gmc,
+                          initial_state=self.config.get("batch_options"))
         if dlg.exec() != QDialog.Accepted:
             return
+        self._remember_batch_options(dlg.state())
         selected = dlg.selected_items()
         if not selected:
             QMessageBox.warning(self, "失败", "未选择丛书")
@@ -7627,13 +7883,22 @@ class MainWindow(QMainWindow):
             "run_source": dlg.run_source(),
         })
 
+    def _remember_batch_options(self, state):
+        """记住批量处理选项（内存 config + 落盘），下次打开/下次启动时重用。"""
+        try:
+            self.config["batch_options"] = dict(state or {})
+            self._save_config()
+        except Exception as e:
+            print("save batch options fail", e)
+
     def _run_batch_update(self, selected, official_policy, self_policy, save_report,
                             run_source=None):
         from cbeta_publish.books import official_ebook_source
         # 来源取对话框内选择（缺省=右栏当前，保持老调用兼容）
         run_source = run_source or self._run_source()
         merge_fmts = [f for f in self._checked_fmts() if f in ("pdf", "epub")]
-        fmts = list(dict.fromkeys(merge_fmts + self._batch_side_fmts())) or ["pdf"]
+        fmts = list(dict.fromkeys(
+            merge_fmts + self._batch_side_fmts(source=run_source))) or ["pdf"]
         dest_dir = official_ebook_source.official_books_dir(self.config)
         all_works = []
         for _p, d in selected:
@@ -7690,7 +7955,7 @@ class MainWindow(QMainWindow):
             lines.append(f"[{i}] {r['name']}  {r['status']}")
             for f in r["failed"][:20]:
                 lines.append(f"    失败：{f}")
-        path = out / "批量更新报告.txt"
+        path = out / BATCH_UPDATE_REPORT
         try:
             path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         except Exception as e:
@@ -7894,7 +8159,7 @@ class MainWindow(QMainWindow):
         if cancelled:
             pstate["finish"](["已取消批量合并（已完成部保留）。"])
         elif _n_bad:
-            _rep = str(self._out_dir() / "批量合并报告.txt") if opts["save_report"] else "（报告未落盘）"
+            _rep = str(self._out_dir() / BATCH_MERGE_REPORT) if opts["save_report"] else "（报告未落盘）"
             pstate["finish"]([
                 f"批量合并完成：成功 {_n_ok} / 共 {len(results)}"
                 f"（失败 {sum(1 for r in results if r['status']=='failed')}"
@@ -7908,7 +8173,6 @@ class MainWindow(QMainWindow):
                 pass
         self._load_coll_works()
         self._show_batch_summary("批量合并完成", results, key="merge")
-        self.tab_bottom.setCurrentIndex(self._tab_coll)
         self.detail.setText(f"批量合并完成：成功 {_n_ok} / 共 {len(results)}"
                             + ("，有失败（见丛书信息页签/报告）" if _n_bad else "")
                             + (f"；备齐缺产物 {len(prep_short)}："
@@ -7951,7 +8215,7 @@ class MainWindow(QMainWindow):
                 lines.append(f"    缺素材：{s}")
             for f in r["failed"][:20]:
                 lines.append(f"    失败：{f}")
-        path = out / "批量合并报告.txt"
+        path = out / BATCH_MERGE_REPORT
         try:
             path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         except Exception as e:
@@ -7963,10 +8227,6 @@ class MainWindow(QMainWindow):
         rows = []
         for r in results:
             files = (r.get("merge") or []) + (r.get("zip") or [])
-            links = ", ".join(
-                f'<a href="{_QU.fromLocalFile(str(Path(f).resolve())).toString()}">'
-                f'{_html.escape(Path(f).name)}</a>' for f in files[:5])
-            more = f" …共 {len(files)} 个" if len(files) > 5 else ""
             extra = f"  原因：{_html.escape(r['reason'])}" if r.get("reason") else ""
             miss = ""
             if r.get("skipped"):
@@ -7982,15 +8242,41 @@ class MainWindow(QMainWindow):
                     _shown += f"；…等共 {len(_fl)} 条"
                 miss += f"  失败：{_shown}"
             rows.append(f"[{r['status']}] {_html.escape(r['name'])}："
-                        f"产物 {len(files)}{('：' + links + more) if links else ''}"
-                        f"{miss}{extra}")
-        self.lbl_coll_info.setText("<br>".join(rows) or "无内容")
-        self.tab_bottom.setCurrentIndex(self._tab_coll)
+                        f"{len(files)} 个文件{miss}{extra}")
+            # 每个文件独占一行、行首序号（每部从 1 重新起，列出全部不省略）
+            for _i, _f in enumerate(files, 1):
+                try:
+                    _href = _QU.fromLocalFile(str(Path(_f).resolve())).toString()
+                    _label = _html.escape(Path(_f).name)
+                except Exception:
+                    continue
+                rows.append(f'&nbsp;&nbsp;&nbsp;&nbsp;{_i}. '
+                            f'<a href="{_href}">{_label}</a>')
+        # 首行标题 + 落盘报告链接（批处理报告页）
+        head = [f"<b>{_html.escape(title)}</b>"]
+        _links = []
+        for _fn in (BATCH_UPDATE_REPORT, BATCH_MERGE_REPORT):
+            try:
+                _rp = self._out_dir() / _fn
+                if _rp.exists():
+                    _links.append(
+                        f'<a href="{_QU.fromLocalFile(str(_rp.resolve())).toString()}">'
+                        f'{_html.escape(_fn)}</a>')
+            except Exception:
+                pass
+        if _links:
+            head.append("报告：" + "；".join(_links))
+        self.batch_detail.setText("<br>".join(head + rows) or "无内容")
+        try:
+            self.batch_scroll.verticalScrollBar().setValue(0)
+        except Exception:
+            pass
+        self.tab_bottom.setCurrentIndex(self._tab_batch)
 
-    def _pack_avail_fmts(self):
-        """打包（ZIP/导出）可选格式：官方源 7 种，自制源 pdf/epub/docx。"""
+    def _pack_avail_fmts(self, source=None):
+        """打包（ZIP/导出）可选格式：官方源 7 种，自制源 pdf/epub/docx。source 缺省=右栏当前来源。"""
         from cbeta_publish.books import official_ebook_source
-        if self._run_source() == "xml":
+        if (source or self._run_source()) == "xml":
             return ["pdf", "epub", "docx"]
         return list(official_ebook_source.PACK_FORMATS)
 

@@ -130,6 +130,31 @@ class BatchUpdateTest(unittest.TestCase):
         rep = Path(self.win.config["output_dir"]) / "批量更新报告.txt"
         self.assertIn("来源：official", rep.read_text(encoding="utf-8"))
 
+    def test_side_fmts_follow_run_source_not_right_panel(self):
+        # 更新素材的格式集合随「对话框来源」走（右栏来源=official 时跑自制仍取 xml 默认格式）
+        self.win.config["default_source"] = "official"
+        seen = {}
+
+        def _prep(works, fmts, dest, policy="stale"):
+            seen["official"] = list(fmts)
+            return {}, []
+
+        self.win._prepare_official = _prep
+        self.win._run_batch_update(self._selected(), "stale", "missing", False,
+                                   run_source="official")
+        self.assertEqual(seen["official"], ["pdf", "epub"])   # ∪ 右栏勾选 pdf/epub
+
+        seen2 = {}
+
+        def _ensure(works, fmts, title="", regen_all=False):
+            seen2["xml"] = list(fmts)
+            return {}, [], False, []
+
+        self.win._ensure_xml_batch = _ensure
+        self.win._run_batch_update(self._selected(), "stale", "missing", False,
+                                   run_source="xml")
+        self.assertEqual(seen2["xml"], ["pdf", "epub", "docx"])   # xml 默认 pdf/docx ∪ 勾选
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -5,6 +5,7 @@ import unittest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from cbeta_publish.gui.batch_dialogs import BatchDialog  # noqa: E402
@@ -123,6 +124,73 @@ class BatchDialogXmlHintTest(unittest.TestCase):
             self.assertTrue(dlg._xml_hint.isVisible())  # update＋自制：显示
             dlg.rb_merge.setChecked(True)
             self.assertFalse(dlg._xml_hint.isVisible())  # merge＋自制：隐藏
+        finally:
+            dlg.close()
+
+
+class BatchDialogStateTest(unittest.TestCase):
+    """选项记忆：state()/apply_state() 往返（供下次打开/下次启动重用）。"""
+
+    def test_default_state_all_checked(self):
+        dlg = _dlg()
+        try:
+            st = dlg.state()
+            self.assertEqual(st["unchecked"], [])       # 默认全选非空
+            self.assertEqual(st["mode"], "update")       # combined 默认更新素材
+            self.assertEqual(st["source"], "official")
+            self.assertEqual(st["official_policy"], "stale")
+            self.assertEqual(st["self_policy"], "missing")
+        finally:
+            dlg.close()
+
+    def test_state_roundtrip(self):
+        dlg = _dlg()
+        try:
+            dlg.rb_merge.setChecked(True)
+            dlg.rb_src_xml.setChecked(True)
+            dlg.chk_zip.setChecked(False)
+            dlg.chk_prepare.setChecked(False)
+            dlg.chk_purge.setChecked(True)
+            dlg.chk_report.setChecked(False)
+            dlg._set_combo(dlg.cb_self, "all")
+            dlg.list.topLevelItem(1).setCheckState(0, Qt.Unchecked)   # p2 不选
+            st = dlg.state()
+        finally:
+            dlg.close()
+        self.assertEqual(st["mode"], "merge")
+        self.assertEqual(st["source"], "xml")
+        self.assertFalse(st["zip"])
+        self.assertFalse(st["auto_prepare"])
+        self.assertTrue(st["purge"])
+        self.assertFalse(st["save_report"])
+        self.assertEqual(st["self_policy"], "all")
+        self.assertEqual(st["unchecked"], ["p2"])
+
+        dlg2 = _dlg(initial_state=st)
+        try:
+            self.assertEqual(dlg2.effective_mode(), "merge")
+            self.assertEqual(dlg2.run_source(), "xml")
+            self.assertFalse(dlg2.chk_zip.isChecked())
+            self.assertFalse(dlg2.chk_prepare.isChecked())
+            self.assertTrue(dlg2.chk_purge.isChecked())
+            self.assertFalse(dlg2.chk_report.isChecked())
+            self.assertEqual(dlg2.self_policy(), "all")
+            self.assertEqual([p for p, _d in dlg2.list.selected_items()], ["p1"])
+        finally:
+            dlg2.close()
+
+    def test_apply_state_new_collections_stay_checked(self):
+        # 记录「未勾选」集合：不在其中的（含新增）默认勾选
+        dlg = _dlg(initial_state={"unchecked": ["p2"]})
+        try:
+            self.assertEqual([p for p, _d in dlg.list.selected_items()], ["p1"])
+        finally:
+            dlg.close()
+
+    def test_fixed_mode_ignores_state_mode(self):
+        dlg = _dlg(mode="update", initial_state={"mode": "merge"})
+        try:
+            self.assertEqual(dlg.effective_mode(), "update")   # 固定模式不被覆盖
         finally:
             dlg.close()
 

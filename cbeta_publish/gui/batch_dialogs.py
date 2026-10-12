@@ -137,7 +137,7 @@ class BatchDialog(QDialog):
     def __init__(self, items, cfg_fn, parent=None, *, mode="merge",
                  merge_fmts=None, zip_fmts=None, can_merge=True,
                  save_merge_fn=None, preview_fn=None, global_cfg=None,
-                 run_source=None):
+                 run_source=None, initial_state=None):
         super().__init__(parent)
         self._fixed_mode = mode if mode in ("update", "merge") else None
         # combined 默认停在「更新素材」（ destructive 最小、最常用前置步骤）
@@ -262,6 +262,8 @@ class BatchDialog(QDialog):
         v.addWidget(btns)
         self._apply_mode()
         self._apply_source()
+        if initial_state:
+            self.apply_state(initial_state)
 
     def _policy_combo(self, label, choices, default_idx=0):
         box = QWidget()
@@ -318,6 +320,61 @@ class BatchDialog(QDialog):
 
     def self_policy(self):
         return self.cb_self.currentData()
+
+    # ---------- 选项记忆（本次窗口 → 下次重用；由 MainWindow 落盘 config） ----------
+    def state(self):
+        """当前所有选项，供 MainWindow 记忆并在下次打开/下次启动时恢复。
+
+        丛书勾选记录「未勾选」集合（默认全选），这样后来新增的丛书默认仍选中。
+        """
+        unchecked = [it.data(0, Qt.UserRole) for it in self.list._all_checkable()
+                     if it.checkState(0) != Qt.Checked]
+        return {
+            "mode": self._mode,
+            "source": self.run_source(),
+            "unchecked": [str(p) for p in unchecked],
+            "merge": self.chk_merge.isChecked(),
+            "zip": self.chk_zip.isChecked(),
+            "auto_prepare": self.chk_prepare.isChecked(),
+            "purge": self.chk_purge.isChecked(),
+            "official_policy": self.official_policy(),
+            "self_policy": self.self_policy(),
+            "save_report": self.save_report(),
+        }
+
+    @staticmethod
+    def _set_combo(cb, val):
+        i = cb.findData(val)
+        if i >= 0:
+            cb.setCurrentIndex(i)
+
+    def apply_state(self, st):
+        """恢复上次选项：模式/来源/丛书勾选/各勾选框/策略（缺项保持默认）。"""
+        st = st or {}
+        if self._fixed_mode is None:
+            mode = st.get("mode")
+            if mode in ("update", "merge"):
+                (self.rb_merge if mode == "merge" else self.rb_update).setChecked(True)
+        src = st.get("source")
+        if src in ("official", "xml"):
+            (self.rb_src_xml if src == "xml" else self.rb_src_official).setChecked(True)
+        unchecked = st.get("unchecked")
+        if unchecked is not None:
+            un = {str(x) for x in unchecked}
+            for it in self.list._all_checkable():
+                it.setCheckState(0, Qt.Unchecked
+                                 if it.data(0, Qt.UserRole) in un else Qt.Checked)
+        for key, w in (("merge", self.chk_merge), ("zip", self.chk_zip),
+                       ("auto_prepare", self.chk_prepare), ("purge", self.chk_purge),
+                       ("save_report", self.chk_report)):
+            if key in st:
+                w.setChecked(bool(st[key]))
+        if st.get("official_policy") is not None:
+            self._set_combo(self.cb_official, st["official_policy"])
+        if st.get("self_policy") is not None:
+            self._set_combo(self.cb_self, st["self_policy"])
+        self._apply_mode()
+        self._apply_source()
 
     # ---------- 仅 merge ----------
     def _on_list_clicked(self, item, col):
