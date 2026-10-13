@@ -262,7 +262,7 @@ class VerifyReuseFlowTest(unittest.TestCase):
     def _stub_fingerprint(self):
         import cbeta_publish.books.xml2pdf_bridge as b
         b.verify_fingerprint_available = lambda config: True
-        b.verify_fingerprint = lambda w, f, config, preset=None, xml_files=None, juan=None: f"fp-{w}-{f}"
+        b.verify_fingerprint = lambda w, f, config, preset=None, xml_files=None, juan=None, **k: f"fp-{w}-{f}"
 
     def test_all_fresh_skips_everything(self):
         import cbeta_publish.books.xml2pdf_bridge as b
@@ -281,6 +281,58 @@ class VerifyReuseFlowTest(unittest.TestCase):
             restore()
         self.assertIn("无需重验", win.detail.text())
         self.assertIsNone(win._verify_worker)
+
+    def test_cancel_during_fingerprint_prep(self):
+        # 准备阶段取消：关窗+提示，不启动校验线程
+        import cbeta_publish.books.xml2pdf_bridge as b
+        win = self.win
+        self._stub_fingerprint()
+        real_mp = win._make_progress
+        state = {"n": 0}
+
+        def fake_mp(t, n):
+            def upd(done, label="", *a, **k):
+                state["n"] += 1
+                return state["n"] < 2   # 首行提示后即取消
+            return None, upd, {"finish": lambda lines=None, *a, **k: None}
+        win._make_progress = fake_mp
+        try:
+            win._send_coll_to_verify(regen_all=True)
+        finally:
+            win._make_progress = real_mp
+        self.assertIn("已取消（准备阶段）", win.detail.text())
+        self.assertIsNone(win._verify_worker)
+
+    def test_dialog_first_and_preset_once(self):
+        # 弹窗先行：指纹循环开始前进度窗已创建；生效预设本轮只算一次
+        import cbeta_publish.books.xml2pdf_bridge as b
+        win = self.win
+        self._stub_fingerprint()
+        events, eff_calls = [], []
+        real_eff = b._effective_presets
+        b._effective_presets = lambda config, preset: (
+            eff_calls.append(preset) or real_eff(config, preset))
+        real_mp = win._make_progress
+        real_box = win._wrap_box
+        win._wrap_box = lambda *a, **k: None
+
+        def fake_mp(t, n):
+            events.append("dialog")
+            def upd(done, label="", *a, **k):
+                return True
+            return None, upd, {"finish": lambda lines=None, *a, **k: None}
+        win._make_progress = fake_mp
+        calls, restore_v = self._patch_verify()
+        try:
+            win._send_coll_to_verify(regen_all=True)
+        finally:
+            restore_v()
+            win._make_progress = real_mp
+            win._wrap_box = real_box
+            b._effective_presets = real_eff
+        self.assertIn("dialog", events)
+        self.assertEqual(calls, ["T0001", "T0002"])   # 全流程照常跑完
+        self.assertEqual(len(eff_calls), 1)           # 生效预设只算一次
 
     def test_stale_only_verifies_stale(self):
         import cbeta_publish.books.xml2pdf_bridge as b

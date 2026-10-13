@@ -544,6 +544,57 @@ class MergeXmlSourceTest(unittest.TestCase):
         self.assertIn("完成 2/2", finished[-1])
         self.assertIn("#1a7f37", finished[-1])                         # 全成功→绿
 
+    def test_progress_reset_and_close(self):
+        from PySide6.QtWidgets import QProgressBar
+        win = self.win
+        dlg, update, st = win._make_progress("t", 2)
+        try:
+            bar = dlg.findChild(QProgressBar)
+            self.assertEqual(bar.maximum(), 2)
+            self.assertTrue(win._progress_reset(dlg, 10))   # 阶段切换：清零+重设总量
+            self.assertEqual(bar.maximum(), 10)
+            self.assertEqual(bar.value(), 0)
+            update(7)
+            self.assertEqual(bar.value(), 7)                # update 按新总量走
+            self.assertTrue(win._progress_close(dlg))
+        finally:
+            try:
+                dlg.close()
+            except Exception:
+                pass
+        # 假窗/测试桩静默跳过，不影响主流程
+        self.assertFalse(win._progress_reset(None, 5))
+        self.assertFalse(win._progress_reset(object(), 5))
+        self.assertTrue(win._progress_close(None))
+
+    def test_ensure_xml_batch_dialog_first(self):
+        # 弹窗先行：源计数开始前进度窗已创建（点击后立刻有反馈）
+        import cbeta_publish.books.xml2pdf_bridge as b
+        win = self.win
+        out_dir = self._xml_env()
+        one = out_dir / "pdf" / "T0001 上.pdf"
+        one.parent.mkdir(parents=True, exist_ok=True)
+        one.write_bytes(b"a")
+        real_src, real_ens = b.work_source_files, b.ensure_products
+        events = []
+        real_mp = win._make_progress
+        b.work_source_files = lambda config, work: (
+            events.append("src") or [out_dir / "T01n0001.xml"])
+        b.ensure_products = lambda *a, **k: ([one], True)
+
+        def fake_mp(title, total):
+            events.append("dialog")
+            return real_mp(title, total)
+        win._make_progress = fake_mp
+        try:
+            ok_map, failed, cancelled, short = win._ensure_xml_batch(
+                ["T0001"], ["pdf"])
+        finally:
+            win._make_progress = real_mp
+            b.work_source_files, b.ensure_products = real_src, real_ens
+        self.assertFalse(cancelled)
+        self.assertLess(events.index("dialog"), events.index("src"))
+
     def test_make_progress_first_line_no_blank(self):
         # 进度窗日志从第一行开始写（不再先插一个空段）
         from PySide6.QtWidgets import QTextBrowser

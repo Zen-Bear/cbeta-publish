@@ -120,6 +120,24 @@ class RightPanelTest(unittest.TestCase):
         self.assertGreater(sh.indexOf(win.cb_preset), sh.indexOf(win.rb_made))
         self.assertGreater(sh.indexOf(win.btn_preset_edit), sh.indexOf(win.cb_preset))
 
+    def test_make_tooltips_reflect_verify_mode(self):
+        # 「重制」提示随「制作书籍=生成/校验」切换：生成=忽略已有书籍；校验=含校验+导入
+        win = self.win
+        win.config.setdefault("xml2pdf", {})["verify_build"] = False
+        win._sync_source_preset_ui()
+        self.assertIn("忽略已有书籍", win.btn_remake.toolTip())
+        self.assertIn("已有书籍直接复用", win.btn_make.toolTip())
+        win.config["xml2pdf"]["verify_build"] = True
+        win._sync_source_preset_ui()
+        self.assertIn("校验", win.btn_remake.toolTip())
+        self.assertIn("导入", win.btn_remake.toolTip())
+        self.assertNotIn("忽略已有书籍", win.btn_remake.toolTip())
+        self.assertIn("校验", win.btn_make.toolTip())
+        self.assertIn("导入", win.btn_make.toolTip())
+        # 还原：不影响同类其它用例
+        win.config["xml2pdf"]["verify_build"] = False
+        win._sync_source_preset_ui()
+
     def test_make_button_generates_missing_only(self):
         import cbeta_publish.books.xml2pdf_bridge as b
         win = self.win

@@ -269,6 +269,59 @@ class BridgeConvertLibTest(unittest.TestCase):
         self.assertEqual(seen["max_diff"], "0")
         self.assertEqual(seen["diff_lines"], "5")
 
+    def test_verify_fingerprint_reuses_eff_and_wrap(self):
+        # eff/wrap 传入则复用（不重复解析、不自删，调用方删）；缺省逐次计算、用后自删
+        import sys
+        import tempfile as _tf
+        import cbeta_publish.books.xml2pdf_bridge as b
+        pkg = self.dir / "fx2p2" / "pycbeta"
+        pkg.mkdir(parents=True)
+        (pkg / "__init__.py").write_text("")
+        (pkg / "theme.py").write_text(
+            "RUN_KEYS = ['a']\n"
+            "def load_run_config(*a, **k):\n"
+            "    return {'a': 1}\n"
+            "loads = []\n"
+            "def load_effective_presets(path=None):\n"
+            "    loads.append(path)\n"
+            "    return {'theme_marker': 1}\n")
+        (pkg / "verify.py").write_text(
+            "def verify_fingerprint(*a, **k):\n"
+            "    return 'fp-x'\n")
+        preset = self.dir / "preset.json"
+        preset.write_text("{}", encoding="utf-8")
+        cfg = {"xml2pdf": {"path": str(self.dir / "fx2p2")}}
+        saved_path = list(sys.path)
+        saved_mods = {k: sys.modules.pop(k) for k in
+                      [k for k in sys.modules
+                       if k == "pycbeta" or k.startswith("pycbeta.")]}
+        try:
+            eff, wrap = b._effective_presets(cfg, str(preset))
+            self.assertIsInstance(eff, dict)
+            self.assertTrue(Path(wrap).is_file())
+            theme = sys.modules["pycbeta.theme"]
+            loads0 = len(theme.loads)
+            got = b.verify_fingerprint("T0001", "pdf", cfg,
+                                       eff=eff, wrap=wrap)
+            self.assertEqual(got, "fp-x")
+            self.assertEqual(len(theme.loads), loads0)   # 未重复解析
+            self.assertTrue(Path(wrap).is_file())        # 未自删
+            b.remove_temp_preset(wrap)
+            self.assertFalse(Path(wrap).exists())
+            # 缺省：逐次计算、用后不残留临时包装
+            before = set(Path(_tf.gettempdir()).glob("cbeta-publish-run-*.json"))
+            got2 = b.verify_fingerprint("T0001", "pdf", cfg,
+                                        preset=str(preset))
+            self.assertEqual(got2, "fp-x")
+            self.assertEqual(
+                set(Path(_tf.gettempdir()).glob("cbeta-publish-run-*.json")),
+                before)
+        finally:
+            for k in ("pycbeta", "pycbeta.theme", "pycbeta.verify"):
+                sys.modules.pop(k, None)
+            sys.modules.update(saved_mods)
+            sys.path[:] = saved_path
+
     def test_argv_with_xml_and_preset(self):
         import cbeta_publish.books.xml2pdf_bridge as b
         xml = self.dir / "T01n0001.xml"
@@ -1294,6 +1347,23 @@ class BridgeVerifySummaryTest(unittest.TestCase):
         self.assertEqual(out2, out)
         text2 = out2.read_text(encoding="utf-8")
         self.assertIn("T0001 校验未通过（docx）", text2)
+
+    def test_write_summary_lists_reused_skipped_items(self):
+        # 复用旧校验（跳过）的条目单独列在摘要，不计入「共 N 部」
+        import cbeta_publish.books.xml2pdf_bridge as b
+        self._reports()
+        out = b.write_verify_summary(self.dir, "测丛书",
+                                     skipped=[("T9001", ["pdf", "docx"]),
+                                              ("T9002", [])])
+        text = out.read_text(encoding="utf-8")
+        self.assertIn("共 4 部：通过 2 部 / 未通过 1 部 / 未判定 1 部 / 复用旧校验 2 部",
+                      text)
+        self.assertIn("复用旧校验（跳过） 2 部", text)
+        self.assertIn("・T9001（pdf/docx）", text)
+        self.assertIn("・T9002", text)
+        # 未传 skipped 时不出现该段（旧行为不变）
+        out2 = b.write_verify_summary(self.dir, "测丛书")
+        self.assertNotIn("复用旧校验", out2.read_text(encoding="utf-8"))
 
     def test_no_reports_returns_none(self):
         import cbeta_publish.books.xml2pdf_bridge as b

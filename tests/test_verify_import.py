@@ -420,6 +420,72 @@ class VerifySendImportTest(unittest.TestCase):
             win.config["xml2pdf"]["verify_reuse"] = True
         self.assertEqual([c[0] for c in calls], ["T0002"])
 
+    def test_reused_items_listed_in_log_and_summary(self):
+        # 重制（regen_all）+ 复用开：新鲜项跳过校验 → 进度日志与总验证报告都列出
+        import cbeta_publish.books.xml2pdf_bridge as b
+        from cbeta_publish.books import verify_cache as vc
+        win = self.win
+        for i in range(win.coll_combo.count()):
+            if str(win.coll_combo.itemData(i)).endswith("验测.json"):
+                win.coll_combo.setCurrentIndex(i)
+                break
+        _ensure_app().processEvents()
+        win.chk_pdf.setChecked(True)
+        win.chk_epub.setChecked(False)
+        win.chk_docx.setChecked(False)
+        base = Path(win.config["xml_to_ebooks_dir"])
+        (base / "pdf").mkdir(parents=True, exist_ok=True)
+        (base / "pdf" / "T0001.pdf").write_bytes(b"x")
+
+        logs = []
+        real_prog = win._make_progress
+        real_box = win._wrap_box
+        win._wrap_box = lambda *a, **k: None
+
+        def fake_prog(title, total):
+            def upd(done, label="", *a, **k):
+                logs.append(str(label))
+                return True
+            return None, upd, {"finish": lambda *a, **k: None}
+        win._make_progress = fake_prog
+
+        real_avail = b.verify_fingerprint_available
+        real_fp = b.verify_fingerprint
+        real_fresh = vc.is_fresh
+        real_find = b.find_all_built_entry
+        real_ensure = b.ensure_one
+        real_up = win._import_upstream_pass
+        b.verify_fingerprint_available = lambda cfg: True
+        b.verify_fingerprint = lambda *a, **k: "FP"
+        vc.is_fresh = lambda rpath, work, fmt, fp, inputs, juan="": work == "T0001"
+        b.find_all_built_entry = lambda work, fmt, *a, **k: (
+            [Path("x")] if work == "T0001" else [])
+        b.ensure_one = lambda work, fmt, *a, **k: (base / fmt / f"{work}.{fmt}", True)
+        win._import_upstream_pass = lambda *a, **k: False
+        calls, restore_v = self._patch_verify()
+        try:
+            win._send_coll_to_verify(regen_all=True)
+        finally:
+            restore_v()
+            b.verify_fingerprint_available = real_avail
+            b.verify_fingerprint = real_fp
+            vc.is_fresh = real_fresh
+            b.find_all_built_entry = real_find
+            b.ensure_one = real_ensure
+            win._import_upstream_pass = real_up
+            win._make_progress = real_prog
+            win._wrap_box = real_box
+
+        joined = "\n".join(logs)
+        self.assertIn("跳过校验（复用上次结论）1 部", joined)
+        self.assertIn("T0001（pdf）", joined)
+        self.assertEqual([c[0] for c in calls], ["T0002"])   # 只校验不新鲜项
+        rep = Path(win.config["verify_dir"]) / "v" / "总验证报告.txt"
+        self.assertTrue(rep.is_file())
+        text = rep.read_text(encoding="utf-8")
+        self.assertIn("复用旧校验 1 部", text)
+        self.assertIn("・T0001（pdf）", text)
+
     def test_open_window_passes_current_coll(self):
         # 「运行 xml2pdf 制作书籍」：把当前丛书 ids/out/preset 带给独立窗
         import subprocess

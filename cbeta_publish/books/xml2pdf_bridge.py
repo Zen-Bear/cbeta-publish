@@ -1544,7 +1544,7 @@ def _effective_presets(config, preset_path):
 
 
 def verify_fingerprint(work: str, fmt: str, config, preset=None, xml_files=None,
-                       juan=None):
+                       juan=None, eff=None, wrap=None):
     """单（work, fmt）校验指纹预判：返回当前输入的指纹，None 表示不可复用。
 
     - xml_files 为空时上游自行定位（旧行为）；传入则按该有序列表计算
@@ -1555,6 +1555,9 @@ def verify_fingerprint(work: str, fmt: str, config, preset=None, xml_files=None,
       `config_path=包装路径` 贴近 GUI（注释相对路径等边缘求同）；
     - 阈值取 publish 全局（`verify_max_diff` 默认 0、`verify_diff_lines` 默认 5），
       钳制 0–50，与 `verify_work` 透传值一致。
+    - eff/wrap：本轮已算好的生效配置与 run 包装（`_effective_presets` 结果）。
+      传入（eff 为 dict）则复用、不重复解析预设，wrap 的删除归调用方；
+      缺省逐次计算、用后自删（旧行为）。
     无副作用（不下载不写盘）。
     """
     try:
@@ -1581,7 +1584,9 @@ def verify_fingerprint(work: str, fmt: str, config, preset=None, xml_files=None,
     except (TypeError, ValueError):
         dl = 5
     try:
-        eff, wrap = _effective_presets(config, preset)
+        _own_wrap = not isinstance(eff, dict)
+        if _own_wrap:
+            eff, wrap = _effective_presets(config, preset)
         if not isinstance(eff, dict):
             return None
         try:
@@ -1592,7 +1597,7 @@ def verify_fingerprint(work: str, fmt: str, config, preset=None, xml_files=None,
                     diff_lines=max(0, min(50, dl)),
                     juan=segs)
         finally:
-            if wrap is not None:
+            if _own_wrap and wrap is not None:
                 try:
                     remove_temp_preset(wrap)
                 except Exception:
@@ -1602,12 +1607,14 @@ def verify_fingerprint(work: str, fmt: str, config, preset=None, xml_files=None,
     return fp if isinstance(fp, str) and fp else None
 
 
-def write_verify_summary(vdir, coll_name=None, works=None):
+def write_verify_summary(vdir, coll_name=None, works=None, skipped=None):
     """合并校验目录下全部单本报告为总报告（固定名覆盖写；无报告返回 None）。
 
     摘要行文与 `_do_import_verified` 一致（通过列格式、未通过带缺/多 numbers、
     未判定带原因），只读报告不搬产物；全文区按 stem 排序拼接各报告原文。
-    works 非空时只汇总这些 work 的报告（跳过复用项的旧报告不计入，避免误读）。
+    works 非空时只汇总这些 work 的报告（跳过复用项的旧报告不计入，避免误读）；
+    skipped 为本次复用旧校验（源未变、未重验）的条目 [(work, [fmt…])]，单独列在摘要
+    （不属于本次实校的书，故不计入「共 N 部」）。
     """
     import datetime as _dt
     vdir = Path(vdir)
@@ -1669,16 +1676,29 @@ def write_verify_summary(vdir, coll_name=None, works=None):
             undet_lines.append(f"{label} 未判定{suffix}")
         bodies.append(f"===== {label}（{rp.name}）=====\n{text.rstrip()}")
     total = len(reports)
+    skip_lines = []
+    for item in (skipped or []):
+        try:
+            _w, _ff = item
+        except Exception:
+            _w, _ff = item, []
+        _ff = [str(f) for f in (_ff or [])]
+        skip_lines.append(f"{_w}（{'/'.join(_ff)}）" if _ff else f"{_w}")
+    _count_line = (f"共 {total} 部：通过 {len(ok_lines)} 部 / "
+                   f"未通过 {len(fail_lines)} 部 / 未判定 {len(undet_lines)} 部"
+                   + (f" / 复用旧校验 {len(skip_lines)} 部" if skip_lines else ""))
     head = [f"总验证报告",
             f"丛书：{coll_name or vdir.name}",
             f"时间：{_dt.datetime.now().isoformat(timespec='seconds')}",
-            f"共 {total} 部：通过 {len(ok_lines)} 部 / "
-            f"未通过 {len(fail_lines)} 部 / 未判定 {len(undet_lines)} 部",
+            _count_line,
             "（通过=判定格式全过；未通过=任一格式 FAIL；未判定=无 FAIL 但有未定格式）",
             "--- 摘要 ---",
             *([f"通过 {len(ok_lines)} 部："] + [f"・{l}" for l in ok_lines] if ok_lines else []),
             *([f"未通过 {len(fail_lines)} 部："] + [f"・{l}" for l in fail_lines] if fail_lines else []),
             *([f"未判定 {len(undet_lines)} 部："] + [f"・{l}" for l in undet_lines] if undet_lines else []),
+            *([f"复用旧校验（跳过） {len(skip_lines)} 部"
+               f"（源未变、指纹新鲜，本次未重新校验）："]
+              + [f"・{l}" for l in skip_lines] if skip_lines else []),
             "--- 全文 ---",
             *bodies]
     try:

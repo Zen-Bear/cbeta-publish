@@ -2296,6 +2296,24 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         self._refresh_preset_combo()
+        self._sync_make_tooltips()
+
+    def _sync_make_tooltips(self):
+        # 自制/重制按钮提示随「设置 → 制作书籍 = 生成/校验」切换：
+        # 校验模式下自制/重制会额外走校验+自动导入，语义与纯生成不同。
+        verify=bool((self.config.get("xml2pdf", {}) or {}).get("verify_build"))
+        if verify:
+            self.btn_make.setToolTip(
+                "生成缺失的自制电子书并校验：缺书/指纹过期才校验，"
+                "新鲜且产物在库的直接跳过；跑完自动导入通过项")
+            self.btn_remake.setToolTip(
+                "重新生成全部自制电子书并校验：全部重新生成；"
+                "源未变的新鲜项不再重复校验，其余渲染+校验；跑完自动导入通过项")
+        else:
+            self.btn_make.setToolTip(
+                "生成缺失的自制电子书（已有书籍直接复用；源 XML 较新时自动重制）")
+            self.btn_remake.setToolTip(
+                "重新生成全部自制电子书（忽略已有书籍）")
 
     def _refresh_preset_combo(self):
         # 预设下拉：预设目录下合法 *.json + 首项"出厂默认"；保持当前选择
@@ -5925,11 +5943,14 @@ class MainWindow(QMainWindow):
         from cbeta_publish.books import verify_cache as _vc
         return _vc.records_path({"_config_path": str(getattr(self, "_config_path", ""))})
 
-    def _import_upstream_pass(self, w, f, inputs, base_dir, rpath, cache, juan=""):
+    def _import_upstream_pass(self, w, f, inputs, base_dir, rpath, cache, juan="",
+                                preset=None, eff=None, wrap=None):
         """从上游报告目录惰性导入 (w,f) 的通过记录；成功返回 True（已记库）。
 
         inputs: 当前源基名有序列表。cache: 本轮扫描缓存 {"reports": [...]|None}。
         juan: 期望卷标签（`""`＝整本）；须与报告 `juan.label` 一致。
+        preset/eff/wrap: 本轮生效预设快照（`_send_coll_to_verify` 一次算好传下），
+        复用则不重复解析预设；缺省自行解析（旧行为）。
         条件（缺一即跳过）：report.json 有效（schema1、`work` 匹配）＋卷标签一致＋该 fmt
         有结论 ＋ verdict 接受档（strict 或 notes_only≤10）＋ `formal_outputs`/`inputs.xml_files`
         非空 ＋ 按报告顺序映射本地源全命中 ＋ 现算指纹相等。接受档与 publish 导入同口径。
@@ -5974,9 +5995,11 @@ class MainWindow(QMainWindow):
                         continue
                     ordered = [byname[n] for n in _names]
                     fp_now = _b.verify_fingerprint(
-                        w, f, self.config, preset=self._run_preset(),
+                        w, f, self.config,
+                        preset=(preset if preset is not None
+                                else self._run_preset()),
                         xml_files=[str(p) for p in ordered],
-                        juan=_want_juan or None)
+                        juan=_want_juan or None, eff=eff, wrap=wrap)
                     if not fp_now or fp_now != info.get("fingerprint"):
                         continue
                     _prod = _b.find_built(w, f, base_dir)
@@ -5990,6 +6013,58 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         return False
+
+    def _verify_fingerprint_loop(self, works, fmts, base_dir, rpath,
+                                   preset, eff, wrap, update):
+        """校验复用开时的准备阶段：逐 (entry,fmt) 比对指纹，划分待校验/跳过。
+
+        在进度窗下进行：每单元 `update(n)` 泵事件（主窗口不冻结），用户取消
+        返回 None；正常返回
+        `(fps, works_to_verify, works_fmts, skipped, up_imported)`。
+        eff/wrap 为本轮生效预设快照（复用，不重复解析）。
+        """
+        from cbeta_publish.books import xml2pdf_bridge as _b
+        from cbeta_publish.books import verify_cache as _vc
+        fps={}            # (entry, fmt) -> (指纹, 输入基名有序列表, 卷标签)
+        works_to_verify=[]
+        works_fmts={}
+        skipped=[]        # [(entry, [fmts])]：全部新鲜，直接跳过
+        _up_cache={}      # 上游报告扫描缓存（本轮一次）
+        _up_imported=[]   # ["W.FMT"] 上游导入命中（记库后视为新鲜）
+        _n=0
+        for w in works:
+            _work=self._entry_work(w)
+            _spec=self._entry_juan(w)
+            _lab=_b.juan_label(self.config, _spec) if _spec else ""
+            fresh_fmts, stale_fmts=[], []
+            _srcs=_b.work_source_files(self.config, _work)
+            _inputs=[p.name for p in _srcs]
+            _xmls=[str(p) for p in _srcs]
+            for f in fmts:
+                _n+=1
+                fp=_b.verify_fingerprint(_work, f, self.config, preset=preset,
+                                         xml_files=_xmls, juan=_spec or None,
+                                         eff=eff, wrap=wrap)
+                if fp:
+                    fps[(w, f)]=(fp, _inputs, _lab)
+                if (fp and _vc.is_fresh(rpath, _work, f, fp, _inputs, juan=_lab)
+                        and _b.find_all_built_entry(_work, f, base_dir, _lab)):
+                    fresh_fmts.append(f)
+                elif self._import_upstream_pass(_work, f, _inputs, base_dir,
+                                               rpath, _up_cache, juan=_lab,
+                                               preset=preset, eff=eff, wrap=wrap):
+                    fresh_fmts.append(f)
+                    _up_imported.append(f"{w}.{f}")
+                else:
+                    stale_fmts.append(f)
+                if not update(_n):
+                    return None
+            if stale_fmts:
+                works_to_verify.append(w)
+                works_fmts[w]=stale_fmts
+            else:
+                skipped.append((w, fresh_fmts))
+        return (fps, works_to_verify, works_fmts, skipped, _up_imported)
 
     def _send_coll_to_verify(self, regen_all=False):
         """自制/重制（设置选「校验」时）：进程内逐本生成+校验，跑完自动导入通过项。
@@ -6023,64 +6098,80 @@ class MainWindow(QMainWindow):
         reuse_wanted=bool((self.config.get("xml2pdf", {}) or {}).get("verify_reuse", True))
         reuse=reuse_wanted and self._verify_reuse_enabled()
         preset=self._run_preset()
-        fps={}            # (entry, fmt) -> (指纹, 输入基名有序列表, 卷标签)
-        works_to_verify=[]
-        works_fmts={}
-        works_juan={e: self._entry_juan(e).replace("、", ",") for e in works}   # 条目→卷（CLI 用 `,`）
-        skipped=[]        # [(entry, [fmts])]：全部新鲜，直接跳过
-        _up_cache={}      # 上游报告扫描缓存（本轮一次）
-        _up_imported=[]   # ["W.FMT"] 上游导入命中（记库后视为新鲜）
+        title="重制并校验" if regen_all else "自制并校验"
+        # 进度窗先行：指纹比对、新鲜项重制都在窗下进行（`update` 泵事件），
+        # 点击后立刻有反馈，主窗口不冻结；阶段切换时重置进度条（`_progress_reset`）。
+        _fp_total=max(1, len(works)*max(1, len(fmts)))
+        dlg, update, pstate=self._make_progress(title, _fp_total)
         if reuse:
-            for w in works:
-                _work=self._entry_work(w)
-                _spec=self._entry_juan(w)
-                _lab=_b.juan_label(self.config, _spec) if _spec else ""
-                fresh_fmts, stale_fmts=[], []
-                _srcs=_b.work_source_files(self.config, _work)
-                _inputs=[p.name for p in _srcs]
-                _xmls=[str(p) for p in _srcs]
-                for f in fmts:
-                    fp=_b.verify_fingerprint(_work, f, self.config, preset=preset,
-                                             xml_files=_xmls, juan=_spec or None)
-                    if fp:
-                        fps[(w, f)]=(fp, _inputs, _lab)
-                    if (fp and _vc.is_fresh(rpath, _work, f, fp, _inputs, juan=_lab)
-                            and _b.find_all_built_entry(_work, f, base_dir, _lab)):
-                        fresh_fmts.append(f)
-                    elif self._import_upstream_pass(_work, f, _inputs, base_dir,
-                                                   rpath, _up_cache, juan=_lab):
-                        fresh_fmts.append(f)
-                        _up_imported.append(f"{w}.{f}")
-                    else:
-                        stale_fmts.append(f)
-                if stale_fmts:
-                    works_to_verify.append(w)
-                    works_fmts[w]=stale_fmts
-                else:
-                    skipped.append((w, fresh_fmts))
-        elif not regen_all:
-            missing=[w for w in works
-                     if not any(_b.find_all_built_entry(self._entry_work(w), f,
-                                                        base_dir, self._entry_juan(w))
-                                for f in fmts)]
-            if not missing:
-                self.detail.setText("没有缺少的自制书（改用「重制」可全部重做）")
-                return
-            works_to_verify=list(missing)
-            works_fmts={w: list(fmts) for w in works_to_verify}
+            update(0, f"准备中：共 {len(works)} 部 x {len(fmts)} 格式，比对校验指纹…")
         else:
-            works_to_verify=list(works)
-            works_fmts={w: list(fmts) for w in works_to_verify}
+            update(0, f"准备中：共 {len(works)} 部 x {len(fmts)} 格式…")
+        # 生效预设本轮一次算好、逐次复用（否则每 (work,fmt) 重复解析预设+写临时包装）。
+        _eff, _wrap = None, None
+        if reuse:
+            try:
+                _eff, _wrap = _b._effective_presets(self.config, preset)
+            except Exception:
+                _eff, _wrap = None, None
+            if not isinstance(_eff, dict):
+                if _wrap is not None:
+                    try:
+                        _b.remove_temp_preset(_wrap)
+                    except Exception:
+                        pass
+                _eff, _wrap = None, None
+        try:
+            if reuse:
+                _prep = self._verify_fingerprint_loop(
+                    works, fmts, base_dir, rpath, preset, _eff, _wrap, update)
+                if _prep is None:
+                    self._progress_close(dlg)
+                    self.detail.setText("已取消（准备阶段）")
+                    return
+                fps, works_to_verify, works_fmts, skipped, _up_imported = _prep
+            elif not regen_all:
+                missing=[w for w in works
+                         if not any(_b.find_all_built_entry(self._entry_work(w), f,
+                                                            base_dir, self._entry_juan(w))
+                                    for f in fmts)]
+                if not missing:
+                    self._progress_close(dlg)
+                    self.detail.setText("没有缺少的自制书（改用「重制」可全部重做）")
+                    return
+                fps, skipped, _up_imported = {}, [], []
+                works_to_verify=list(missing)
+                works_fmts={w: list(fmts) for w in works_to_verify}
+            else:
+                fps, skipped, _up_imported = {}, [], []
+                works_to_verify=list(works)
+                works_fmts={w: list(fmts) for w in works_to_verify}
+        finally:
+            # 复用快照的包装文件本轮结束即删（逐次路径自删，不管这里）
+            if _wrap is not None:
+                try:
+                    _b.remove_temp_preset(_wrap)
+                except Exception:
+                    pass
+                _wrap = None
+        works_juan={e: self._entry_juan(e).replace("、", ",") for e in works}   # 条目→卷（CLI 用 `,`）
         if not works_to_verify:
+            self._progress_close(dlg)
             self.detail.setText(f"全部 {len(skipped)} 部已通过校验（源未变），无需重验")
             return
         regen_failed=[]
         if regen_all and reuse:
             # 新鲜项：重生成但跳过校验（输入未变，原结论仍成立）
+            _regen_total=max(1, sum(len(ff) for _w, ff in skipped))
+            self._progress_reset(dlg, _regen_total)
+            update(0, f"新鲜项重生成（跳过校验）{len(skipped)} 部…")
+            _dn=0
+            _cancelled_regen=False
             for w, ff in skipped:
                 _work=self._entry_work(w)
                 _lab=self._entry_juan(w)
                 for f in ff:
+                    _dn+=1
                     try:
                         out, _reused=_b.ensure_one(
                             _work, f, base_dir, self.config, preset=preset,
@@ -6091,16 +6182,31 @@ class MainWindow(QMainWindow):
                         out=None
                     if out is None or not out.exists():
                         regen_failed.append(f"{w}.{f} 重生成失败")
+                    if not update(_dn, f"重制 {w} [{f}]…"):
+                        _cancelled_regen=True
+                        break
+                if _cancelled_regen:
+                    break
+            if _cancelled_regen:
+                self._progress_close(dlg)
+                self.detail.setText("已取消（重制阶段，已重制部保留）")
+                return
         slug=str(d.get("id") or d.get("name") or "")
         vdir=_b.verify_coll_dir(self.config, slug)
         try:
             vdir.mkdir(parents=True, exist_ok=True)
         except Exception as e:
             self._wrap_box(QMessageBox.Warning,"失败",f"校验目录不可写：{e}")
+            self._progress_close(dlg)
             return
+        self._progress_reset(dlg, max(1, len(works_to_verify)))
+        # 复用上次校验（源未变）而跳过的书：逐条打进进度日志，便于核对
+        _skip_list=[(w, list(ff)) for w, ff in skipped if ff]
+        if _skip_list:
+            update(0, f"跳过校验（复用上次结论）{len(_skip_list)} 部（源未变）：")
+            for _w, _ff in _skip_list:
+                update(0, f"  {_w}（{'/'.join(_ff)}）")
         total=max(1, len(works_to_verify))
-        title="重制并校验" if regen_all else "自制并校验"
-        dlg, update, pstate=self._make_progress(title, total)
         result={"ok": 0, "failed": []}
         def on_prog(done, label, level):
             update(done, label, is_html=False)
@@ -6172,7 +6278,8 @@ class MainWindow(QMainWindow):
         if reuse_wanted and not reuse:
             summary.append("上游未提供校验指纹，本次全部重验（复用未生效）")
         summary.append("验证输出目录：" + _dirlink(vdir))          # 目录可点开
-        _sum_path=_b.write_verify_summary(vdir, d.get("name"), works=works_to_verify)
+        _sum_path=_b.write_verify_summary(vdir, d.get("name"), works=works_to_verify,
+                                          skipped=skipped)
         if _sum_path is not None:
             summary.append("总验证报告：" + _flink(_sum_path))
         _conv_path=None
@@ -7308,6 +7415,34 @@ class MainWindow(QMainWindow):
         st["finish"]=finish
         return dlg, update, st
 
+    @staticmethod
+    def _progress_reset(dlg, total):
+        """同一进度窗进入下一阶段：进度条清零并重设总量（`update` 按新总量走）。
+
+        dlg 为假窗/测试桩时静默跳过（返回 False），不影响主流程。
+        """
+        try:
+            from PySide6.QtWidgets import QProgressBar as _PB
+            bar = dlg.findChild(_PB) if dlg is not None else None
+            if bar is None:
+                return False
+            bar.setRange(0, max(1, int(total)))
+            bar.setValue(0)
+            QApplication.processEvents()
+            return True
+        except Exception:
+            return False
+
+    @staticmethod
+    def _progress_close(dlg):
+        """提前关闭进度窗（准备阶段取消/无需后半程时）；假窗/测试桩静默跳过。"""
+        try:
+            if dlg is not None:
+                dlg.close()
+            return True
+        except Exception:
+            return False
+
     def _ensure_xml_batch(self, works, fmts, title="生成（自制）", regen_all=False):
         """确保 works×fmts 的自制书存在（默认仅缺；regen_all=True 为「重制」显式指定）。
 
@@ -7330,20 +7465,30 @@ class MainWindow(QMainWindow):
         failed=[]
         short=[]
         expected={}
-        for w in works:
+        # 进度窗先行：源计数也在窗下进行（`update` 泵事件），点击后立刻有反馈；
+        # 主循环前重置进度条（`_progress_reset`）。
+        dlg, update, pstate = self._make_progress(title, max(1, len(works)))
+        _cancelled_prep=False
+        for _i, w in enumerate(works, 1):
             if self._entry_juan(w):
                 # 卷子集：产物数无法按源数预估（单卷只落在一个源文件里），
                 # 按 1 个 tracking unit 计；空产物仍走 failed，只有整本才做缺数比对
                 expected[w]=1
-                continue
-            try:
-                found=xml2pdf_bridge.work_source_files(self.config, self._entry_work(w))
-            except Exception:
-                found=[]
-            expected[w]=max(1, len(found))
+            else:
+                try:
+                    found=xml2pdf_bridge.work_source_files(self.config, self._entry_work(w))
+                except Exception:
+                    found=[]
+                expected[w]=max(1, len(found))
+            if not update(_i):
+                _cancelled_prep=True
+                break
+        if _cancelled_prep:
+            self._progress_close(dlg)
+            return ({f: {} for f in fmts}, [], True, [])
         total=max(1, sum(expected.values())*len(fmts))
         done=[0]
-        dlg, update, pstate = self._make_progress(title, total)
+        self._progress_reset(dlg, total)
         if fmts:
             _per=sum(expected.values())
             update(0, self._fmt_counts_line({f: _per for f in fmts}))
