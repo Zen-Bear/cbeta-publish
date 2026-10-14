@@ -1337,6 +1337,12 @@ class BridgeVerifySummaryTest(unittest.TestCase):
         self.assertIn("T0002 校验未通过（epub 缺3/多1）", text)
         self.assertIn("T0004 通过（docx/pdf）", text)
         self.assertIn("T0003 未判定（epub无基线）", text)
+        # 摘要行末附数字串：上游总结行原文优先（T0002），老报告按判读合成
+        self.assertIn("T0002 校验未通过（epub 缺3/多1）"
+                      " [1[docx=OK(0/0)], 2[epub=FAIL(3/1)]]", text)
+        self.assertIn("T0001 通过（docx/pdf） [1[docx=OK], 2[pdf=OK]]", text)
+        self.assertIn("T0004 通过（docx/pdf） [1[docx=OK], 2[pdf=COVERED]]", text)
+        self.assertIn("T0003 未判定（epub无基线） [1[epub=NO_BASELINE]]", text)
         for stem in ("T0001", "T0002", "T0003", "T0004"):
             self.assertIn(f"===== {stem}（{stem}_verify_report.txt）=====", text)
         # 总报告不参与导入扫描；覆盖写更新内容
@@ -1347,6 +1353,29 @@ class BridgeVerifySummaryTest(unittest.TestCase):
         self.assertEqual(out2, out)
         text2 = out2.read_text(encoding="utf-8")
         self.assertIn("T0001 校验未通过（docx）", text2)
+
+    def test_summary_tokens_verbatim_synth_and_empty(self):
+        # 数字串：上游总结行原文优先；无则合成；无数据/坏文件给 ""
+        import cbeta_publish.books.xml2pdf_bridge as b
+        rp = self.dir / "v_verify_report.txt"
+        rp.write_text("[T0099] 3 format: 1[docx=OK(0/0)], 2[epub=OK(1/2)], 3[pdf=3]\n"
+                      "=== x\n  [OK]  docx 缺0 多0\n", encoding="utf-8")
+        self.assertEqual(b.verify_summary_tokens(rp),
+                         "1[docx=OK(0/0)], 2[epub=OK(1/2)], 3[pdf=3]")
+        old = self.dir / "o_verify_report.txt"
+        old.write_text("=== T0001\n  [OK]  docx 缺0 多0\n"
+                       "  [FAIL] epub 缺48 多97\n", encoding="utf-8")
+        self.assertEqual(b.verify_summary_tokens(old),
+                         "1[docx=OK], 2[epub=FAIL]")
+        # 总结行不可解析 → 回退合成；空文件/缺失 → ""
+        bad = self.dir / "b_verify_report.txt"
+        bad.write_text("[X] 2 format: nonsense here\n"
+                       "=== T0001\n  [OK]  docx 缺0 多0\n", encoding="utf-8")
+        self.assertEqual(b.verify_summary_tokens(bad), "1[docx=OK]")
+        empty = self.dir / "e_verify_report.txt"
+        empty.write_text("", encoding="utf-8")
+        self.assertEqual(b.verify_summary_tokens(empty), "")
+        self.assertEqual(b.verify_summary_tokens(self.dir / "nope.txt"), "")
 
     def test_write_summary_lists_reused_skipped_items(self):
         # 复用旧校验（跳过）的条目单独列在摘要，不计入「共 N 部」

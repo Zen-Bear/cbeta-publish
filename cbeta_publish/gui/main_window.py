@@ -8701,7 +8701,10 @@ class MainWindow(QMainWindow):
         box=QMessageBox(icon, title, "", buttons, self)
         box.setTextFormat(Qt.PlainText)
         box.setText(self._soft_break(str(text)))
-        lbl=box.findChild(QLabel)
+        # 消息文本标签按对象名取：QMessageBox 内有两个 QLabel，
+        # 无名 findChild 会先命中图标（qt_msgboxex_icon_label），限宽就加错了地方
+        # （图标被限宽、消息文本不限 → 长文本把对话框撑到上千像素，文字被挤到右半边）。
+        lbl=box.findChild(QLabel, "qt_msgbox_label")
         if lbl is not None:
             lbl.setWordWrap(True)
             lbl.setMaximumWidth(600)

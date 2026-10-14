@@ -1607,11 +1607,63 @@ def verify_fingerprint(work: str, fmt: str, config, preset=None, xml_files=None,
     return fp if isinstance(fp, str) and fp else None
 
 
+def verify_summary_tokens(rp) -> str:
+    """单本报告的摘要数字串（上游 `1[fmt=OK(mi/ex)]` 形；调用方自加外层 `[]`）。
+
+    优先取报告内上游总结行（`[id] N format: …`）`format:` 后的原文片段；
+    无总结行（老独立窗报告）时按 json/trial 判读合成：`fmt=OK(mi/ex)` /
+    `fmt=FAIL(mi/ex)`（缺数全未知则不带括号）、未定按原因
+    `NO_BASELINE` / `NOGEN` / `COVERED`（未知原因跳过）；序号按格式名排序。
+    无数据返回 ""。
+    """
+    import re as _re
+    try:
+        text = Path(rp).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    for raw in text.splitlines():
+        if "format:" not in raw:
+            continue
+        m = _re.match(r"^\[([^\]]+)\]\s+\d+\s+format:\s*(.*)$", raw.strip())
+        if m and parse_work_summary_line(raw):
+            seg = m.group(2).strip()
+            if seg:
+                return seg
+    # 合成回退：无上游总结行时用已判读数据（覆盖消解前的原始结论，
+    # 被覆盖项如实记 COVERED，不冒充 OK）
+    raw_status = verify_report_formats(rp)
+    pending = verify_report_pending(rp) or {}
+    nums = verify_report_numbers(rp)
+    toks = []
+    for f in sorted(set(raw_status) | {k for k in pending if k}):
+        v = raw_status.get(f)
+        if v is True or v is False:
+            mi, ex = nums.get(f, (None, None))
+            tag = "OK" if v else "FAIL"
+            if mi is None and ex is None:
+                toks.append(f"{f}={tag}")
+            else:
+                ms = "?" if mi is None else mi
+                es = "?" if ex is None else ex
+                toks.append(f"{f}={tag}({ms}/{es})")
+            continue
+        r = pending.get(f)
+        if r == "no baseline":
+            toks.append(f"{f}=NO_BASELINE")
+        elif r == "gen not found":
+            toks.append(f"{f}=NOGEN")
+        elif isinstance(r, str) and (r == "covered" or r.startswith("covered:")):
+            toks.append(f"{f}=COVERED")
+    return ", ".join(f"{i}[{t}]" for i, t in enumerate(toks, 1))
+
+
 def write_verify_summary(vdir, coll_name=None, works=None, skipped=None):
     """合并校验目录下全部单本报告为总报告（固定名覆盖写；无报告返回 None）。
 
     摘要行文与 `_do_import_verified` 一致（通过列格式、未通过带缺/多 numbers、
     未判定带原因），只读报告不搬产物；全文区按 stem 排序拼接各报告原文。
+    每条摘要行末附数字串 `[{verify_summary_tokens}]`（如通过行
+    `T0099 通过（docx/epub）[1[docx=OK(0/0)], 2[epub=OK(1/2)]]`）。
     works 非空时只汇总这些 work 的报告（跳过复用项的旧报告不计入，避免误读）；
     skipped 为本次复用旧校验（源未变、未重验）的条目 [(work, [fmt…])]，单独列在摘要
     （不属于本次实校的书，故不计入「共 N 部」）。
@@ -1662,18 +1714,20 @@ def write_verify_summary(vdir, coll_name=None, works=None, skipped=None):
                 _r = _pending_reason(_f, pending)
                 out.append(f"{_f}{_r}" if _r != "未判定" else _f)
             return out
+        _toks = verify_summary_tokens(rp)
+        _bracket = f" [{_toks}]" if _toks else ""
         if passed and not bad:
             tail = f"；未入 {'/'.join(_num(f) for f in undet)}" if undet else ""
-            ok_lines.append(f"{label} 通过（{'/'.join(passed)}）{tail}")
+            ok_lines.append(f"{label} 通过（{'/'.join(passed)}）{tail}{_bracket}")
         elif bad:
             tail = ""
             if undet:
                 tail = f"；未入 {'/'.join(_num(f) for f in undet)}"
-            fail_lines.append(f"{label} 校验未通过（{'/'.join(_num(f) for f in bad)}）{tail}")
+            fail_lines.append(f"{label} 校验未通过（{'/'.join(_num(f) for f in bad)}）{tail}{_bracket}")
         else:
             rs = _rs(undet)
             suffix = f"（{'/'.join(rs)}）" if rs else ""
-            undet_lines.append(f"{label} 未判定{suffix}")
+            undet_lines.append(f"{label} 未判定{suffix}{_bracket}")
         bodies.append(f"===== {label}（{rp.name}）=====\n{text.rstrip()}")
     total = len(reports)
     skip_lines = []

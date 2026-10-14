@@ -427,6 +427,28 @@ class WrapProgressTest(unittest.TestCase):
     def test_soft_break_inserts_zwsp(self):
         self.assertEqual(MainWindow._soft_break("E:\\a/b"), "E:\\\u200ba/\u200bb")
 
+    def test_wrap_box_caps_message_label_not_icon(self):
+        # 回归：无名 findChild(QLabel) 先命中图标标签，600px 限宽加错地方，
+        # 长文本把对话框撑到上千像素、文字被挤到右半边
+        from PySide6.QtWidgets import QLabel, QMessageBox
+        seen = []
+        real_exec = QMessageBox.exec
+        QMessageBox.exec = lambda self: seen.append(self) or QMessageBox.Rejected
+        try:
+            self.win._wrap_box(QMessageBox.Question, "人工检验",
+                               "有 1 个格式未通过校验" * 10,
+                               QMessageBox.Yes | QMessageBox.No)
+        finally:
+            QMessageBox.exec = real_exec
+        self.assertEqual(len(seen), 1)
+        msg = seen[0].findChild(QLabel, "qt_msgbox_label")
+        self.assertIsNotNone(msg)
+        self.assertTrue(msg.wordWrap())
+        self.assertEqual(msg.maximumWidth(), 600)
+        icon = seen[0].findChild(QLabel, "qt_msgboxex_icon_label")
+        if icon is not None:   # 图标标签保持默认，不被误伤
+            self.assertEqual(icon.maximumWidth(), 16777215)
+
     def test_progress_log_wraps(self):
         from PySide6.QtWidgets import QTextBrowser
         dlg, update, pstate = self.win._make_progress("t", 1)

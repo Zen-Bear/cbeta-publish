@@ -383,6 +383,12 @@
   全程无事件泵。修法：进度窗先行（`_send_coll_to_verify`/`_ensure_xml_batch` 均先建窗，
   准备/重制逐单元 `update` 泵事件＋可取消，阶段切换 `_progress_reset`）；
   生效预设本轮快照一次复用（`verify_fingerprint(eff=, wrap=)`，调用方管包装生命周期）。
+- [x] 询问框文字挤右半边：`_wrap_box` 的无名 `findChild(QLabel)` 先命中图标标签，
+  600px 限宽加错地方、消息文本不限 → 长文本撑宽对话框。改按对象名
+  `qt_msgbox_label` 取消息文本标签（图标标签不再被误伤）。
+- [x] 校验报告摘要行加数字：每条摘要行末附 `[{verify_summary_tokens}]`
+  （如 `T0099 通过（docx/epub）[1[docx=OK(0/0)], 2[epub=OK(1/2)]]`）；
+  上游总结行原文优先，老报告按判读合成（缺数全未知不带括号、被覆盖记 `COVERED`）。
 - [x] 「批处理报告」页：批量更新/合并后写入（首行标题＋落盘报告链接＋逐部状态行）；
   报告落盘时给 `批量更新报告.txt`/`批量合并报告.txt` 可点链接；批量合并完成切到本页。
 - [x] 批量处理对话框选项记忆：`BatchDialog.state()`/`apply_state()`；主窗口
