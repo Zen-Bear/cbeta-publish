@@ -41,12 +41,19 @@ class VerifyWorker(QThread):
                 _work = split_entry(w)[0]
                 self.progress.emit(i - 1, f"生成并校验 {w} ...", "run")
                 wf = self.works_fmts.get(w, self.fmts) if self.works_fmts else self.fmts
+                _spec = self.works_juan.get(w, "")
+                try:
+                    _jlab = b.juan_label(self.config, _spec) if _spec else ""
+                except Exception:
+                    _jlab = ""
                 report = b.verify_work(_work, wf, self.out_dir, self.config,
                                        preset=self.preset, stop=lambda: self._stop,
-                                       juan=self.works_juan.get(w, ""))
+                                       juan=_spec)
                 # 同一 work 可能有多个语义产物（如 TX0011 上/中下）：聚合全部相关报告，
-                # 避免只看最新一份而漏判另一份。
-                reports = b.work_verify_reports(self.out_dir, _work, primary=report)
+                # 避免只看最新一份而漏判另一份；同时按卷隔离——同书多卷子集的报告
+                # 目录并存时，只聚合本次卷的（`（卷…）（验证）` 后缀，整本为 ""）。
+                reports = b.work_verify_reports(self.out_dir, _work, primary=report,
+                                                juan=_jlab)
                 fmts_status = {}
                 pending_all = {}
                 scopes = {}

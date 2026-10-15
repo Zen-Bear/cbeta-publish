@@ -851,6 +851,36 @@ class VerifySendImportTest(unittest.TestCase):
         self.assertEqual(seen.get("T0349"), "2-3")
         self.assertEqual(seen.get("T0001"), "")
 
+    def test_worker_aggregation_scoped_by_juan(self):
+        # 同书多卷子集并存：各卷只聚合自己卷的报告（卷14 过、卷44 败，互不污染）
+        from cbeta_publish.books.verify_worker import VerifyWorker
+        import cbeta_publish.books.xml2pdf_bridge as b
+        out = self.tmp / "juan-aggr"
+        root = out / b.VERIFY_ROOT_NAME
+        rp14 = root / "T0349 大乘論（卷14）（验证）" / "T0349_大乘論_校验报告.txt"
+        rp44 = root / "T0349 大乘論（卷44）（验证）" / "T0349_大乘論_校验报告.txt"
+        for rp in (rp14, rp44):
+            rp.parent.mkdir(parents=True, exist_ok=True)
+        rp14.write_text("[T0349] 1 format: 1[docx=OK(0/0)]\n", encoding="utf-8")
+        rp44.write_text("[T0349] 1 format: 1[docx=FAIL(3/1)]\n", encoding="utf-8")
+        real = b.verify_work
+
+        def fake(work, fmts, out_dir, config, preset=None, stop=None, juan=None):
+            return rp14 if juan == "14" else rp44
+
+        b.verify_work = fake
+        done = {}
+        try:
+            w = VerifyWorker(["T0349:14", "T0349:44"], ["docx"], out, self.win.config,
+                             works_juan={"T0349:14": "14", "T0349:44": "44"})
+            w.finished_all.connect(
+                lambda ok, tot, fl: done.update(ok=ok, tot=tot, fl=list(fl)))
+            w.run()
+        finally:
+            b.verify_work = real
+        self.assertNotIn("T0349:14", done.get("fl") or [])   # 卷14 只看自己卷 → 通过
+        self.assertIn("T0349:44", done.get("fl") or [])      # 卷44 失败
+
     def test_send_clears_worker_ref(self):
         # 跑完不断开/不释放线程对象会导致野指针：_verify_worker 必须复位
         win = self.win

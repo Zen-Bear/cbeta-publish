@@ -4360,17 +4360,18 @@ class MainWindow(QMainWindow):
         if _stats:
             parts.append(_html.escape(_stats))
         line=_html.escape(summary)
-        if out_dir is not None:
-            try:
-                dp=Path(out_dir)
-                href=_QU.fromLocalFile(str(dp.resolve())).toString()
-                line+=f' <a href="{href}">{_html.escape(str(dp))}</a>'
-            except Exception:
-                pass
         if ok is not None:
             _color="#1a7f37" if ok else "#c0392b"
             line=f'<span style="color:{_color}">{line}</span>'
         parts.append(line)
+        if out_dir is not None:
+            # 输出目录单独一行（不挤在总结行尾）
+            try:
+                dp=Path(out_dir)
+                href=_QU.fromLocalFile(str(dp.resolve())).toString()
+                parts.append(f'<a href="{href}">{_html.escape(str(dp))}</a>')
+            except Exception:
+                pass
         if convert_path is not None:
             try:
                 cp=Path(convert_path)
@@ -5425,9 +5426,9 @@ class MainWindow(QMainWindow):
             failed=st.get("failed") or []
             if failed:
                 QMessageBox.warning(self, "下载失败", f"{len(failed)} 个文件下载失败：\n" + "\n".join(failed[:10]) + (f"\n...共 {len(failed)} 个" if len(failed)>10 else ""))
-            summary=f"下载未全部完成 {st.get('ok',0)}/{st.get('total',len(pairs))} →"
+            summary=f"下载未全部完成 {st.get('ok',0)}/{st.get('total',len(pairs))}"
         else:
-            summary=f"下载完成 {st.get('ok',0)}/{st.get('total',len(pairs))} →"
+            summary=f"下载完成 {st.get('ok',0)}/{st.get('total',len(pairs))}"
         self._show_made_books("下载完成", entries, summary, out_dir=dest_dir,
                               ok=bool(ok))
         if _unsupported:
@@ -5478,9 +5479,9 @@ class MainWindow(QMainWindow):
         elif failed:
             self._wrap_box(QMessageBox.Warning, "部分失败",
                            f"完成 {n} 部，失败 {len(failed)}：\n" + "\n".join(failed[:10]))
-            summary=f"生成完成 {n} 部，失败 {len(failed)}{_short_txt} →"
+            summary=f"生成完成 {n} 部，失败 {len(failed)}{_short_txt}"
         else:
-            summary=f"{'重制' if regen_all else '生成'}完成 {n} 部{_short_txt} →"
+            summary=f"{'重制' if regen_all else '生成'}完成 {n} 部{_short_txt}"
         _conv_path=None
         if xml2pdf_bridge.convert_report_enabled(self.config):
             _conv_path=xml2pdf_bridge.write_convert_summary(
@@ -6155,13 +6156,28 @@ class MainWindow(QMainWindow):
                     pass
                 _wrap = None
         works_juan={e: self._entry_juan(e).replace("、", ",") for e in works}   # 条目→卷（CLI 用 `,`）
-        if not works_to_verify:
+        import html as _html
+        def _dirlink(p):
+            from PySide6.QtCore import QUrl as _QU
+            return (f'<a href="{_QU.fromLocalFile(str(Path(p).resolve())).toString()}">'
+                    f'{_html.escape(str(p))}</a>')
+        def _flink(p):
+            from PySide6.QtCore import QUrl as _QU
+            return (f'<a href="{_QU.fromLocalFile(str(Path(p).resolve())).toString()}">'
+                    f'{_html.escape(Path(p).name)}</a>')
+        def _warn(s):
+            return f'<span style="color:#c62828;">{_html.escape(s)}</span>'
+        if not works_to_verify and not (regen_all and reuse):
+            # 自制（regen_all=False）全部新鲜：无事可做
             self._progress_close(dlg)
             self.detail.setText(f"全部 {len(skipped)} 部已通过校验（源未变），无需重验")
             return
         regen_failed=[]
+        _made_entries=[]
         if regen_all and reuse:
             # 新鲜项：重生成但跳过校验（输入未变，原结论仍成立）
+            # 注意：重制即使**全部**新鲜也要走这里（不得提前 return，
+            # 否则"重制=全部重新生成"落空且弹窗静默退出；2026-10-14 用户报告）
             _regen_total=max(1, sum(len(ff) for _w, ff in skipped))
             self._progress_reset(dlg, _regen_total)
             update(0, f"新鲜项重生成（跳过校验）{len(skipped)} 部…")
@@ -6182,6 +6198,9 @@ class MainWindow(QMainWindow):
                         out=None
                     if out is None or not out.exists():
                         regen_failed.append(f"{w}.{f} 重生成失败")
+                    else:
+                        for _p in _b.find_all_built_entry(_work, f, base_dir, _lab):
+                            _made_entries.append((w, f, _p))
                     if not update(_dn, f"重制 {w} [{f}]…"):
                         _cancelled_regen=True
                         break
@@ -6191,6 +6210,21 @@ class MainWindow(QMainWindow):
                 self._progress_close(dlg)
                 self.detail.setText("已取消（重制阶段，已重制部保留）")
                 return
+        if not works_to_verify:
+            # 重制且全部新鲜：只重生成、不校验（源未变，旧结论仍成立）。
+            # 给收尾总结＋「自制报告」页，不静默关窗。
+            _line=(f"重制完成 {len(skipped)} 部（源未变，本次跳过校验）")
+            _summary=[_line, "自制书目录：" + _dirlink(base_dir)]
+            if regen_failed:
+                _summary.append(_warn(
+                    f"重生成失败（环境） {len(regen_failed)}："
+                    + "、".join(regen_failed[:10])))
+            pstate["finish"](_summary)
+            self._load_coll_works()
+            self._show_made_books("重制完成", _made_entries, _line,
+                                  out_dir=base_dir, ok=not regen_failed, made=True)
+            self.detail.setText(_line)
+            return
         slug=str(d.get("id") or d.get("name") or "")
         vdir=_b.verify_coll_dir(self.config, slug)
         try:
@@ -6259,17 +6293,6 @@ class MainWindow(QMainWindow):
                                         {"inputs": _inputs, "product": _dest,
                                          "juan": _lab,
                                          "accept": _tiers.get((w, f), "strict")})
-        import html as _html
-        def _dirlink(p):
-            from PySide6.QtCore import QUrl as _QU
-            return (f'<a href="{_QU.fromLocalFile(str(Path(p).resolve())).toString()}">'
-                    f'{_html.escape(str(p))}</a>')
-        def _flink(p):
-            from PySide6.QtCore import QUrl as _QU
-            return (f'<a href="{_QU.fromLocalFile(str(Path(p).resolve())).toString()}">'
-                    f'{_html.escape(Path(p).name)}</a>')
-        def _warn(s):
-            return f'<span style="color:#c62828;">{_html.escape(s)}</span>'
         summary=[f"校验完成 {result['ok']}/{total}"]
         if skipped:
             summary.append(f"跳过已通过 {len(skipped)} 部（源未变）")

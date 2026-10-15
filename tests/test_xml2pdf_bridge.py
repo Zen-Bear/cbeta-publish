@@ -67,6 +67,64 @@ class BridgeConvertLibTest(unittest.TestCase):
         self.assertFalse(nested.exists())     # 新布局已清
         self.assertTrue(old_top.exists())     # 顶层旧目录保留
 
+    def test_verify_work_cleanup_scoped_by_juan(self):
+        # 卷子集：跑某卷只清该卷的旧目录，绝不碰同书其它卷与整本目录
+        # （2026-10-14 实锤：同书多卷挨个校验时，裸 {work}*（验证） 会互相删除，
+        # 批量导入只剩最后一卷 → 不记库 → 永远无法复用）
+        import cbeta_publish.books.xml2pdf_bridge as b
+        out = self.dir / "vj2"
+        root = out / b.VERIFY_ROOT_NAME
+        d14 = root / "T0349 大乘論（卷14）（验证）"
+        d44 = root / "T0349 大乘論（卷44）（验证）"
+        dw = root / "T0349 大乘論（验证）"
+        for d in (d14, d44, dw):
+            d.mkdir(parents=True)
+            (d / "old.txt").write_bytes(b"o")
+        real = b._run_cli
+        try:
+            b._run_cli = lambda argv: 0
+            b.verify_work("T0349", ["pdf"], out, self.cfg, juan="14")
+            self.assertFalse(d14.exists())   # 同卷旧目录已清
+            self.assertTrue(d44.exists())    # 其它卷保留
+            self.assertTrue(dw.exists())     # 整本目录保留
+            b.verify_work("T0349", ["pdf"], out, self.cfg)   # 整本
+        finally:
+            b._run_cli = real
+        self.assertFalse(dw.exists())        # 整本旧目录已清
+        self.assertTrue(d44.exists())        # 卷子集仍保留
+
+    def test_work_verify_reports_filters_by_juan(self):
+        # 同书多卷报告并存：按卷标签隔离（report.json 优先、回退目录后缀）；
+        # 整本（""）与子集互不混入
+        import json as _json
+        import cbeta_publish.books.xml2pdf_bridge as b
+        out = self.dir / "vw"
+        root = out / b.VERIFY_ROOT_NAME
+
+        def _mk(dir_name, label=None):
+            d = root / dir_name
+            d.mkdir(parents=True)
+            rp = d / "T0349_大乘論_校验报告.txt"
+            rp.write_text("[T0349] 1 format: 1[docx=OK(0/0)]\n", encoding="utf-8")
+            if label is not None:
+                (d / "report.json").write_text(_json.dumps(
+                    {"schema": 1, "work": "T0349",
+                     "juan": {"segments": [[14, 14]], "label": label},
+                     "fmts": {"docx": {"verdict": "pass"}}}), encoding="utf-8")
+            return rp
+        rp14 = _mk("T0349 大乘論（卷14）（验证）", "14")
+        _mk("T0349 大乘論（卷44）（验证）", "44")
+        rp36 = _mk("T0349 大乘論（卷36）（验证）", None)    # 无 json：按目录后缀
+        rpw = _mk("T0349 大乘論（验证）", None)
+        got = b.work_verify_reports(out, "T0349", primary=rp14, juan="14")
+        self.assertEqual([p.parent.name for p in got], ["T0349 大乘論（卷14）（验证）"])
+        got2 = b.work_verify_reports(out, "T0349", primary=rp36, juan="36")
+        self.assertEqual([p.parent.name for p in got2], ["T0349 大乘論（卷36）（验证）"])
+        got3 = b.work_verify_reports(out, "T0349", primary=rpw, juan="")
+        self.assertEqual([p.parent.name for p in got3], ["T0349 大乘論（验证）"])
+        self.assertEqual(b.report_juan_label(rp14), "14")
+        self.assertEqual(b.report_juan_label(rpw), "")
+
     def test_id_juan_arg(self):
         import cbeta_publish.books.xml2pdf_bridge as b
         self.assertEqual(b._id_juan_arg("T0349", "2-3"), "T0349:2-3")

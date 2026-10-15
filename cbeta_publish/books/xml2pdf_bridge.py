@@ -756,11 +756,23 @@ def verify_work(work: str, fmts, out_dir, config: dict, preset=None, stop=None,
     _ensure_path(str(x2p))
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    # 清新版布局 `{out}/验证/` 下本书旧的 `（验证）` 目录，避免新旧报告混淆
-    # （顶层旧目录保留，供旧报告兼容读取）
+    # 清新版布局 `{out}/验证/` 下**本次同一目标**的旧 `（验证）` 目录，避免新旧报告混淆
+    # （顶层旧目录保留，供旧报告兼容读取）。必须按卷隔离：同一部书的不同卷子集各有
+    # 自己的报告目录（同名报告、仅目录卷后缀不同），跑某卷时误删同书其它卷的目录，
+    # 会让那些卷的报告来不及被批量导入读取——不记库 → 永远无法复用，且每次只留
+    # 最后一卷（2026-10-14 实锤：T0279 五卷齐验后仅剩卷44）。
     try:
         import shutil as _sh
-        for d in (out_dir / VERIFY_ROOT_NAME).glob(f"{work}*（验证）"):
+        _root = out_dir / VERIFY_ROOT_NAME
+        _lab = juan_label(config, juan) if str(juan or "").strip() else ""
+        if _lab:
+            _targets = _root.glob(f"{work}*（卷{_lab}）（验证）")
+        else:
+            # 整本：不碰卷子集目录（`…（卷…）（验证）` 属其它目标）
+            _targets = [d for d in _root.glob(f"{work}*（验证）")
+                        if not re.search(r"（卷[^）]*）$",
+                                         d.name[:-len("（验证）")])]
+        for d in _targets:
             _sh.rmtree(d, ignore_errors=True)
     except Exception:
         pass
@@ -923,17 +935,39 @@ def _verify_stem_matches(stem: str, work: str) -> bool:
             or stem.startswith(work + "_"))
 
 
-def work_verify_reports(out_dir, work: str, primary=None):
-    """某 work 在校验目录中的全部相关报告（同一 work 的不同语义产物各保留）。
+def report_juan_label(report_path) -> str:
+    """报告对应的规范卷标签：配对 `report.json` 优先，其次目录名 `（卷…）` 后缀；
+    整本返回 ""。供卷子集报告在"同书多卷共存"时互相区分。"""
+    try:
+        lab = verify_json_juan(report_path) or ""
+    except Exception:
+        lab = ""
+    if lab:
+        return lab
+    parent = Path(report_path).parent.name
+    if parent.endswith("（验证）"):
+        m = re.search(r"（卷([^）]*)）$", parent[:-len("（验证）")])
+        if m:
+            return m.group(1).strip()
+    return ""
 
-    `primary` 是本次 `verify_work` 返回的报告：即使它不在标准扫描命名里
-    （测试替身常见），也一并纳入，避免聚合时漏掉。没有本次报告时不回退
-    扫描旧报告，避免把旧报告当作本次结论。
+
+def work_verify_reports(out_dir, work: str, primary=None, juan: str = ""):
+    """某 work 在校验目录中的全部相关报告（同一 work 的不同语义产物各保留；
+    按卷隔离）。
+
+    `juan` 为本次条目的规范卷标签（`juan_label`；整本 ""）：只收卷标签一致的
+    报告——同一部书的多卷子集报告文件名相同、仅目录卷后缀不同，不隔离会把
+    其它卷的结论混进本次判定。`primary` 是本次 `verify_work` 返回的报告：
+    不参与卷过滤、始终纳入（测试替身常见不在标准扫描命名里）；没有本次报告时
+    不回退扫描旧报告，避免把旧报告当作本次结论。
     """
     if primary is None:
         return []
+    want = str(juan or "")
     matches = [p for p, stem in verify_reports(out_dir)
-               if _verify_stem_matches(stem, work)]
+               if _verify_stem_matches(stem, work)
+               and report_juan_label(p) == want]
     if all(Path(p) != Path(primary) for p in matches):
         matches.append(Path(primary))
     return matches

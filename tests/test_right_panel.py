@@ -974,6 +974,21 @@ class MadeBooksInfoTest(unittest.TestCase):
         self.assertEqual(win.tab_bottom.currentIndex(), 0)     # 切到书籍信息页
         self.assertEqual(win.detail_scroll.verticalScrollBar().value(), 0)   # 回到第一行
 
+    def test_show_made_books_dir_on_own_line(self):
+        # 输出目录单独一行（不挤在总结行尾；2026-10-14 用户报告）
+        win = self.win
+        d = self.tmp / "dirline"
+        d.mkdir(exist_ok=True)
+        p1 = d / "T0001.pdf"
+        p1.write_bytes(b"x")
+        win._show_made_books("生成完成", [("T0001", "pdf", p1)],
+                             "生成完成 1 部", out_dir=d, made=True)
+        lines = win.made_detail.text().split("<br>")
+        self.assertEqual(lines[0], "1 部 x 1 格式 (pdf) = 1 部")
+        self.assertEqual(lines[1], "生成完成 1 部")
+        self.assertTrue(lines[2].startswith('<a href='), lines[2])   # 目录独占一行
+        self.assertIn("dirline", lines[2])
+
     def test_report_tabs_use_visible_scrollbar_style(self):
         # Windows 11 原生滚动条是无轨道细圆点、几乎不可见 → 报告页套经典可见样式
         win = self.win

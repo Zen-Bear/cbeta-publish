@@ -334,6 +334,36 @@ class VerifyReuseFlowTest(unittest.TestCase):
         self.assertEqual(calls, ["T0001", "T0002"])   # 全流程照常跑完
         self.assertEqual(len(eff_calls), 1)           # 生效预设只算一次
 
+    def test_remake_all_fresh_regenerates_and_finishes(self):
+        # 重制全新鲜：仍全部重生成（跳过校验），弹窗给收尾总结＋自制报告，不静默退出
+        import cbeta_publish.books.xml2pdf_bridge as b
+        from cbeta_publish.books import verify_cache as vc
+        win = self.win
+        self._stub_fingerprint()
+        base = Path(win.config["xml_to_ebooks_dir"])
+        (base / "pdf").mkdir(parents=True)
+        for w in ("T0001", "T0002"):
+            (base / "pdf" / f"{w}.pdf").write_bytes(b"x")
+            vc.record_pass(self._records_path(), w, "pdf", f"fp-{w}-pdf")
+        calls = []
+        real_ensure = b.ensure_one
+        b.ensure_one = lambda work, fmt, *a, **k: (
+            calls.append((work, fmt, bool(k.get("regen_all"))))
+            or (base / fmt / f"{work}.{fmt}", False))
+        boxes, finishes, restore = self._patch_common()
+        try:
+            win._send_coll_to_verify(regen_all=True)
+        finally:
+            b.ensure_one = real_ensure
+            restore()
+        self.assertEqual(sorted(calls),
+                         [("T0001", "pdf", True), ("T0002", "pdf", True)])
+        self.assertEqual(len(finishes), 1)                    # 弹窗收尾（不静默退出）
+        self.assertTrue(any("重制完成" in str(x) for x in finishes[0]), finishes[0])
+        self.assertIn("重制完成", win.detail.text())
+        self.assertIn("重制完成", win.made_detail.text())      # 自制报告页
+        self.assertIsNone(win._verify_worker)                 # 未启动校验线程
+
     def test_stale_only_verifies_stale(self):
         import cbeta_publish.books.xml2pdf_bridge as b
         from cbeta_publish.books import verify_cache as vc
