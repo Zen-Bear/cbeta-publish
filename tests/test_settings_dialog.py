@@ -239,6 +239,141 @@ class SettingsDialogTest(unittest.TestCase):
                 self.assertEqual(w.text(), want, (r, c))
                 self.assertIn(want, w.toolTip())
 
+    def test_update_table_height_fits_content(self):
+        # 表格高度按内容定（不参与拉伸），给下方「检查状态」让出空间
+        dlg = self._dlg()
+        try:
+            self.assertGreaterEqual(dlg.tbl.rowCount(), 1)
+            self.assertLessEqual(dlg.tbl.maximumHeight(), 320)
+            # setFixedHeight：min == max
+            self.assertEqual(dlg.tbl.minimumHeight(), dlg.tbl.maximumHeight())
+        finally:
+            dlg.close()
+
+    def test_update_status_box_logs_progress(self):
+        # 灰字搬家：进度逐行写进「检查状态」只读文本框；结束行含汇总
+        from unittest import mock
+        from PySide6.QtWidgets import QPlainTextEdit, QMessageBox
+        import cbeta_publish.books.remote_manager as rm_mod
+        dlg = self._dlg()
+        try:
+            self.assertIsInstance(dlg.upd_status, QPlainTextEdit)
+            self.assertTrue(dlg.upd_status.isReadOnly())
+
+            class FakeRM:
+                def __init__(self, *a, **k):
+                    pass
+
+                def update_all(self, sources, backup, progress=None):
+                    if progress:
+                        progress("下载 category.json …")
+                        progress("下载 dynasty-works.json …")
+                    return {"category": "updated", "dynasty": "failed"}
+
+            with mock.patch.object(rm_mod, "RemoteManager", FakeRM), \
+                 mock.patch.object(SettingsDialog, "_mulu_diffs", return_value={}), \
+                 mock.patch.object(QMessageBox, "information",
+                                   staticmethod(lambda *a, **k: None)):
+                dlg._check_update()
+            txt = dlg.upd_status.toPlainText()
+            self.assertIn("下载 category.json", txt)
+            self.assertIn("下载 dynasty-works.json", txt)
+            self.assertIn("完成：更新 1 项，失败 1 项", txt)
+            self.assertIn("失败：dynasty", txt)
+        finally:
+            dlg.close()
+
+    def test_update_tab_has_mulu_diff_button(self):
+        # 「查看目录变更…」按钮在更新源页签（明细弹窗入口）
+        from PySide6.QtWidgets import QPushButton
+        dlg = self._dlg()
+        try:
+            texts = [b.text() for b in dlg.findChildren(QPushButton)]
+            self.assertIn("查看目录变更…", texts)
+        finally:
+            dlg.close()
+
+    def test_mulu_diffs_with_injected_paths(self):
+        # 路径可注入：备份（旧）与当前（新）都指向临时目录，不碰真实 mulu
+        import json
+        from pathlib import Path
+        dlg = self._dlg()
+        tmp = Path(tempfile.mkdtemp())
+        try:
+            last = tmp / "last"
+            new = tmp / "new"
+            last.mkdir()
+            new.mkdir()
+            (last / "category.json").write_text(
+                json.dumps([{"title": "選擇全部", "children": [
+                    {"title": "T0001 舊", "key": "T0001"}]}], ensure_ascii=False),
+                encoding="utf-8")
+            (new / "category.json").write_text(
+                json.dumps([{"title": "選擇全部", "children": [
+                    {"title": "T0001 舊", "key": "T0001"},
+                    {"title": "T0002 新", "key": "T0002"}]}], ensure_ascii=False),
+                encoding="utf-8")
+            diffs = dlg._mulu_diffs(keys={"category"}, last_dir=last,
+                                    new_of=lambda rel: new / Path(rel).name)
+            self.assertEqual(list(diffs), ["category"])
+            self.assertEqual(diffs["category"]["added"][0],
+                             ("T2", "T0002 新"))
+        finally:
+            dlg.close()
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_mulu_diff_dialog_lists_works(self):
+        # 弹窗明细：按源分组列出新增经（可复制文本）
+        from unittest import mock
+        from PySide6.QtWidgets import QPlainTextEdit
+        dlg = self._dlg()
+        try:
+            diffs = {"category": {"key": "category",
+                                  "added": [("T220", "T0220 大般若波羅蜜多經")],
+                                  "removed": [], "renamed": [], "counts": (1, 0, 0)}}
+            with mock.patch.object(SettingsDialog, "_mulu_diffs", return_value=diffs):
+                d = dlg._mulu_diff_dialog()
+            try:
+                ed = d.findChild(QPlainTextEdit)
+                txt = ed.toPlainText()
+                self.assertTrue(ed.isReadOnly())
+                self.assertIn("+ T0220 大般若波羅蜜多經", txt)
+                self.assertIn("合计（跨源去重）：新增经 1 部", txt)
+            finally:
+                d.close()
+        finally:
+            dlg.close()
+
+    def test_check_update_appends_mulu_diff_summary(self):
+        # 更新完在「检查状态」追加目录变更摘要；未变的源单列一行
+        from unittest import mock
+        from PySide6.QtWidgets import QMessageBox
+        import cbeta_publish.books.remote_manager as rm_mod
+        dlg = self._dlg()
+        try:
+            class FakeRM:
+                def __init__(self, *a, **k):
+                    pass
+
+                def update_all(self, sources, backup, progress=None):
+                    return {"category": "updated", "vol": "unchanged"}
+
+            diffs = {"category": {"key": "category",
+                                  "added": [("T220", "T0220 大般若波羅蜜多經")],
+                                  "removed": [], "renamed": [], "counts": (1, 0, 0)}}
+            with mock.patch.object(rm_mod, "RemoteManager", FakeRM), \
+                 mock.patch.object(SettingsDialog, "_mulu_diffs", return_value=diffs), \
+                 mock.patch.object(QMessageBox, "information",
+                                   staticmethod(lambda *a, **k: None)):
+                dlg._check_update()
+            txt = dlg.upd_status.toPlainText()
+            self.assertIn("—— 目录变更（对比上次更新前的备份）——", txt)
+            self.assertIn("category.json（部类）：新增 1、删除 0、改名 0", txt)
+            self.assertIn("新增经 1 部：T0220 大般若波羅蜜多經", txt)
+            self.assertIn("本次未变（未纳入对比）：vol.json", txt)
+        finally:
+            dlg.close()
+
     def test_dirs_tab_scrolls_not_grows_dialog(self):
         # 数据/输出页包 QScrollArea：内容再长对话框也不撑高
         from PySide6.QtWidgets import QScrollArea, QTabWidget

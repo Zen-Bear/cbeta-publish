@@ -511,7 +511,7 @@ class MergeXmlSourceTest(unittest.TestCase):
         self.assertEqual(ok_map["pdf"]["T0220:479"], [one])
 
     def test_ensure_xml_batch_popup_counts_lines(self):
-        # 自制弹窗：首行=计划每格式本数；收尾行前=实际每格式本数
+        # 自制弹窗：首行=计划（按作品数，不给总数）；收尾行前=实际每格式本数
         import cbeta_publish.books.xml2pdf_bridge as b
         win = self.win
         out_dir = self._xml_env()
@@ -539,10 +539,56 @@ class MergeXmlSourceTest(unittest.TestCase):
         finally:
             win._make_progress = real_mp
             b.work_source_files, b.ensure_products = real_src, real_ens
-        self.assertEqual(labels[0], "1 部 x 2 格式 (pdf+epub) = 2 部")   # 计划
-        self.assertIn("1 部 x 2 格式 (pdf+epub) = 2 部", finished)      # 实际
-        self.assertIn("完成 2/2", finished[-1])
-        self.assertIn("#1a7f37", finished[-1])                         # 全成功→绿
+        self.assertEqual(labels[0], "计划：1 部 x 2 格式 (pdf+epub)")        # 计划
+        self.assertIn("1 部 x 2 格式 (pdf+epub) = 2 部", finished)          # 实际
+        self.assertIn("完成 1/1 部（产出 2 个文件）", finished[-1])          # 作品 1、文件 2
+        self.assertIn("#1a7f37", finished[-1])                              # 全成功→绿
+
+    def test_ensure_xml_batch_plan_counts_works_not_sources(self):
+        # 计划/完成度按作品计，不按源 XML 数：多册作品一部两文件时，
+        # 计划行仍是「2 部」、完成行是「2/2 部（产出 3 个文件）」——
+        # 不再出现「完成 3/2」这类分子分母不同单位的读法。
+        import cbeta_publish.books.xml2pdf_bridge as b
+        win = self.win
+        out_dir = self._xml_env()
+        d = out_dir / "pdf"
+        d.mkdir(parents=True, exist_ok=True)
+        a1, a2, b1 = d / "A0001 上.pdf", d / "A0001 下.pdf", d / "A0002.pdf"
+        for p in (a1, a2, b1):
+            p.write_bytes(b"x")
+        src = {out_dir / "A01n0001.xml", out_dir / "A02n0001.xml",
+               out_dir / "A01n0002.xml"}
+        self.assertEqual(len(src), 3)       # 夹具：2 部共 3 个源
+        real_src, real_ens = b.work_source_files, b.ensure_products
+        b.work_source_files = lambda config, work: (
+            [out_dir / "A01n0001.xml", out_dir / "A02n0001.xml"]
+            if work == "A0001" else [out_dir / "A01n0002.xml"])
+        b.ensure_products = lambda w, fmt, base, config, **k: (
+            ([a1, a2], True) if w == "A0001" else ([b1], True))
+        labels, finished = [], []
+        real_mp = win._make_progress
+
+        def fake_mp(title, total):
+            def update(done, label="", is_html=False):
+                if label:
+                    labels.append(str(label))
+                return True
+            return object(), update, {
+                "finish": lambda lines=None: finished.extend(lines or []),
+                "cancel": False}
+        win._make_progress = fake_mp
+        try:
+            ok_map, failed, cancelled, short = win._ensure_xml_batch(
+                ["A0001", "A0002"], ["pdf"])
+        finally:
+            win._make_progress = real_mp
+            b.work_source_files, b.ensure_products = real_src, real_ens
+        self.assertFalse(cancelled)
+        self.assertEqual(failed, [])
+        self.assertEqual(short, [])         # 每部产物数＝源数
+        self.assertEqual(labels[0], "计划：2 部 x 1 格式 (pdf)")
+        self.assertIn("3 部 x 1 格式 (pdf) = 3 部", finished)   # 实际按文件
+        self.assertIn("完成 2/2 部（产出 3 个文件）", finished[-1])
 
     def test_progress_reset_and_close(self):
         from PySide6.QtWidgets import QProgressBar
@@ -568,7 +614,8 @@ class MergeXmlSourceTest(unittest.TestCase):
         self.assertTrue(win._progress_close(None))
 
     def test_ensure_xml_batch_dialog_first(self):
-        # 弹窗先行：源计数开始前进度窗已创建（点击后立刻有反馈）
+        # 弹窗先行：进度窗在生成前创建（点击后立刻有反馈），
+        # 源 XML 计数只在每部转换后做（用于「缺产物」比对）
         import cbeta_publish.books.xml2pdf_bridge as b
         win = self.win
         out_dir = self._xml_env()

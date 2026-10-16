@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (
     QDialog, QTabWidget, QWidget, QFormLayout, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QCheckBox, QPushButton,
     QLabel, QFileDialog, QColorDialog, QMessageBox, QGroupBox,
-    QTableWidget, QTableWidgetItem, QHeaderView, QApplication,
+    QTableWidget, QTableWidgetItem, QHeaderView, QApplication, QPlainTextEdit,
     QListWidget, QListWidgetItem, QRadioButton, QButtonGroup,
 )
 from PySide6.QtCore import Qt, QEvent
@@ -1294,23 +1294,36 @@ class SettingsDialog(QDialog):
         self.tbl.setSelectionBehavior(QTableWidget.SelectRows)
         self.tbl.verticalHeader().setVisible(False)
         self.tbl.verticalHeader().setDefaultSectionSize(28)
-        v.addWidget(self.tbl, 1)
-        self.lbl_upd_log = QLabel("")
-        self.lbl_upd_log.setWordWrap(True)
-        self.lbl_upd_log.setStyleSheet("color: gray;")
-        v.addWidget(self.lbl_upd_log)
+        v.addWidget(self.tbl)          # 高度按内容定（_reload_update_table 里 setFixedHeight），不参与拉伸
+        # 检查状态：占满表格让出的空间；原按钮上方的灰字（进度/结果）搬到这里逐行显示
+        box = QGroupBox("检查状态")
+        _bl = QVBoxLayout(box)
+        _bl.setContentsMargins(8, 6, 8, 6)
+        self.upd_status = QPlainTextEdit()
+        self.upd_status.setReadOnly(True)
+        self.upd_status.setStyleSheet("color: gray;")
+        self.upd_status.setLineWrapMode(QPlainTextEdit.WidgetWidth)
+        self.upd_status.setMaximumBlockCount(1000)
+        self.upd_status.setPlaceholderText("尚未检查（点「立即检查更新」）")
+        _bl.addWidget(self.upd_status)
+        v.addWidget(box, 1)
         row = QWidget()
         h = QHBoxLayout(row)
         h.setContentsMargins(0, 0, 0, 0)
         btn_check = QPushButton("立即检查更新")
         btn_check.clicked.connect(self._check_update)
+        btn_diff = QPushButton("查看目录变更…")
+        btn_diff.setToolTip("当前目录 vs 上次更新前的备份（mulu/backup/last/）：\n"
+                            "只列经的新增/删除/改名（经号＋书名＋卷＋作者）")
+        btn_diff.clicked.connect(self._show_mulu_diff)
         btn_r_orig = QPushButton("恢复原始（目录数据）")
         btn_r_orig.clicked.connect(lambda: self._restore_mulu("original"))
         btn_r_last = QPushButton("恢复上一次（目录数据）")
         btn_r_last.clicked.connect(lambda: self._restore_mulu("last"))
-        h.addWidget(btn_check); h.addWidget(btn_r_orig); h.addWidget(btn_r_last); h.addStretch()
+        h.addWidget(btn_check); h.addWidget(btn_diff)
+        h.addWidget(btn_r_orig); h.addWidget(btn_r_last); h.addStretch()
         v.addWidget(row)
-        hint = QLabel("权威源为 cbdata/stable scope-selector（部类/朝代/作者）；更新前旧文件自动快照到 mulu/backup/last/。")
+        hint = QLabel("权威源为 cbdata/stable scope-selector（部类/朝代/作者）；更新前旧文件自动快照到 mulu/backup/last/——「查看目录变更…」即对比它（只列经的新增/删除/改名）。")
         hint.setStyleSheet("color: gray;")
         hint.setWordWrap(True)
         v.addWidget(hint)
@@ -1347,6 +1360,16 @@ class SettingsDialog(QDialog):
         self.tbl.setColumnWidth(0, 60)
         self.tbl.setColumnWidth(1, 130)
         self.tbl.setColumnWidth(4, 70)
+        # 高度按内容定：表头 + 各行 + 边框；超过上限才出纵向滚动条（给「检查状态」让空间）
+        try:
+            _hh = (self.tbl.horizontalHeader().height()
+                   or self.tbl.horizontalHeader().sizeHint().height())
+            _h = (_hh
+                  + sum(self.tbl.rowHeight(r) for r in range(self.tbl.rowCount()))
+                  + 2 * self.tbl.frameWidth())
+            self.tbl.setFixedHeight(min(int(_h), 320))
+        except Exception:
+            pass
         try:
             import json as _json
             meta = _json.loads((PROJECT_ROOT / "mulu" / "cache" / "meta.json").read_text(encoding="utf-8")) if (PROJECT_ROOT / "mulu" / "cache" / "meta.json").exists() else {}
@@ -1354,15 +1377,116 @@ class SettingsDialog(QDialog):
         except Exception:
             self.lbl_last_check.setText("上次检查：从未")
 
+    def _mulu_diffs(self, keys=None, last_dir=None, new_of=None):
+        """{源key: 差异}：当前目录文件 vs 上次更新前的备份（mulu/backup/last/）。
+
+        keys 非空只比这些源（如本次更新过的）；缺备份/当前文件、或解析为空的源跳过。
+        last_dir / new_of 可注入（测试用；new_of: rel → Path）。
+        """
+        from cbeta_publish.books import mulu_diff
+        from cbeta_publish.books.remote_sources import SOURCES, local_path
+        last = Path(last_dir) if last_dir is not None else (BACKUP_DIR / "last")
+        if new_of is None:
+            new_of = local_path
+        out = {}
+        for key, _cat, _url, rel in SOURCES:
+            if keys is not None and key not in keys:
+                continue
+            d = mulu_diff.diff_source(key, last / Path(rel).name, new_of(rel))
+            if d is not None:
+                out[key] = d
+        return out
+
+    @staticmethod
+    def _mulu_labels():
+        """{源key: `文件名（分类）`}：摘要/明细里的源显示名。"""
+        from cbeta_publish.books.remote_sources import SOURCES
+        return {key: f"{Path(rel).name}（{cat}）" for key, cat, _url, rel in SOURCES}
+
+    @staticmethod
+    def _mulu_backup_times(last_dir=None):
+        """{源key: 备份文件时间 `MM-DD HH:MM`}：明细里标注对比基准。"""
+        import datetime as _dt
+        from cbeta_publish.books.remote_sources import SOURCES
+        last = Path(last_dir) if last_dir is not None else (BACKUP_DIR / "last")
+        out = {}
+        for key, _cat, _url, rel in SOURCES:
+            p = last / Path(rel).name
+            try:
+                if p.is_file():
+                    out[key] = _dt.datetime.fromtimestamp(
+                        p.stat().st_mtime).strftime("%m-%d %H:%M")
+            except OSError:
+                pass
+        return out
+
+    def _mulu_diff_dialog(self):
+        """「目录变更」弹窗（不 exec；文本可直接取，便于测试）。"""
+        dlg = QDialog(self)
+        dlg.setWindowTitle("目录变更（当前 vs 上次更新前的备份）")
+        dlg.resize(780, 560)
+        lay = QVBoxLayout(dlg)
+        ed = QPlainTextEdit()
+        ed.setReadOnly(True)
+        ed.setLineWrapMode(QPlainTextEdit.WidgetWidth)
+        lay.addWidget(ed, 1)
+        btn = QPushButton("关闭")
+        btn.clicked.connect(dlg.accept)
+        lay.addWidget(btn)
+        from cbeta_publish.books import mulu_diff
+        labels = self._mulu_labels()
+        diffs = self._mulu_diffs()
+        _head = ("当前目录 vs 上次更新前的备份（mulu/backup/last/）\n"
+                 "只列经的新增/删除/改名；标题取自源文件原文（自带卷与作者）。\n")
+        ed.setPlainText(_head + "\n"
+                        + mulu_diff.detail_text(diffs, label_of=labels,
+                                                times=self._mulu_backup_times()))
+        return dlg
+
+    def _show_mulu_diff(self):
+        self._mulu_diff_dialog().exec()
+
+    def _append_mulu_diff(self, result):
+        """更新完成后：把「目录变更」摘要写进「检查状态」（明细走按钮弹窗）。"""
+        from cbeta_publish.books import mulu_diff
+        from cbeta_publish.books.remote_sources import SOURCES
+        names = {key: Path(rel).name for key, _cat, _url, rel in SOURCES}
+        upd = {k for k, v in (result or {}).items() if v == "updated"}
+        fail = {k for k, v in (result or {}).items() if v == "failed"}
+        unchanged = [k for k, v in (result or {}).items()
+                     if v == "unchanged" and k in mulu_diff.KIND_OF]
+        diffs = self._mulu_diffs(keys=upd)
+        for ln in mulu_diff.summary_lines(diffs, label_of=self._mulu_labels()):
+            self.upd_status.appendPlainText(ln)
+        if unchanged:
+            self.upd_status.appendPlainText(
+                "本次未变（未纳入对比）：" + "、".join(names.get(k, k) for k in unchanged))
+        if fail:
+            self.upd_status.appendPlainText(
+                "更新失败（未能对比）："
+                + "、".join(names.get(k, k) for k in sorted(fail)))
+
     def _check_update(self):
         from cbeta_publish.books.remote_manager import RemoteManager
         from cbeta_publish.books.remote_sources import SOURCES
+
+        def _scroll_status():
+            try:
+                _sb = self.upd_status.verticalScrollBar()
+                _sb.setValue(_sb.maximum())
+            except Exception:
+                pass
+
         rm = RemoteManager(PROJECT_ROOT / "mulu" / "cache" / "meta.json")
         QApplication.setOverrideCursor(Qt.WaitCursor)
-        logs = []
+        import datetime as _dt
+        self.upd_status.appendPlainText(
+            f"—— 检查更新 {_dt.datetime.now():%Y-%m-%d %H:%M:%S} ——")
+        _scroll_status()
+
         def progress(msg):
-            logs.append(msg)
-            self.lbl_upd_log.setText(" / ".join(logs[-4:]))
+            self.upd_status.appendPlainText(str(msg))
+            _scroll_status()
             QApplication.processEvents()
         try:
             result = rm.update_all(SOURCES, BACKUP_DIR, progress=progress)
@@ -1371,9 +1495,15 @@ class SettingsDialog(QDialog):
         upd = [k for k, v in result.items() if v == "updated"]
         fail = [k for k, v in result.items() if v == "failed"]
         self._reload_update_table()
+        self.upd_status.appendPlainText(
+            f"完成：更新 {len(upd)} 项，失败 {len(fail)} 项，其余已最新"
+            + (f"；失败：{', '.join(fail)}" if fail else ""))
+        self._append_mulu_diff(result)
+        _scroll_status()
         QMessageBox.information(self, "检查更新",
                                 f"更新 {len(upd)} 项，失败 {len(fail)} 项，其余已最新。\n"
-                                + (f"失败：{', '.join(fail)}" if fail else ""))
+                                + (f"失败：{', '.join(fail)}" if fail else "")
+                                + "\n\n变更清单见「检查状态」（明细点「查看目录变更…」）。")
 
     def _restore_mulu(self, which: str):
         src_dir = BACKUP_DIR / which

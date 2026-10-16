@@ -90,6 +90,8 @@ class _PanelHandle(QSplitterHandle):
                 b.setFont(f)
             except Exception:
                 pass
+            # 标记：apply_ui_fonts 统一改界面字体时跳过（保留 7pt，箭头不被放大）
+            b.setProperty("app_font_keep", True)
             b.clicked.connect(slot)
             return b
         v.addStretch()
@@ -254,12 +256,17 @@ def apply_ui_fonts(ui: dict):
     font = QFont(str(ui.get("app_font") or "SimSun"), font_size)
     app.setFont(font)
     # 已存在的控件（尤其 QAbstractItemView 的 viewport：列表/表格/树/表头）
-    # 不一定跟随 app 字体变化 → 显式刷新一遍（本工程无逐控件自定义字体，安全）
+    # 不一定跟随 app 字体变化 → 显式刷新一遍（本工程无逐控件自定义字体，安全）。
+    # 例外：带 `app_font_keep` 标记的控件（分隔条 ◀▶ 箭头 7pt）保留自身字体。
     for w in app.allWidgets():
         try:
-            w.setFont(font)
+            if w.property("app_font_keep"):
+                continue
+            # 已是目标字体则跳过（避免无谓的重排/重绘；viewport 单独判断）
+            if w.font() != font:
+                w.setFont(font)
             vp = w.viewport() if hasattr(w, "viewport") else None
-            if vp is not None:
+            if vp is not None and vp.font() != font:
                 vp.setFont(font)
         except Exception:
             pass
@@ -1080,6 +1087,11 @@ class MainWindow(QMainWindow):
             print("pinyin cache fail", e)
         self._on_nav_changed(self.nav_combo.currentText())
         self._apply_layout()          # 布局：三栏/二栏（ui.layout）
+        # 界面字体：**逐控件显式 setFont**（与设置「确定」同路径）。无父创建的控件
+        # （左栏树/中栏列表/各下拉框/页签/滚动区等）不继承 app 字体，会落在系统默认
+        # 字体上（Windows 下=雅黑 9，观感比宋体 10 大）；在构造末尾统一应用一次，
+        # 启动即与设置确认一致，不再"进一次设置才变小"（2026-10-15 用户报告）。
+        apply_ui_fonts(self.config.get("ui", {}) or {})
         # 目录更新：按 update_interval 到期后台静默检查（不阻塞启动）
         self._upd_worker=None
         QTimer.singleShot(3000, self._maybe_check_update)
@@ -4324,22 +4336,28 @@ class MainWindow(QMainWindow):
             print(e)
 
     @staticmethod
-    def _fmt_counts_line(counts):
+    def _fmt_counts_line(counts, with_total=True):
         """本数行：`29 部 x 3 格式 (pdf+epub+docx) = 87 部`。
 
         counts: {fmt: n}；按 pdf/epub/docx/其它 稳定序。各格式本数相等时用
         紧凑式 `N 部 x K 格式 (...)`；不等则逐格式列出。
+        with_total=False 不给总数：计划行用（按**作品**数计，与按**文件**计的
+        产出不是同一口径，两行都用「部」却含义不同会读成「完成 80/64」）。
         """
         if not counts:
             return ""
         order={"pdf": 0, "epub": 1, "docx": 2}
         keys=sorted(counts, key=lambda f: (order.get(f, 9), f))
-        total=sum(counts.values())
-        if len({counts[f] for f in keys}) == 1:
+        _sum=sum(counts.values())
+        _same=len({counts[f] for f in keys}) == 1
+        if _same:
             n=counts[keys[0]]
-            return (f"{n} 部 x {len(keys)} 格式 "
-                    f"({'+'.join(keys)}) = {total} 部")
-        return "、".join(f"{f} {counts[f]} 部" for f in keys) + f"，共 {total} 部"
+            _line=f"{n} 部 x {len(keys)} 格式 ({'+'.join(keys)})"
+        else:
+            _line="、".join(f"{f} {counts[f]} 部" for f in keys)
+        if not with_total:
+            return _line
+        return _line + (f" = {_sum} 部" if _same else f"，共 {_sum} 部")
 
     def _show_made_books(self, header, entries, summary, out_dir=None,
                            convert_path=None, ok=None, made=False):
@@ -5468,20 +5486,23 @@ class MainWindow(QMainWindow):
         from cbeta_publish.books import xml2pdf_bridge
         ok_map, failed, cancelled, short = self._ensure_xml_batch(
             works, fmts, title=title, regen_all=bool(regen_all))
-        n=sum(len(v) for v in ok_map.values())
+        n=sum(len(v) for v in ok_map.values())              # 产出文件数（列表项数）
+        _nw=len({w for m in ok_map.values() for w in m})    # 作品数（多册作品一部多文件）
+        _files_txt=(f"（{n} 个文件）" if n != _nw else "")
         base=xml2pdf_bridge.xml_books_dir(self.config)
         entries=[(w, fmt, p) for fmt, m in ok_map.items()
                  for w, paths in m.items() for p in self._made_paths(paths)]
         _short_txt = ("；缺产物 %d：%s" % (len(short), "、".join(short[:10]))
                       + ("…" if len(short) > 10 else "")) if short else ""
         if cancelled:
-            summary=f"已取消（已完成 {n} 部）"
+            summary=f"已取消（已完成 {_nw} 部{_files_txt}）"
         elif failed:
             self._wrap_box(QMessageBox.Warning, "部分失败",
-                           f"完成 {n} 部，失败 {len(failed)}：\n" + "\n".join(failed[:10]))
-            summary=f"生成完成 {n} 部，失败 {len(failed)}{_short_txt}"
+                           f"完成 {_nw} 部{_files_txt}，失败 {len(failed)}：\n"
+                           + "\n".join(failed[:10]))
+            summary=f"生成完成 {_nw} 部{_files_txt}，失败 {len(failed)}{_short_txt}"
         else:
-            summary=f"{'重制' if regen_all else '生成'}完成 {n} 部{_short_txt}"
+            summary=f"{'重制' if regen_all else '生成'}完成 {_nw} 部{_files_txt}{_short_txt}"
         _conv_path=None
         if xml2pdf_bridge.convert_report_enabled(self.config):
             _conv_path=xml2pdf_bridge.write_convert_summary(
@@ -7471,8 +7492,10 @@ class MainWindow(QMainWindow):
 
         返回 (ok_map, failed, cancelled, short)：ok_map = {fmt: {work: [Path...]}}。
         同一 work 可能对应多个源 XML，因此一个 work 也可能有多个产物。
-        short 为静默少产清单（`outs` 非空但少于预期源数，不算失败、不阻塞流程）：
-        `[f"{w}.{fmt} 缺n个产物（预期{exp}/实得{len}）"]`。
+        short 为静默少产清单（`outs` 非空但少于源 XML 数，不算失败、不阻塞流程）：
+        `[f"{w}.{fmt} 缺n个产物（预期{exp}/实得{len}）"]`；源数在每部转换后取
+        （跑前源 XML 可能还没材料化），卷子集不比对。
+        进度与完成度都按「作品 × 格式」计；产出文件数单独给（见收尾行）。
         """
         from cbeta_publish.books import xml2pdf_bridge
         xml_out=xml2pdf_bridge.xml_books_dir(self.config)
@@ -7487,34 +7510,30 @@ class MainWindow(QMainWindow):
         ok_map={f: {} for f in fmts}
         failed=[]
         short=[]
-        expected={}
-        # 进度窗先行：源计数也在窗下进行（`update` 泵事件），点击后立刻有反馈；
-        # 主循环前重置进度条（`_progress_reset`）。
-        dlg, update, pstate = self._make_progress(title, max(1, len(works)))
-        _cancelled_prep=False
-        for _i, w in enumerate(works, 1):
-            if self._entry_juan(w):
-                # 卷子集：产物数无法按源数预估（单卷只落在一个源文件里），
-                # 按 1 个 tracking unit 计；空产物仍走 failed，只有整本才做缺数比对
-                expected[w]=1
-            else:
-                try:
-                    found=xml2pdf_bridge.work_source_files(self.config, self._entry_work(w))
-                except Exception:
-                    found=[]
-                expected[w]=max(1, len(found))
-            if not update(_i):
-                _cancelled_prep=True
-                break
-        if _cancelled_prep:
-            self._progress_close(dlg)
-            return ({f: {} for f in fmts}, [], True, [])
-        total=max(1, sum(expected.values())*len(fmts))
+
+        def _src_count(entry):
+            """整本的源 XML 数（用于「缺产物」比对）；卷子集返回 0＝不比对。
+
+            只在每部转换**之后**调用：首次生成时工作目录与源 XML 由上游材料化
+            出来，跑前还不存在，跑前数必然是 0。
+            """
+            if self._entry_juan(entry):
+                return 0
+            try:
+                return len(xml2pdf_bridge.work_source_files(
+                    self.config, self._entry_work(entry)))
+            except Exception:
+                return 0
+
+        # 进度口径＝作品 × 格式（每部每格式 1 个 tracking unit），不按源 XML 数：
+        # 首次生成时源 XML 尚未材料化，按源数会让同一批书的计划行在「第一遍 32 部／
+        # 第二遍 40 部」之间跳；多册作品产出几个文件由产出本数行按文件单独给出。
+        total=max(1, len(works)*len(fmts))
+        dlg, update, pstate = self._make_progress(title, total)
         done=[0]
-        self._progress_reset(dlg, total)
         if fmts:
-            _per=sum(expected.values())
-            update(0, self._fmt_counts_line({f: _per for f in fmts}))
+            update(0, "计划：" + self._fmt_counts_line(
+                {f: len(works) for f in fmts}, with_total=False))
             _ptag="（本次临时）" if getattr(self, "_tmp_preset", None) is not None else ""
             update(0, f"来源：自制｜生成：{'全部重新生成' if regen_all else '仅生成缺少'}"
                       f"｜预设：{(Path(preset).name if preset else '出厂默认')}{_ptag}")
@@ -7531,10 +7550,10 @@ class MainWindow(QMainWindow):
                 if (fmt == "docx" and _reuse_companion and _adopted_docx.get(w)):
                     _adopted=[p for p in _adopted_docx[w] if p.exists()]
                     # 重制要求认领齐全才省渲染，否则回退正常重渲（防漏文件）
-                    if _adopted and (not regen_all or len(_adopted) >= expected[w]):
+                    if _adopted and (not regen_all or len(_adopted) >= max(1, _src_count(w))):
                         ok_map[fmt][w]=_adopted
                         names=", ".join(p.name for p in _adopted)
-                        done[0]+=expected[w]
+                        done[0]+=1
                         if not update(done[0], f"[{fmt}] 省渲染（pdf伴生） {names}"):
                             cancelled=True
                             break
@@ -7551,9 +7570,10 @@ class MainWindow(QMainWindow):
                 outs=[p for p in outs if p.exists()]
                 if outs:
                     ok_map[fmt][w]=outs
-                    if len(outs) < expected[w]:
-                        short.append(f"{w}.{fmt} 缺{expected[w]-len(outs)}个产物"
-                                     f"（预期{expected[w]}/实得{len(outs)}）")
+                    _exp=_src_count(w)
+                    if _exp and len(outs) < _exp:
+                        short.append(f"{w}.{fmt} 缺{_exp-len(outs)}个产物"
+                                     f"（预期{_exp}/实得{len(outs)}）")
                 else:
                     failed.append(f"{w}.{fmt} XML转换失败")
                 if (fmt == "pdf" and _reuse_companion and not reused and outs
@@ -7570,19 +7590,23 @@ class MainWindow(QMainWindow):
                 else:
                     verb="生成"
                 names=", ".join(p.name for p in outs) if outs else f"{w}.{fmt}"
-                done[0]+=expected[w]
+                done[0]+=1
                 if not update(done[0], f"[{fmt}] {verb} {names}"):
                     cancelled=True
                     break
             if cancelled:
                 break
         actual=sum(len(paths) for m in ok_map.values() for paths in m.values())
+        _works_done=len({w for m in ok_map.values() for w in m})
         _finish=self._fmt_counts_line(
             {f: sum(len(paths) for paths in ok_map.get(f, {}).values())
              for f in fmts})
         _lines=[x for x in (_finish,) if x]
         _all_ok = (not failed) and (not cancelled) and (not short)
-        _done=(f"完成 {actual}/{total}"
+        # 完成度按「作品」计（与计划行同口径）；产出文件数不同时另给（多册作品
+        # 一部落多个文件），避免再出现「完成 80/64」这种分子分母不同单位的读法。
+        _files_txt=(f"（产出 {actual} 个文件）" if actual != _works_done else "")
+        _done=(f"完成 {_works_done}/{len(works)} 部{_files_txt}"
                + (f"，失败 {len(failed)}" if failed else "")
                + (f"，缺产物 {len(short)}" if short else ""))
         import html as _html
