@@ -645,6 +645,58 @@ class RightPanelTest(unittest.TestCase):
             for _ in range(4):
                 _ensure_app().processEvents()
 
+    def test_author_search_groups_by_author_with_alias_hint(self):
+        # 作者视图搜索结果按命中作者分组；别名命中的组标题标出命中的别名
+        # （搜「太虚」→「無相（別名：太虛）」：X0609 是無相 说的，不是民國太虛 的）
+        win = self.win
+        self._nav("作者")
+        win.search.setText("太虚")
+        for _ in range(10):
+            _ensure_app().processEvents()
+        old_ws, old_sel = list(win._workspace), set(win._selected)
+        try:
+            groups = {g["name"]: g for g in win._search_groups}
+            self.assertIn("無相", groups, sorted(groups))
+            self.assertEqual((groups["無相"]["by"], groups["無相"]["hit"]), ("alias", "太虛"))
+            self.assertEqual(groups["無相"]["works"], ["X0609"])
+            self.assertEqual(groups["瞿汝稷"]["hit"], "瞿太虛")
+            self.assertEqual(groups["太虛"]["by"], "name")
+            self.assertEqual(len(groups["太虛"]["works"]), 20)
+            # 平铺列表与分组同一批（22 部）：一键加入工作区仍走平铺
+            flat = list(win._search_results)
+            self.assertEqual(len(flat), 22)
+            self.assertEqual(sorted(flat),
+                             sorted(w for g in win._search_groups for w in g["works"]))
+            # 左栏：搜索结果 → 作者组 → 作品叶（本名命中组在前）
+            tops = [win.tree.topLevelItem(i) for i in range(win.tree.topLevelItemCount())]
+            self.assertEqual([t.text(0) for t in tops], ["搜索结果（22 部）"])
+            labels = [tops[0].child(i).text(0) for i in range(tops[0].childCount())]
+            self.assertEqual(labels[0], "太虛（20 部）")
+            self.assertIn("無相（別名：太虛）（1 部）", labels, labels)
+            self.assertIn("瞿汝稷（別名：瞿太虛）（1 部）", labels, labels)
+            grp = [tops[0].child(i) for i in range(tops[0].childCount())
+                   if tops[0].child(i).text(0).startswith("無相")][0]
+            self.assertEqual(grp.childCount(), 1)
+            self.assertIn("X0609", grp.child(0).text(0))
+            # 组节点不是作品（双击不加书）；整组拖拽＝组内全部作品
+            self.assertIsNone(win._tree_item_work(grp))
+            self.assertEqual([w for w, _g, _b in win._item_payload(grp)], ["X0609"])
+            self.assertEqual(win._tree_item_work(grp.child(0)), "X0609")
+            win._ws_add_search()
+            self.assertEqual(win._workspace, flat)
+            # 其它视图仍是平铺（不分组）
+            self._nav("部类")
+            win.search.setText("太虚")
+            for _ in range(8):
+                _ensure_app().processEvents()
+            self.assertEqual(win._search_groups, [])
+        finally:
+            win._workspace, win._selected = old_ws, old_sel
+            win._refresh_ws_views()
+            win.search.clear()
+            for _ in range(4):
+                _ensure_app().processEvents()
+
     def test_upstream_dialog_no_app_pollution(self):
         # 回归：上游 CssEditorDialog 不得碰 QApplication 样式表（曾追加全局
         # QToolTip 规则，左栏最小值 346→1272 锁死分栏；上游已修，规则下到
@@ -715,6 +767,118 @@ class RightPanelTest(unittest.TestCase):
         finally:
             win.creator.strokes = old_strokes
             win._authors_pinyin_sorted = old_cache
+            win.author_radios["拼音排序"].setChecked(True)
+            self._nav("作者")
+
+    def _patch_related(self, win, alias, works):
+        # 相关作品只读 creator.alias + sutra；都换成桩数据并清缓存，返回恢复函数
+        class FakeSutra:
+            def __init__(self, w):
+                self._w = w
+
+            def all_ids(self):
+                return list(self._w)
+
+            def title_of(self, wid):
+                return self._w.get(wid, wid)
+
+        old = (win.creator.alias, win.sutra, getattr(win, "_related_cache", None))
+
+        def restore():
+            win.creator.alias, win.sutra = old[0], old[1]
+            win._related_cache = old[2]
+        win.creator.alias = alias
+        win.sutra = FakeSutra(works)
+        win._related_cache = None
+        return restore
+
+    def _find_author_item(self, win, prefix):
+        found = []
+
+        def walk(it):
+            if it.text(0).startswith(prefix):
+                found.append(it)
+            for i in range(it.childCount()):
+                walk(it.child(i))
+        for i in range(win.tree.topLevelItemCount()):
+            walk(win.tree.topLevelItem(i))
+        return found
+
+    def test_author_related_works_group(self):
+        # 书名里出现作者本名/别名（紧邻体裁后缀）、但源数据未归此作者 → 挂「相关（按题名）」
+        win = self.win
+        strokes = [{"title": "11畫(stroke)", "children": [
+            {"title": "梵", "children": [
+                {"title": "梵琦", "key": "A900001",
+                 "children": [{"key": "B0087",
+                               "title": "B0087 合訂天台三聖二和詩集 (1卷)"}]}]}]}]
+        old_strokes, old_cache = win.creator.strokes, win._authors_pinyin_sorted
+        restore = self._patch_related(
+            win, {"A900001": {"regular_name": "梵琦", "aliases_all": ["楚石梵琦"]}},
+            {"X1420": "X1420 楚石梵琦禪師語錄 (20卷)【(門人)祖光．文玹 等編】"})
+        win.creator.strokes = strokes
+        win._authors_pinyin_sorted = None
+        try:
+            self._nav("作者")
+            win.author_radios["笔画排序"].setChecked(True)
+            win._refresh_author_tree()
+            nodes = self._find_author_item(win, "梵琦")
+            self.assertEqual(len(nodes), 1, [n.text(0) for n in nodes])
+            node = nodes[0]
+            # 部数只算源数据归属（相关作品不计数）
+            self.assertEqual(node.text(0), "梵琦 (1部)")
+            kids = [node.child(i).text(0) for i in range(node.childCount())]
+            self.assertEqual(len(kids), 2, kids)
+            self.assertTrue(kids[0].startswith("B0087"), kids)
+            self.assertEqual(kids[1], "相关（按题名）(1部)")
+            grp = node.child(1)
+            self.assertEqual(grp.childCount(), 1)
+            self.assertTrue(grp.child(0).text(0).startswith("X1420"), grp.child(0).text(0))
+            # 分组节点本身不是作品（双击不会当书加），但整体拖拽=组内全部相关作品
+            self.assertIsNone(win._tree_item_work(grp))
+            self.assertEqual([w for w, _g, _b in win._item_payload(grp)], ["X1420"])
+            self.assertEqual(win._tree_item_work(grp.child(0)), "X1420")
+            self.assertEqual([w for w, _g, _b in win._item_payload(grp.child(0))], ["X1420"])
+        finally:
+            win.creator.strokes = old_strokes
+            win._authors_pinyin_sorted = old_cache
+            restore()
+            win.author_radios["拼音排序"].setChecked(True)
+            self._nav("作者")
+
+    def test_author_related_skips_own_and_absent(self):
+        # 已归本作者名下的作品不再重复列进「相关」；没有相关作品就不出这个分组
+        win = self.win
+        strokes = [{"title": "11畫(stroke)", "children": [
+            {"title": "梵", "children": [
+                {"title": "梵琦", "key": "A900001",
+                 "children": [{"key": "X1420",
+                               "title": "X1420 楚石梵琦禪師語錄 (20卷)"}]},
+                {"title": "守培", "key": "A900002",
+                 "children": [{"key": "B0001", "title": "B0001 某書 (1卷)"}]}]}]}]
+        old_strokes, old_cache = win.creator.strokes, win._authors_pinyin_sorted
+        restore = self._patch_related(
+            win, {"A900001": {"regular_name": "梵琦", "aliases_all": ["楚石梵琦"]},
+                  "A900002": {"regular_name": "守培"}},
+            {"X1420": "X1420 楚石梵琦禪師語錄 (20卷)【(門人)祖光．文玹 等編】",
+             "B0001": "B0001 某書 (1卷)"})
+        win.creator.strokes = strokes
+        win._authors_pinyin_sorted = None
+        try:
+            self._nav("作者")
+            win.author_radios["笔画排序"].setChecked(True)
+            win._refresh_author_tree()
+            for prefix, label in (("梵琦", "梵琦 (1部)"), ("守培", "守培 (1部)")):
+                nodes = self._find_author_item(win, prefix)
+                self.assertEqual(len(nodes), 1, prefix)
+                self.assertEqual(nodes[0].text(0), label)
+                kids = [nodes[0].child(i).text(0) for i in range(nodes[0].childCount())]
+                self.assertEqual(len(kids), 1, kids)
+                self.assertNotIn("相关", kids[0])
+        finally:
+            win.creator.strokes = old_strokes
+            win._authors_pinyin_sorted = old_cache
+            restore()
             win.author_radios["拼音排序"].setChecked(True)
             self._nav("作者")
 

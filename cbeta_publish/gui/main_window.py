@@ -361,6 +361,8 @@ def merge_author_nodes(authors):
         merged["children"] = kids
         merged["_merged_from"] = [m.get("title", "") for m in members
                                   if m.get("title", "") != key]
+        # 归并成员的原 author key（按题名关联相关作品时要把各成员的名字都用上）
+        merged["_merged_keys"] = [m.get("key") for m in members if m.get("key")]
         out.append((home, merged))
     return out
 
@@ -425,6 +427,7 @@ class MainWindow(QMainWindow):
         self._workspace=[]     # 唯一内存目录（中栏「工作区」与左栏工作区面板共用）
         self._selected=set()   # 工作区勾选集合
         self._search_results=[]# 当前搜索结果（仅左栏结果视图用；不写入工作区）
+        self._search_groups=[] # 作者视图搜索结果按命中作者分组（[{id,name,by,hit,works}]）；其它视图为空
         self._sort_mode="原始顺序"
         self._collections=[]
         self._coll_changed=False
@@ -1619,6 +1622,78 @@ class MainWindow(QMainWindow):
                 continue
             a_item.addChild(self._work_item(wid, c.get("title") or wid))
 
+    def _author_stroke_groups(self):
+        # 作者树顶层：源数据可能是 [選擇全部 > 各畫] 也可能是 [各畫]（与 _refresh_author_tree 同判法）
+        data = getattr(self.creator, "strokes", None)
+        if data and len(data) == 1 and len(data[0].get("children", [])) >= 20:
+            return data[0].get("children", [])
+        return data or []
+
+    def _related_works(self):
+        """{作者id: [(作品id, 标题, 命中名)]}：按题名关联的作品（进程内缓存一次）。
+
+        标题取 SutraList 全量（+ 作者树叶兜底）。只用于「相关（按题名）」子分组。
+        """
+        if getattr(self, "_related_cache", None) is not None:
+            return self._related_cache
+        from cbeta_publish.creators import related_works
+        works = {}
+        try:
+            for wid in self.sutra.all_ids():
+                works[wid] = self.sutra.title_of(wid)
+        except Exception as e:
+            print("related works: sutra fail", e)
+        try:
+            for grp in self._author_stroke_groups():
+                for su in grp.get("children", []) or []:
+                    for a in su.get("children", []) or []:
+                        for c in a.get("children", []) or []:
+                            wid = (c.get("key") or "").strip() if isinstance(c, dict) else ""
+                            if wid and wid not in works:
+                                works[wid] = c.get("title") or self.sutra.title_of(wid)
+        except Exception as e:
+            print("related works: strokes fail", e)
+        alias = getattr(self.creator, "alias", None) or {}
+        try:
+            self._related_cache = related_works.related_index(alias, works)
+        except Exception as e:
+            print("related works fail", e)
+            self._related_cache = {}
+        return self._related_cache
+
+    def _related_works_of(self, author):
+        """某作者条目（含归并成员）的相关作品 [(作品id, 标题)]。
+
+        已挂在作者名下的作品不算「相关」（避免与上方著作叶重复）；按经号排序。
+        """
+        keys = author.get("_merged_keys") or [author.get("key")]
+        own = {(c.get("key") or "").strip() for c in (author.get("children") or [])
+               if isinstance(c, dict)}
+        idx = self._related_works()
+        out, seen = [], set()
+        for k in keys:
+            for wid, title, _nm in (idx.get(k) or ()):
+                if wid and wid not in seen and wid not in own:
+                    seen.add(wid)
+                    out.append((wid, title))
+        return sorted(out, key=lambda t: work_sort_key(t[0]))
+
+    def _add_author_children(self, a_item, author):
+        """作者条目下：著作叶 + 「相关（按题名）」子分组（不计部数、不进分册）。"""
+        self._add_author_work_items(a_item, author)
+        rel = self._related_works_of(author)
+        if not rel:
+            return
+        from PySide6.QtGui import QBrush, QColor
+        g_item = QTreeWidgetItem([f"相关（按题名）({len(rel)}部)"])
+        g_item.setData(0, Qt.UserRole, {"related_group": True})
+        g_item.setToolTip(0, "书名里出现该作者的本名或别名、但源数据未把它归在此作者名下的作品。\n"
+                             "只作浏览：不计入上方部数、不参与分册；展开后可双击加入、拖拽到丛书。")
+        g_item.setForeground(0, QBrush(QColor("#888888")))
+        a_item.addChild(g_item)
+        for wid, title in rel:
+            g_item.addChild(self._work_item(wid, title))
+
     def _refresh_author_tree(self, filter_stroke=None, filter_letter=None):
         self.tree.clear()
         try:
@@ -1686,7 +1761,7 @@ class MainWindow(QMainWindow):
                             a_item=QTreeWidgetItem([f"{a.get('title','')} ({cnt}部)"])
                             a_item.setData(0, Qt.UserRole, a)
                             g_item.addChild(a_item)
-                            self._add_author_work_items(a_item, a)
+                            self._add_author_children(a_item, a)
                     self._expand_tree()
                     return
                 except Exception:
@@ -1712,7 +1787,7 @@ class MainWindow(QMainWindow):
                             a_item=QTreeWidgetItem([f"{a.get('title','')} ({cnt}部)"])
                             a_item.setData(0, Qt.UserRole, a)
                             d_item.addChild(a_item)
-                            self._add_author_work_items(a_item, a)
+                            self._add_author_children(a_item, a)
                     self._expand_tree()
                     return
                 except Exception as e:
@@ -1742,7 +1817,7 @@ class MainWindow(QMainWindow):
                         a_item=QTreeWidgetItem([f"{shown.get('title','')} ({cnt}部)"])
                         a_item.setData(0, Qt.UserRole, shown)
                         su_item.addChild(a_item)
-                        self._add_author_work_items(a_item, shown)
+                        self._add_author_children(a_item, shown)
             self._expand_tree()
         except Exception as e:
             print("author tree fail", e)
@@ -2546,6 +2621,7 @@ class MainWindow(QMainWindow):
         if expand is None:
             expand=self._tree_expand_state()
         self._search_results=[]
+        self._search_groups=[]
         if changed:
             self._left_search_active=False
             self._nav_stash=None
@@ -2576,6 +2652,7 @@ class MainWindow(QMainWindow):
         self._nav_stash=None
         self._left_search_active=False
         self._search_results=[]
+        self._search_groups=[]
         # 切导航模式 = 回到目录面板浏览（清掉搜索词与结果视图）
         try:
             if self.btn_workspace.isChecked():
@@ -3416,30 +3493,54 @@ class MainWindow(QMainWindow):
                 out.add(kw.replace(b,a))
         return out
 
-    def _author_search(self, kw):
-        # 作者搜索：原词 + 繁简 + 异体变体逐一尝试
+    def _author_search_hits(self, kw):
+        """作者搜索命中详情：[{"id","name","by","hit","aliases"}]。
+
+        `by`="name" 本名命中（hit=本名）；"alias" 别名命中（hit=命中的别名，多个取最短者）。
+        比对与搜索同用繁简/异体变体，故搜「太虚」也能标出「太虛」。
+        """
         for v in self._search_variants(kw):
             for q in {v, text_util.to_simplified(v), text_util.to_traditional(v)}:
                 res=self.creator.search(q)
-                if res:
-                    return res
+                if not res:
+                    continue
+                out=[]
+                for r in res:
+                    name=r.get("name") or ""
+                    aliases=r.get("aliases") or []
+                    if q and q in name:
+                        out.append({"id": r["id"], "name": name, "by": "name",
+                                    "hit": name, "aliases": aliases})
+                        continue
+                    hits=[a for a in aliases if q and q in a]
+                    if not hits:
+                        continue
+                    hits.sort(key=len)
+                    out.append({"id": r["id"], "name": name, "by": "alias",
+                                "hit": hits[0], "aliases": aliases})
+                if out:
+                    return out
         return None
 
-    def _search_author_works(self, res):
-        # 合并最多 5 位命中作者的作品（去重）
-        works=[]
-        for r in res[:5]:
+    def _author_search_groups(self, hits):
+        """命中作者 → 分组 [{id,name,by,hit,works}]：每部作品只归首个命中作者（同旧口径）。
+
+        仍只取前 5 位命中作者；组内按经号自然序。
+        """
+        groups=[]
+        seen=set()
+        for r in (hits or [])[:5]:
+            works=[]
             for w in self.creator.works_of(r["id"]):
                 k=(w.get("key") or "").strip()
-                if k:
+                if k and k not in seen:
+                    seen.add(k)
                     works.append(k)
-        seen=set()
-        out=[]
-        for wk in works:
-            if wk not in seen:
-                seen.add(wk)
-                out.append(wk)
-        return out
+            if works:
+                groups.append({"id": r["id"], "name": r["name"], "by": r["by"],
+                               "hit": r["hit"], "works": sorted(works, key=work_sort_key)})
+        groups.sort(key=lambda g: 0 if g["by"]=="name" else 1)   # 本名命中组在前
+        return groups
 
     def _is_known_work(self, w):
         # 树标题里抓出的候选是否为真实作品（滤掉 T01 这类分组号）
@@ -3482,17 +3583,24 @@ class MainWindow(QMainWindow):
         kw=(kw or "").strip()
         if not kw:
             self._search_results=[]
+            self._search_groups=[]
             self._render_search_to_left()
             return
         # 作者模式：优先作者搜索（避免被其它匹配抢占）
         if self.nav_combo.currentText()=="作者":
-            res=self._author_search(kw)
-            if res:
-                filtered=self._search_author_works(res)
-                if filtered:
-                    self._search_results=sorted(filtered, key=work_sort_key)[:200]
+            hits=self._author_search_hits(kw)
+            if hits:
+                groups=self._author_search_groups(hits)
+                if groups:
+                    flat=sorted([w for g in groups for w in g["works"]], key=work_sort_key)[:200]
+                    keep=set(flat)             # 分组按同一上限裁剪，组标题部数与实际一致
+                    for g in groups:
+                        g["works"]=[w for w in g["works"] if w in keep]
+                    self._search_groups=[g for g in groups if g["works"]]
+                    self._search_results=flat
                     self._render_search_to_left()
                     return
+        self._search_groups=[]
         self._search_results=sorted(self._search_current_tree(kw), key=work_sort_key)[:200]
         self._render_search_to_left()
 
@@ -3580,6 +3688,27 @@ class MainWindow(QMainWindow):
             it.addChild(self._work_item(w, f"{w}　{self._display_title(w)}"))
         it.setExpanded(True)
 
+    def _add_search_group_nodes(self, groups):
+        """作者视图搜索结果：按命中作者分组（别名命中的组标题括注命中的别名）。"""
+        total=sum(len(g.get("works") or []) for g in groups)
+        root=QTreeWidgetItem([f"搜索结果（{total} 部）"])
+        root.setData(0, Qt.UserRole, {"pool": "搜索结果"})
+        root.setToolTip(0, "按命中作者分组；组标题括注的即该组命中的别名，不是该书的作者。")
+        self.tree.addTopLevelItem(root)
+        for g in groups:
+            label=g["name"]
+            if g.get("by")=="alias":
+                label=f"{label}（別名：{g['hit']}）"
+            it=QTreeWidgetItem([f"{label}（{len(g['works'])} 部）"])
+            it.setData(0, Qt.UserRole, {"pool": label})
+            if g.get("by")=="alias":
+                it.setToolTip(0, f"命中该作者的别名：{g['hit']}")
+            root.addChild(it)
+            for w in g["works"]:
+                it.addChild(self._work_item(w, f"{w}　{self._display_title(w)}"))
+            it.setExpanded(True)
+        root.setExpanded(True)
+
     def _tree_expand_state(self, tree=None):
         # 展开状态快照：按「子索引路径」记录，用于暂存/重建后还原使用状态
         tree=tree if tree is not None else self.tree
@@ -3638,7 +3767,10 @@ class MainWindow(QMainWindow):
             self._stash_left_tree()
             self._left_search_active=True
             self.tree.clear()
-            self._add_pool_node("搜索结果", self._search_results)
+            if self._search_groups:
+                self._add_search_group_nodes(self._search_groups)
+            else:
+                self._add_pool_node("搜索结果", self._search_results)
             self._expand_tree()
         elif self._left_search_active:
             self._left_search_active=False
