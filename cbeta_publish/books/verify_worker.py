@@ -9,6 +9,10 @@ class VerifyWorker(QThread):
     # 进度：done, label, level（level: "run"/"ok"/"fail"/""）
     progress = Signal(int, str, str)
     finished_all = Signal(int, int, list)   # ok, total, failed list
+    # 逐本格式判定（在 finished_all 之前发出，供收尾按「作品 × 格式」计文件数）：
+    # {work: {"passed": [fmt…], "failed": [fmt…], "undet": [fmt…]}}
+    # 独立信号：finished_all 仍是 3 参，既有连接点不受影响。
+    verdicts = Signal(object)
 
     def __init__(self, works, fmts, out_dir, config, preset=None,
                  works_fmts=None, works_juan=None):
@@ -34,6 +38,7 @@ class VerifyWorker(QThread):
         total = len(self.works)
         ok = 0
         failed = []
+        verdicts = {}
         try:
             for i, w in enumerate(self.works, 1):
                 if self._stop:
@@ -89,6 +94,21 @@ class VerifyWorker(QThread):
                     else:
                         overall = True
                 verdict = overall
+                # 逐本格式判定（收尾按「作品 × 格式」计文件数用）：
+                # 无基线/被覆盖待定的格式不在 formats 表里，同样算未判定
+                _passed_f = sorted(f for f, v in fmts_status.items() if v is True)
+                if not _passed_f and verdict is True:
+                    # 报告无逐格式行（整体判过）：按本次请求格式记，避免文件数漏计
+                    _passed_f = sorted(f for f in (wf or []) if f)
+                _undet_f = {f for f, v in fmts_status.items()
+                            if v is not True and v is not False}
+                _undet_f |= {f for f in (pending_all or {})
+                             if f and f not in fmts_status}
+                verdicts[w] = {
+                    "passed": _passed_f,
+                    "failed": sorted(f for f, v in fmts_status.items() if v is False),
+                    "undet": sorted(_undet_f),
+                }
                 if fmts_status:
                     passed = [f for f, v in fmts_status.items() if v]
                     failed_f = [f for f, v in fmts_status.items() if not v]
@@ -103,7 +123,9 @@ class VerifyWorker(QThread):
                         [scopes.get(f) for f in failed_f]))
                     if passed and not failed_f:
                         ok += 1
-                        self.progress.emit(i, f"{REPLACE_LAST}生成并校验 {w} ...通过", "ok")
+                        self.progress.emit(
+                            i, f"{REPLACE_LAST}生成并校验 {w} ...通过"
+                               f"（{'/'.join(sorted(passed))}）", "ok")
                     elif passed:
                         ok += 1
                         self.progress.emit(
@@ -116,7 +138,10 @@ class VerifyWorker(QThread):
                                + (f"（{_sc}）" if _sc else ""), "fail")
                 elif verdict is True:
                     ok += 1
-                    self.progress.emit(i, f"{REPLACE_LAST}生成并校验 {w} ...通过", "ok")
+                    _fl = sorted(f for f in (wf or []) if f)
+                    self.progress.emit(
+                        i, f"{REPLACE_LAST}生成并校验 {w} ...通过"
+                           + (f"（{'/'.join(_fl)}）" if _fl else ""), "ok")
                 elif verdict is False:
                     failed.append(w)
                     _sc = b.diff_scope_text(b.conservative_diff_scope(scopes.values()))
@@ -142,4 +167,5 @@ class VerifyWorker(QThread):
             for w in self.works:
                 if w not in failed:
                     failed.append(w)
+        self.verdicts.emit(verdicts)
         self.finished_all.emit(ok, total, failed)

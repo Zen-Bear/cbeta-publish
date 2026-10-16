@@ -4468,13 +4468,14 @@ class MainWindow(QMainWindow):
             print(e)
 
     @staticmethod
-    def _fmt_counts_line(counts, with_total=True):
+    def _fmt_counts_line(counts, with_total=True, unit="部"):
         """本数行：`29 部 x 3 格式 (pdf+epub+docx) = 87 部`。
 
         counts: {fmt: n}；按 pdf/epub/docx/其它 稳定序。各格式本数相等时用
         紧凑式 `N 部 x K 格式 (...)`；不等则逐格式列出。
         with_total=False 不给总数：计划行用（按**作品**数计，与按**文件**计的
         产出不是同一口径，两行都用「部」却含义不同会读成「完成 80/64」）。
+        unit 只改总数与逐格式数的单位（默认「部」；校验收尾按**文件**计传「个文件」）。
         """
         if not counts:
             return ""
@@ -4486,10 +4487,10 @@ class MainWindow(QMainWindow):
             n=counts[keys[0]]
             _line=f"{n} 部 x {len(keys)} 格式 ({'+'.join(keys)})"
         else:
-            _line="、".join(f"{f} {counts[f]} 部" for f in keys)
+            _line="、".join(f"{f} {counts[f]} {unit}" for f in keys)
         if not with_total:
             return _line
-        return _line + (f" = {_sum} 部" if _same else f"，共 {_sum} 部")
+        return _line + (f" = {_sum} {unit}" if _same else f"，共 {_sum} {unit}")
 
     def _show_made_books(self, header, entries, summary, out_dir=None,
                            convert_path=None, ok=None, made=False):
@@ -6327,10 +6328,11 @@ class MainWindow(QMainWindow):
             return
         regen_failed=[]
         _made_entries=[]
-        if regen_all and reuse:
+        if regen_all and reuse and skipped:
             # 新鲜项：重生成但跳过校验（输入未变，原结论仍成立）
             # 注意：重制即使**全部**新鲜也要走这里（不得提前 return，
-            # 否则"重制=全部重新生成"落空且弹窗静默退出；2026-10-14 用户报告）
+            # 否则"重制=全部重新生成"落空且弹窗静默退出；2026-10-14 用户报告）。
+            # 无新鲜项时整块跳过：不再空打一行「0 部…」、也不再空重置进度条。
             _regen_total=max(1, sum(len(ff) for _w, ff in skipped))
             self._progress_reset(dlg, _regen_total)
             update(0, f"新鲜项重生成（跳过校验）{len(skipped)} 部…")
@@ -6366,7 +6368,14 @@ class MainWindow(QMainWindow):
         if not works_to_verify:
             # 重制且全部新鲜：只重生成、不校验（源未变，旧结论仍成立）。
             # 给收尾总结＋「自制报告」页，不静默关窗。
-            _line=(f"重制完成 {len(skipped)} 部（源未变，本次跳过校验）")
+            _rf=[]
+            for _w, _ff in skipped:
+                for _f in (_ff or []):
+                    if _f not in _rf:
+                        _rf.append(_f)
+            _line=(f"重制完成 {len(skipped)} 部（"
+                   + (f"{'/'.join(_rf)}，" if _rf else "")
+                   + "源未变、本次跳过校验）")
             _summary=[_line, "自制书目录：" + _dirlink(base_dir)]
             if regen_failed:
                 _summary.append(_warn(
@@ -6394,13 +6403,15 @@ class MainWindow(QMainWindow):
             for _w, _ff in _skip_list:
                 update(0, f"  {_w}（{'/'.join(_ff)}）")
         total=max(1, len(works_to_verify))
-        result={"ok": 0, "failed": []}
+        result={"ok": 0, "failed": [], "formats": {}}
         def on_prog(done, label, level):
             update(done, label, is_html=False)
         worker=VerifyWorker(works_to_verify, fmts, vdir, self.config,
                               preset=preset, works_fmts=works_fmts,
                               works_juan=works_juan)
         worker.progress.connect(on_prog)
+        # 逐本格式判定（收尾按「作品 × 格式」计文件数）；独立信号，finish 仍是 3 参
+        worker.verdicts.connect(lambda v: result.update(formats=dict(v or {})))
         worker.finished_all.connect(lambda ok, tot, fl: result.update(ok=ok, failed=list(fl)))
         pstate["oncancel"]=worker.stop
         loop=QEventLoop()
@@ -6414,7 +6425,7 @@ class MainWindow(QMainWindow):
             worker.wait()
         except Exception:
             pass
-        for _sig in ("progress", "finished_all"):
+        for _sig in ("progress", "verdicts", "finished_all"):
             try:
                 getattr(worker, _sig).disconnect()
             except Exception:
@@ -6446,9 +6457,27 @@ class MainWindow(QMainWindow):
                                         {"inputs": _inputs, "product": _dest,
                                          "juan": _lab,
                                          "accept": _tiers.get((w, f), "strict")})
-        summary=[f"校验完成 {result['ok']}/{total}"]
+        # 收尾口径与自制/下载窗口一致：先给产出本数行（通过项按「作品 × 格式」＝文件），
+        # 再给「校验完成 x/y 部」——只看部数会读不出本次到底出了几个格式几个文件。
+        _fmt_pass={}
+        _verdicts=result.get("formats") or {}
+        for _w in works_to_verify:
+            for _f in ((_verdicts.get(_w) or {}).get("passed") or []):
+                _fmt_pass[_f]=_fmt_pass.get(_f, 0)+1
+        _pass_line=self._fmt_counts_line(_fmt_pass, unit="个文件")
+        summary=[]
+        if _pass_line:
+            summary.append(_pass_line)
+        summary.append(f"校验完成 {result['ok']}/{total} 部")
         if skipped:
-            summary.append(f"跳过已通过 {len(skipped)} 部（源未变）")
+            _skip_fmts=[]
+            for _w, _ff in skipped:
+                for _f in (_ff or []):
+                    if _f not in _skip_fmts:
+                        _skip_fmts.append(_f)
+            summary.append(f"跳过已通过 {len(skipped)} 部（源未变"
+                           + (f"：{'/'.join(_skip_fmts)}" if _skip_fmts else "")
+                           + "）")
         if _up_imported:
             summary.append(f"上游导入 {len(_up_imported)} 条（report.json，指纹一致）")
         if reuse_wanted and not reuse:
@@ -6466,7 +6495,10 @@ class MainWindow(QMainWindow):
                 summary.append("总转换报告：" + _flink(_conv_path))
         if result["failed"]:
             summary.append(_warn(f"未通过 {len(result['failed'])}：{', '.join(result['failed'][:10])}"))
-        summary.append(f"已自动导入 {len(imp['ok'])} 部 → " + _dirlink(base))
+        _imp_files=sum(len(v) for v in (imp.get("ok_files") or {}).values())
+        summary.append(f"已自动导入 {len(imp['ok'])} 部"
+                       + (f"（{_imp_files} 个文件）" if _imp_files else "")
+                       + " → " + _dirlink(base))
         if regen_failed:
             summary.append(_warn(f"重生成失败（环境） {len(regen_failed)}：{', '.join(regen_failed[:10])}"))
         if imp["fail"]:

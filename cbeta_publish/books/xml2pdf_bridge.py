@@ -1715,6 +1715,10 @@ def write_verify_summary(vdir, coll_name=None, works=None, skipped=None):
     if not reports:
         return None
     ok_lines, fail_lines, undet_lines, bodies = [], [], [], []
+    # 总计数口径：部数之外另给「格式集合 + 逐档文件数」——只看「共 N 部」会让人以为
+    # 一部只出一个文件（一部可出 pdf+epub 两个文件）。文件＝一个「作品 × 格式」判定。
+    fmt_seen = set()
+    n_pass_fmt = n_bad_fmt = n_undet_fmt = 0
     for rp, stem in reports:
         label = stem or rp.name
         try:
@@ -1733,6 +1737,10 @@ def write_verify_summary(vdir, coll_name=None, works=None, skipped=None):
             if _f and _f not in fmt_status and _f not in undet:
                 undet.append(_f)
         undet = sorted(undet)
+        fmt_seen |= {f for f in (passed + bad + undet) if f}
+        n_pass_fmt += len(passed)
+        n_bad_fmt += len(bad)
+        n_undet_fmt += len(undet)
 
         def _num(f):
             mi, ex = nums.get(f, (None, None))
@@ -1772,8 +1780,12 @@ def write_verify_summary(vdir, coll_name=None, works=None, skipped=None):
             _w, _ff = item, []
         _ff = [str(f) for f in (_ff or [])]
         skip_lines.append(f"{_w}（{'/'.join(_ff)}）" if _ff else f"{_w}")
-    _count_line = (f"共 {total} 部：通过 {len(ok_lines)} 部 / "
-                   f"未通过 {len(fail_lines)} 部 / 未判定 {len(undet_lines)} 部"
+    _fmts_txt = "/".join(sorted(fmt_seen))
+    _count_line = (f"共 {total} 部"
+                   + (f"（格式 {_fmts_txt}）" if _fmts_txt else "")
+                   + f"：通过 {len(ok_lines)} 部（{n_pass_fmt} 个文件） / "
+                   f"未通过 {len(fail_lines)} 部（{n_bad_fmt} 个文件） / "
+                   f"未判定 {len(undet_lines)} 部（{n_undet_fmt} 个文件）"
                    + (f" / 复用旧校验 {len(skip_lines)} 部" if skip_lines else ""))
     head = [f"总验证报告",
             f"丛书：{coll_name or vdir.name}",

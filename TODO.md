@@ -535,6 +535,27 @@
   （搜「太虚」三组、标题含别名括注、平铺仍 22 部、一键加入一致、组节点非作品、其它视图不分组）。
 - [x] 文档：`docs/UI设计.md` 搜索节补分组与别名括注说明。
 
+### P24 — 校验报告口径补全到「部 × 格式 = 文件」（已完成）
+- 现象（2026-10-16 用户）：一本书两个格式时，收尾只说「校验完成 1/1」，读不出
+  几个格式、几个文件；总报告计数行「共 4 部：通过 2 部 / 未通过 1 部 / 未判定 1 部」
+  同样不体现文件数。
+- 口径（用户选定）：**文件＝一个「作品 × 格式」判定**；docx 过而连带认定的 pdf 也算一个。
+  校验行按判定数、导入行按实际入库数。
+- [x] `cbeta_publish/books/verify_worker.py`：通过行加格式（`...通过（pdf/epub）`，含
+  报告无逐格式行时按本次请求格式回填）；新增 `verdicts = Signal(object)`（`finished_all`
+  之前发出逐本 `{work: {passed, failed, undet}}`，无基线/被覆盖格式计入 undet）；
+  `finished_all` 仍 3 参，既有 6 处连接点不受影响。
+- [x] `cbeta_publish/gui/main_window.py`：收尾先给产出本数行
+  （`1 部 x 2 格式 (pdf+epub) = 2 个文件`，`_fmt_counts_line` 增 `unit` 参数，默认「部」），
+  再「校验完成 x/y 部」；`已自动导入 n 部（m 个文件）`；`跳过已通过 n 部（源未变：pdf/epub）`；
+  重制全新鲜行改「重制完成 n 部（pdf/epub，源未变、本次跳过校验）」；**无新鲜项不再空打
+  「0 部」行、不再空重置进度条**。
+- [x] `cbeta_publish/books/xml2pdf_bridge.py`：`write_verify_summary` 计数行先给格式集合，
+  再给逐档文件数（`共 4 部（格式 docx/epub/pdf）：通过 2 部（5 个文件） / 未通过 1 部（1 个文件） / 未判定 1 部（1 个文件）`）。
+- [x] 测试：`test_verify_import.py` 增 2 例（worker 全过带格式＋`verdicts`；收尾本数行/导入文件数）、
+  `test_xml2pdf_bridge.py` 计数行断言更新。
+- [x] 文档：`docs/UI设计.md` 自制/校验节、`docs/链路B-设计契约.md` §9.1 总报告。
+
 ## 备注
 
 - 本地 `bulei.txt` 为 CBETA 23 部類；三藏映射 经(01-10)/律(11)/论(12-15)/藏外(16-23)。

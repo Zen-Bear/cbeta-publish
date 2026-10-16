@@ -366,6 +366,40 @@ class VerifySendImportTest(unittest.TestCase):
         self.assertEqual((base / "pdf" / "T0001 大般若經.pdf").read_bytes(), b"PDF")  # 自动导入
         self.assertTrue((base / "pdf" / "T0002 大般若經.pdf").exists())
 
+    def test_finish_summary_counts_formats_and_files(self):
+        # 收尾口径：一部两格式要读出「几个格式、几个文件」，不能只说「校验完成 1/1」
+        import cbeta_publish.books.xml2pdf_bridge as b
+        win = self.win
+        win.chk_pdf.setChecked(True)
+        win.chk_epub.setChecked(True)
+        win.chk_docx.setChecked(False)
+        real = b.verify_work
+
+        def fake(work, fmts, out_dir, config, preset=None, stop=None, juan=None):
+            out = Path(out_dir)
+            out.mkdir(parents=True, exist_ok=True)
+            (out / f"{work} 大般若經.pdf").write_bytes(b"PDF")
+            (out / f"{work} 大般若經.epub").write_bytes(b"EPUB")
+            vd = out / f"{work} 大般若經（验证）"
+            vd.mkdir(parents=True, exist_ok=True)
+            rp = vd / "report.txt"
+            rp.write_text("=== T0001\n  [OK]  pdf 缺0 多0\n  [OK]  epub 缺0 多0\n",
+                          encoding="utf-8")
+            return rp
+
+        b.verify_work = fake
+        boxes, restore = self._patch_common()
+        try:
+            win._send_coll_to_verify()
+        finally:
+            b.verify_work = real
+            restore()
+            win.chk_epub.setChecked(False)
+        flat = [x for f in self._finishes for x in f]
+        self.assertIn("2 部 x 2 格式 (pdf+epub) = 4 个文件", flat)      # 产出本数行按文件
+        self.assertTrue(any("校验完成 2/2 部" in x for x in flat), flat)
+        self.assertTrue(any("已自动导入 2 部（4 个文件）" in x for x in flat), flat)
+
     def test_send_reports_failure(self):
         # 报告含 [FAIL] → 不入库
         import cbeta_publish.books.xml2pdf_bridge as b
@@ -769,6 +803,35 @@ class VerifySendImportTest(unittest.TestCase):
             b.verify_work = real
         self.assertTrue(any("部分通过" in m and "docx/pdf" in m and "epub" in m
                             for m in msgs), msgs)
+
+    def test_worker_pass_line_and_verdicts_show_formats(self):
+        # 全过也要标出格式（原先只有「...通过」）；verdicts 给逐本格式判定，
+        # 供收尾按「作品 × 格式」计文件数
+        from cbeta_publish.books.verify_worker import VerifyWorker
+        import cbeta_publish.books.xml2pdf_bridge as b
+        real = b.verify_work
+
+        def fake(work, fmts, out_dir, config, preset=None, stop=None, juan=None):
+            out = Path(out_dir)
+            out.mkdir(parents=True, exist_ok=True)
+            rp = out / "r2.txt"
+            rp.write_text("=== T0001\n  [OK]  docx 缺0 多0\n  [OK]  epub 缺0 多0\n",
+                          encoding="utf-8")
+            return rp
+
+        b.verify_work = fake
+        msgs, got = [], {}
+        try:
+            w = VerifyWorker(["T0001"], ["docx", "epub"],
+                             self.tmp / "o-formats", self.win.config)
+            w.progress.connect(lambda done, label, level: msgs.append(label))
+            w.verdicts.connect(lambda v: got.update(v or {}))
+            w.run()
+        finally:
+            b.verify_work = real
+        self.assertTrue(any(m.endswith("...通过（docx/epub）") for m in msgs), msgs)
+        self.assertEqual(got.get("T0001"), {"passed": ["docx", "epub"],
+                                            "failed": [], "undet": []})
 
     def test_worker_aggregates_same_work_variants(self):
         # 同一 work 的多个语义产物报告都要参加判定，不能只看最新一份。

@@ -1391,7 +1391,8 @@ class BridgeVerifySummaryTest(unittest.TestCase):
         out = b.write_verify_summary(self.dir, "测丛书")
         self.assertEqual(out.name, "总验证报告.txt")
         text = out.read_text(encoding="utf-8")
-        self.assertIn("共 4 部：通过 2 部 / 未通过 1 部 / 未判定 1 部", text)
+        self.assertIn("共 4 部（格式 docx/epub/pdf）：通过 2 部（5 个文件） / "
+                      "未通过 1 部（1 个文件） / 未判定 1 部（1 个文件）", text)
         self.assertIn("T0002 校验未通过（epub 缺3/多1）", text)
         self.assertIn("T0004 通过（docx/pdf）", text)
         self.assertIn("T0003 未判定（epub无基线）", text)
@@ -1443,8 +1444,9 @@ class BridgeVerifySummaryTest(unittest.TestCase):
                                      skipped=[("T9001", ["pdf", "docx"]),
                                               ("T9002", [])])
         text = out.read_text(encoding="utf-8")
-        self.assertIn("共 4 部：通过 2 部 / 未通过 1 部 / 未判定 1 部 / 复用旧校验 2 部",
-                      text)
+        self.assertIn("共 4 部（格式 docx/epub/pdf）：通过 2 部（5 个文件） / "
+                      "未通过 1 部（1 个文件） / 未判定 1 部（1 个文件） / "
+                      "复用旧校验 2 部", text)
         self.assertIn("复用旧校验（跳过） 2 部", text)
         self.assertIn("・T9001（pdf/docx）", text)
         self.assertIn("・T9002", text)
