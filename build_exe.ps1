@@ -204,6 +204,16 @@ $json = $cfg | ConvertTo-Json -Depth 100
 # 写 UTF-8 无 BOM（PowerShell 5.1 的 Set-Content -Encoding UTF8 会加 BOM，json.loads 会报错）
 [System.IO.File]::WriteAllText($cfgPath, $json, (New-Object System.Text.UTF8Encoding($false)))
 
+# ---------- 6.5 出厂化：清掉包内不该随包分发的本机信息 ----------
+# 三处（详见 packaging/sanitize_dist.py 顶部说明）：
+#   1) config/app.default.json 的 official_library.root（上面只改写了目录类键）；
+#   2) mulu/backup/{last,original}/app.json（打包机自己的配置快照，会让新用户
+#      「恢复原始」恢复成打包机配置）；
+#   3) 包内预设 xml2pdf/presets/*.json 里指向本机的绝对路径（source.*、annotations.file）。
+Info "出厂化：清理包内本机路径与本机配置快照 …"
+& $Python (Join-Path $Repo "packaging\sanitize_dist.py") "$Dist"
+if ($LASTEXITCODE -ne 0) { throw "sanitize_dist.py 失败（code $LASTEXITCODE）" }
+
 # ---------- 7. 可选：Chromium（playwright）----------
 if ($WithBrowsers) {
     $src = Join-Path $env:LOCALAPPDATA "ms-playwright"

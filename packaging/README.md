@@ -68,7 +68,8 @@ signtool verify /pa /v cbeta-publish.exe
 - `config/app.json`（构建时改写为相对路径）
 - `mulu/`（`bulei.txt`、`category.json`、`vol.json`、`dynasty-works.json`、
   `SutraList.json`、`sutra_mapping.txt`、`all-creators-with-alias.json`、
-  `creators-by-strokes-with-works.json`、`backup/`；排除 `cache/`）
+  `creators-by-strokes-with-works.json`、`backup/`；排除 `cache/`；
+  出厂化剔除 `backup/{last,original}/app.json`）
 - `assets/images/`：`B01.jpg`、`B02.jpg`、`1.tif`、`2.tif`（＋备用 `A01/A02.jpg`）
 - `assets/fonts/`：封面标题字体（`朝華標題B.ttf`，LFS；config 相对引用）
 - `xml2pdf/`：从 cbeta-xml2pdf 仓库拷贝的 `presets/` ＋ `run.json`（供制书选预设）
@@ -90,6 +91,10 @@ signtool verify /pa /v cbeta-publish.exe
   因此打包后放 exe 同级即可读写、便携。
 - `config/app.json` 里相关路径构建时改写为**相对路径**（如 `mulu`、`cbeta_ebooks`、
   `xml2pdf`），运行时相对 `app_root()` 解析。
+- `packaging/sanitize_dist.py`：打包收尾的**出厂化**（`build_exe.ps1` 第 6.5 步自动调用）——
+  清掉包内不该随包分发的本机信息：`config/app.default.json` 的 `official_library.root`、
+  `mulu/backup/{last,original}/app.json`（打包机的配置快照）、包内预设
+  `xml2pdf/presets/*.json` 里指向本机的绝对路径（相对路径与其它值不动）。
 - `packaging/cbeta_publish.spec`：PyInstaller onedir 定义；`excludes` 去掉
   tkinter/numpy/QtWebEngine 等无用大件。
 
