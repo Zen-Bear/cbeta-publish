@@ -6517,8 +6517,9 @@ class MainWindow(QMainWindow):
                                convert_path=None):
         """把逐本/逐格式校验结果写入「书籍信息」页签（含目录/文件链接），并切到该页。
 
-        已入库条目列出每部书入库了哪个格式文件（可点开），如：
-        ・T1852（docx/pdf）；未入 epub
+        已入库条目列出每部书入库了哪个格式文件（可点开），条目用右栏同款
+        `work-id 书名（卷…）`，如：
+        ・T0220 大般若波羅蜜多經（卷479）（docx/pdf）；未入 epub
         summary_path 非空时首行给出总验证报告链接；convert_path 非空时给出总转换报告链接。
         """
         import html as _html
@@ -6529,6 +6530,23 @@ class MainWindow(QMainWindow):
         def _filelink(p, label):
             return (f'<a href="{_QU.fromLocalFile(str(Path(p).resolve())).toString()}">'
                     f'{_html.escape(label)}</a>')
+        def _titled(x):
+            """条目串 → 右栏同款 `work-id 书名（卷…）`；取不到书名就原样。
+
+            条目串首部是条目键（`T0220:479`，键内无空格）；其后可能跟空格尾巴
+            （` 校验未通过（…）`）或全角括号（`（pdf/docx）`）。只换首部，
+            尾巴与括号内容原样保留，报告口径不变。
+            """
+            _k = x.split(" ", 1)[0].split("（", 1)[0]
+            if not _k:
+                return x
+            try:
+                _t = self._entry_book_title(_k)
+            except Exception:
+                return x
+            if not _t or _t == _k:
+                return x
+            return _t + x[len(_k):]
         WARN='<span style="color:#c62828;">%s</span>'
         parts=["<b>校验结果</b>",
                "验证输出目录：" + _dirlink(vdir)]
@@ -6544,23 +6562,24 @@ class MainWindow(QMainWindow):
                 _work = x.split("（", 1)[0]
                 _files = _okf.get(_work)
                 if not _files:
-                    parts.append(f"・{_html.escape(x)}")
+                    parts.append(f"・{_html.escape(_titled(x))}")
                     continue
                 _links = "/".join(_filelink(_dst, _fmt) for _fmt, _dst in _files)
                 _tail = ""
                 if "；未入 " in x:
                     _tail = "；未入 " + x.split("；未入 ", 1)[1]
                 _mark = "（人工放行）" if _work in _manual else ""
-                parts.append(f"・{_html.escape(_work)}（{_links}）{_html.escape(_tail)}{_mark}")
+                parts.append(f"・{_html.escape(_titled(_work))}（{_links}）"
+                             f"{_html.escape(_tail)}{_mark}")
         if imp.get("reused"):
             parts.append(f"<b>已通过（跳过） {len(imp['reused'])} 部</b>")
-            parts += [f"・{_html.escape(x)}" for x in imp["reused"]]
+            parts += [f"・{_html.escape(_titled(x))}" for x in imp["reused"]]
         if imp["fail"]:
             parts += [WARN % f"未入库 {len(imp['fail'])} 部："]
-            parts += [WARN % f"・{_html.escape(x)}" for x in imp["fail"]]
+            parts += [WARN % f"・{_html.escape(_titled(x))}" for x in imp["fail"]]
         if imp["undet"]:
             parts += [WARN % f"未判定 {len(imp['undet'])} 部（需人工看报告）："]
-            parts += [WARN % f"・{_html.escape(x)}" for x in imp["undet"]]
+            parts += [WARN % f"・{_html.escape(_titled(x))}" for x in imp["undet"]]
         if imp["skip"]:
             parts += [f"跳过 {len(imp['skip'])} 部（不在丛书中）"]
         parts.append("已入库目录：" + _dirlink(base))

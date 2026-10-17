@@ -870,6 +870,40 @@ class VerifySendImportTest(unittest.TestCase):
         self.assertIn("T0001.docx", txt)
         self.assertIn("T0001.pdf", txt)
         self.assertIn("href=", txt)
+        # 条目带右栏同款书名（原先只有裸条目键）
+        self.assertIn(win._entry_book_title("T0001"), txt)
+
+    def test_show_verify_results_items_use_right_panel_title(self):
+        # 四份列表（已入库/已通过跳过/未入库/未判定）条目都用右栏同款标题；
+        # 卷名收进「（卷…）」、格式名仍是可点链接、尾巴文字不丢
+        win = self.win
+        base = Path(win.config["xml_to_ebooks_dir"])
+        imp = {"ok": ["T0001:1（docx）"],
+               "fail": ["T0001:2 校验未通过（epub）"],
+               "undet": ["T0001:3 未判定"],
+               "reused": ["T0001:4（pdf/docx）"],
+               "skip": [],
+               "ok_files": {"T0001:1": [("docx", str(base / "docx" / "T0001_001.docx"))]}}
+        win._show_verify_results(imp, Path(win.config["verify_dir"]), base)
+        txt = win.detail.text()
+        for _e in ("T0001:1", "T0001:2", "T0001:3", "T0001:4"):
+            self.assertIn(win._entry_book_title(_e), txt)
+        self.assertIn("（卷1）（", txt)              # 卷名收进条目
+        self.assertIn(">docx</a>", txt)             # 格式名仍是链接
+        self.assertIn("校验未通过（epub）", txt)
+        self.assertIn("已通过（跳过） 1 部", txt)
+        self.assertIn("T0001_001.docx", txt)
+
+    def test_show_verify_results_unknown_work_keeps_key(self):
+        # 目录里查不到的条目（如外部导入）原样显示，不弄坏报告
+        win = self.win
+        imp = {"ok": ["ZZ9999（docx）"], "fail": ["ZZ9998 缺产物"],
+               "undet": [], "skip": []}
+        win._show_verify_results(imp, Path(win.config["verify_dir"]),
+                                 Path(win.config["xml_to_ebooks_dir"]))
+        txt = win.detail.text()
+        self.assertIn("ZZ9999（docx）", txt)
+        self.assertIn("ZZ9998 缺产物", txt)
 
     def test_worker_base_exception_still_finishes(self):
         # verify_work 抛 SystemExit 等 BaseException 也必须发出 finished_all，
