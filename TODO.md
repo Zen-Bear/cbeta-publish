@@ -570,6 +570,32 @@
   目录查不到的条目原样），并给 `test_show_results_links_imported_files` 加标题断言。
 - [x] 文档：`docs/UI设计.md` 导入校验节补条目显示口径。
 
+### P26 — 「相关（按题名）」不把 SutraList 目录节点当作品（已完成）
+- 现象（2026-10-18 用户）：释太虛「相关（按题名）」里出现 `TX 太虛大師全書`——那是 SutraList 的
+  **目录节点**（无作品编号，children 才是 TX0001…TX0020），不是叶子作品。
+- 根因：`SutraService._build` 只判「标题首字符是拉丁字母」，把目录节点（`TX`、`T`、`X`、`Y`、
+  `LC`、`GA`、`GB`…）与区间节点（`X01-02`、`J32-33`、`N48-62`…共 123 个非标准号）也登记成
+  作品编号；相关匹配再按「太虛＋紧邻大師」命中它。全量扫描：受影响的「相关」条目全库仅此一条。
+- [x] `cbeta_publish/catalog/sutra_service.py` `_build`：首词过共享层 `cbeta_fetch.is_work_id`
+  （字母＋数字，`T0349/TXa001/T0150A/ZW0018b`），目录/区间节点不登记；`title_of('TX')` 随之回退为 `'TX'`。
+- [x] `cbeta_publish/gui/main_window.py` `_related_works`：SutraList 全量与作者树叶兜底都加
+  `is_work_id` 过滤（双保险）。
+- [x] 测试：新增 `tests/test_sutra_service.py`（临时 JSON 夹具：目录/区间节点不入 all_ids、
+  `title_of` 回退、真叶子保留）；`test_right_panel.py` 增 `test_author_related_skips_container_ids`
+  （桩里塞 `TX` 目录号，相关只留 TXa001）。
+- [x] 文档：`docs/UI设计.md` 作者节补「目录/区间节点不算作品」。
+
+### P27 — 「相关（按题名）」后缀补「尊者」（已完成）
+- 现象（2026-10-18 用户）：`X1452 紫柏尊者全集`、`X1453 紫柏尊者別集` 源数据挂在德清/錢謙益
+  （「閱／纂閱」）名下，真可（紫柏）名下找不到；「相关（按题名）」也不认领——名字后紧跟「尊者」，
+  而后缀表没有它。
+- 全量扫描（全部作者一遍过，无需逐个指定）：无过滤候选 913 对，绝大多数是词义撞名
+  （般若→大般若經 72、心經 58…）；按称呼/体裁词过滤后真例仅 3 条（紫柏全集/別集→真可、
+  阿底峽尊者傳→阿底峽）；「集／別集」类 4 条全是已确认错配（空谷集、永光集、唯心集、天竺別集）。
+- [x] `cbeta_publish/creators/related_works.py`：`SUFFIXES` 加「尊者」；模块注释记「集／別集」不收的原因。
+- [x] 测试：`tests/test_related_works.py` 增 2 例（尊者三正例；天竺別集/空谷集不命中；related_index 归位）。
+- [x] 文档：`docs/UI设计.md` 作者节后缀列表加「尊者」。
+
 ## 备注
 
 - 本地 `bulei.txt` 为 CBETA 23 部類；三藏映射 经(01-10)/律(11)/论(12-15)/藏外(16-23)。

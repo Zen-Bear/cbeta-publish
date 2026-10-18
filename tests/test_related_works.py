@@ -28,6 +28,15 @@ class RelatedWorksTest(unittest.TestCase):
         # 单字名不比
         self.assertIsNone(rw.matches("禪師語錄", ["禪"]))
 
+    def test_matches_venerable_suffix(self):
+        # 2026-10-18：「尊者」入后缀——紫柏尊者全集/別集 归真可、阿底峽尊者傳 归阿底峽
+        self.assertEqual(rw.matches("紫柏尊者全集 (29卷)", ["真可", "紫柏", "紫栢"]), "紫柏")
+        self.assertEqual(rw.matches("紫柏尊者別集 (4卷)", ["真可", "紫柏"]), "紫柏")
+        self.assertEqual(rw.matches("阿底峽尊者傳 (1卷)", ["阿底峽"]), "阿底峽")
+        # 「集／別集」不入后缀：天竺別集是遵式的（「天竺」指天竺寺）、空谷集是釋景隆的
+        self.assertIsNone(rw.matches("天竺別集 (3卷)", ["佛陀跋陀羅", "天竺"]))
+        self.assertIsNone(rw.matches("空谷集 (3卷)", ["道澄", "空谷"]))
+
     def test_names_index_drops_short_and_duplicate(self):
         idx = rw.names_index({"A1": {"regular_name": "梵琦",
                                      "aliases_all": ["梵琦", "楚", "", "楚石"]}})
@@ -56,6 +65,21 @@ class RelatedWorksTest(unittest.TestCase):
         idx2 = rw.related_index({"A1": {"regular_name": "無相"}},
                                 {"X9999": "X9999 無相禪師語錄 (2卷)"})
         self.assertEqual([w for w, _t, _n in idx2["A1"]], ["X9999"])
+
+    def test_related_index_venerable_titles_go_to_named_author(self):
+        # 全量实测（2026-10-18）「尊者」新增仅这 3 部：紫柏全集/別集→真可、阿底峽尊者傳→阿底峽
+        alias = {"A1": {"regular_name": "真可", "aliases_all": ["紫柏", "紫栢", "達觀"]},
+                 "A2": {"regular_name": "阿底峽"},
+                 "A3": {"regular_name": "佛陀跋陀羅", "aliases_all": ["天竺"]}}
+        works = {"X1452": "X1452 紫柏尊者全集 (29卷)【明 德清閱】",
+                 "X1453": "X1453 紫柏尊者別集 (4卷)【明 錢謙益纂閱】",
+                 "B0072": "B0072 阿底峽尊者傳 (1卷)",
+                 "X0951": "X0951 天竺別集 (3卷)【宋 遵式述　慧觀重編】"}
+        idx = rw.related_index(alias, works)
+        self.assertEqual([(w, n) for w, _t, n in idx["A1"]],
+                         [("X1452", "紫柏"), ("X1453", "紫柏")])
+        self.assertEqual([w for w, _t, _n in idx["A2"]], ["B0072"])
+        self.assertNotIn("A3", idx)     # 「別集」不入后缀，「天竺」不认领
 
     def test_related_index_empty_inputs(self):
         self.assertEqual(rw.related_index({}, {"X1": "X1 太虛大師全書"}), {})
