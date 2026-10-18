@@ -2,6 +2,8 @@
 import json
 from pathlib import Path
 
+from cbeta_publish._vendor import cbeta_fetch as cf
+
 class SutraService:
     def __init__(self, path: str | Path):
         self.path = Path(path)
@@ -15,10 +17,12 @@ class SutraService:
                 for c in node["children"]:
                     dfs(c)
             title = node.get("title","")
-            # title like "T0001 长阿含经"
+            # title like "T0001 长阿含经"；目录节点（"TX 太虛大師全書"）与区间节点
+            # （"X01-02 印度撰述 X0001-0207"）首词不是作品编号，跳过——别当作品
             if title and title[0] in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
                 wid = title.split()[0]
-                self._id_to_title[wid] = title
+                if cf.is_work_id(wid):
+                    self._id_to_title[wid] = title
         for g in self.data:
             dfs(g)
 

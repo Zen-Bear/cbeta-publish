@@ -846,6 +846,44 @@ class RightPanelTest(unittest.TestCase):
             win.author_radios["拼音排序"].setChecked(True)
             self._nav("作者")
 
+    def test_author_related_skips_container_ids(self):
+        # 「相关」只收真作品编号：SutraList 目录节点（TX 太虛大師全書）不进相关
+        win = self.win
+        strokes = [{"title": "4畫(stroke)", "children": [
+            {"title": "太", "children": [
+                {"title": "太虛", "key": "A900009",
+                 "children": [{"key": "TX0001",
+                               "title": "TX0001 太虛大師全書．第一編　佛法總學 (34卷)"}]}]}]}]
+        old_strokes, old_cache = win.creator.strokes, win._authors_pinyin_sorted
+        restore = self._patch_related(
+            win, {"A900009": {"regular_name": "太虛", "aliases_all": ["太虛大師"]}},
+            {"TX": "TX 太虛大師全書",             # 目录节点：无作品编号，剔除
+             "TX0001": "TX0001 太虛大師全書．第一編　佛法總學 (34卷)【民國 釋太虛著】",
+             "TXa001": "TXa001 太虛大師全書．編纂說明 (2卷)"})
+        win.creator.strokes = strokes
+        win._authors_pinyin_sorted = None
+        try:
+            self._nav("作者")
+            win.author_radios["笔画排序"].setChecked(True)
+            win._refresh_author_tree()
+            nodes = self._find_author_item(win, "太虛")
+            self.assertEqual(len(nodes), 1, [n.text(0) for n in nodes])
+            node = nodes[0]
+            self.assertEqual(node.text(0), "太虛 (1部)")
+            kids = [node.child(i).text(0) for i in range(node.childCount())]
+            self.assertEqual(len(kids), 2, kids)
+            self.assertTrue(kids[0].startswith("TX0001"), kids)
+            self.assertEqual(kids[1], "相关（按题名）(1部)")
+            grp = node.child(1)
+            self.assertEqual(grp.childCount(), 1)
+            self.assertTrue(grp.child(0).text(0).startswith("TXa001"), grp.child(0).text(0))
+        finally:
+            win.creator.strokes = old_strokes
+            win._authors_pinyin_sorted = old_cache
+            restore()
+            win.author_radios["拼音排序"].setChecked(True)
+            self._nav("作者")
+
     def test_author_related_skips_own_and_absent(self):
         # 已归本作者名下的作品不再重复列进「相关」；没有相关作品就不出这个分组
         win = self.win

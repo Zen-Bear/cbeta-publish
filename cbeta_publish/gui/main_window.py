@@ -1632,7 +1632,8 @@ class MainWindow(QMainWindow):
     def _related_works(self):
         """{作者id: [(作品id, 标题, 命中名)]}：按题名关联的作品（进程内缓存一次）。
 
-        标题取 SutraList 全量（+ 作者树叶兜底）。只用于「相关（按题名）」子分组。
+        标题取 SutraList 全量（+ 作者树叶兜底），只收真作品编号（`is_work_id`）：
+        目录/区间节点（`TX 太虛大師全書`、`X01-02 …`）不算作品。只用于「相关（按题名）」子分组。
         """
         if getattr(self, "_related_cache", None) is not None:
             return self._related_cache
@@ -1640,7 +1641,8 @@ class MainWindow(QMainWindow):
         works = {}
         try:
             for wid in self.sutra.all_ids():
-                works[wid] = self.sutra.title_of(wid)
+                if work_id.is_work_id(wid):     # 目录/区间节点（无作品编号）不当作品
+                    works[wid] = self.sutra.title_of(wid)
         except Exception as e:
             print("related works: sutra fail", e)
         try:
@@ -1649,7 +1651,7 @@ class MainWindow(QMainWindow):
                     for a in su.get("children", []) or []:
                         for c in a.get("children", []) or []:
                             wid = (c.get("key") or "").strip() if isinstance(c, dict) else ""
-                            if wid and wid not in works:
+                            if wid and wid not in works and work_id.is_work_id(wid):
                                 works[wid] = c.get("title") or self.sutra.title_of(wid)
         except Exception as e:
             print("related works: strokes fail", e)
