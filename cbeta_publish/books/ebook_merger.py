@@ -420,8 +420,6 @@ def _cover_pdf(first_src: Path, title: str, out_path: Path, organizer: str="", c
         body_a4 = styles["body"].get("a4", body_a4)
         body_16k = styles["body"].get("16k", body_16k)
         body_32k = styles["body"].get("32k", body_32k)
-    ratios = sizes.get("ratios", {})
-    toc_delta = _delta("toc_item", 1)
     # 纸张对应正文字体与边距（优先纸张定义，无则用 margin_ratio）
     body_map = {"a5": body_a5, "a4": body_a4, "16k": body_16k, "32k": body_32k}
     base_sz = body_map.get(paper, body_a4)
@@ -444,7 +442,6 @@ def _cover_pdf(first_src: Path, title: str, out_path: Path, organizer: str="", c
     left=_get_margin("left")
     right=_get_margin("right")
     top=_get_margin("top")
-    bottom=_get_margin("bottom")
     avail=width-left-right
     cx=left+avail/2
     # 兼容旧逻辑的 base_sz 覆盖（保持 is_a5 分支兼容）
@@ -686,7 +683,6 @@ def _toc_pdf(titles: list[str], first_src: Path, out_path: Path, config: dict=No
     fonts=cfg.get("fonts",{})
     colors=cfg.get("colors",{})
     sizes=cfg.get("sizes",{})
-    pos=cfg.get("positions",{})
     def _font(name, default):
         if name in styles and "font" in styles[name]:
             return styles[name]["font"]
@@ -1091,7 +1087,7 @@ def _editnote_pdf(parsed, first_src: Path, out_path: Path, config: dict=None) ->
         width, height = (595,842)
     tm=_toc_text_style(cfg, width, height, _detect_paper(width, height))
     left=tm["left"]; right=tm["right"]; bottom=tm["bottom"]
-    title_sz=tm["title_sz"]; item_sz=tm["item_sz"]
+    title_sz=tm["title_sz"]
     # 编辑说明正文用独立字号（cover.sizes.editnote_body，缺省 12；6–40 钳制）
     try:
         body_sz=int((sizes.get("editnote_body", 12) or 12))

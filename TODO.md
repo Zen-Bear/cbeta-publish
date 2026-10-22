@@ -49,8 +49,14 @@
   （不分册/刊本册/目录部类/手工分册/作者/朝代/合并时选择）+ 深度；右栏书单支持分组
   （平铺/按刊本册/按部类/按作者/按朝代/手工分册，`_CollTree`；后四者为只读视图，可整体拷入手工分册）；
   单测 `tests/test_by_catalog.py`、`tests/test_manual_volumes.py`、`tests/test_by_author_dynasty.py`。
+- **发布 v0.9.5**（2026-10-22）：tag `v0.9.5` → `584d9f7`；交付 `cbeta-publish.zip`（157,310,255 字节，sha256 `0a5d6f21…4b928a3`）；Windows 便携包，未签名、未内置 Chromium。
 
 ## 待办
+
+**P28 剩余（非必需）**
+
+- 批量下载 2–4 并发（可选）。
+- 空服务替身（测试辅助）。
 
 ### P0 — 上游跟进（已完成：上游已实现，publish 复用已落地）
 - 上游 `pycbeta.verify.verify_fingerprint` + `report.json` 已落地（见上游 `docs/校验report.json说明.md`）。
@@ -596,8 +602,9 @@
 - [x] 测试：`tests/test_related_works.py` 增 2 例（尊者三正例；天竺別集/空谷集不命中；related_index 归位）。
 - [x] 文档：`docs/UI设计.md` 作者节后缀列表加「尊者」。
 
-### P28 — 代码审计：数据安全、并发与性能（2026-10-19 审计完成；第一至第四批已完成）
-- 实施进展（2026-10-21）：第一批、第二批（除可选的下载并发）、第三批与第四批已完成；第五批待实施。
+### P28 — 代码审计：数据安全、并发与性能（2026-10-19 审计完成；第一至第五批已完成）
+- 口径说明：本章代码行号、行数、模块数为记录时快照；`main_window.py` 在 v0.9.4 实测 9147 行（文中 8738 为误记），现 9505 行；业务模块现 46 个（审计记 44 个）。现状请按函数名或条目名定位。
+- 实施进展（2026-10-22）：第一批、第二批（除可选的下载并发）、第三批、第四批（4 项）、第五批（2 项）均已完成；仅剩可选下载并发与空服务替身（测试辅助）。
   第三批另修正一处：自定义 `mulu_dir` 时更新**落盘目标**也跟随（`remote_sources.local_path`
   增加根参数，`RemoteManager`/`UpdateWorker` 透传），否则更新仍写默认 `mulu/`。
   实测：`MainWindow` 初始化 **2.20 s → 0.74 s**；`canonical_entry`
@@ -751,13 +758,13 @@
     必须显式校验）；`.part` 名加 pid+随机后缀；`unzip=True` 临时 zip + `unzip_flat`。
   - [x] 新增 `probe_status(url) -> int|None`（HEAD 状态码，共用同一套 TLS 上下文），
     publish `_head_absent_404` 改用它，保留 404/410 快判。
-  - [ ] 解压原子性与同名策略：延后第二批（临时目录解压后替换；同名整单失败 vs 后者覆盖）。
-  - 实施：cbeta-fetch `817d207` / v0.2.0（本地 commit，未推送；该仓库未配置 remote）；已同步 xml2pdf `pycbeta/_vendor` 与
-    publish `cbeta_publish/_vendor`（两边 `SOURCE.txt` 已更新）。上游 23 项、
+  - [x] 解压原子性与同名策略：先解到同卷临时目录，成功后逐个 `os.replace`；同名 basename（Windows 下不分大小写）与 `.`/`..` 条目整单失败；目标目录既有文件保留。cbeta-fetch 0.2.1 / `d28fc5d`。
+  - 实施：cbeta-fetch `d28fc5d` / v0.2.1（本地 commit，未推送；该仓库未配置 remote）；已同步 xml2pdf `pycbeta/_vendor` 与
+    publish `cbeta_publish/_vendor`（两边 `SOURCE.txt` 已更新）。上游 28 项、
     publish 861 项、xml2pdf `test_fetch` 51 项 + `test_update_data` 20 项 + vendor sync 3 项通过。
   - 方案与测试清单见 `docs/上游-cbeta-fetch-TLS与分块下载.md`。
 - 第五批（工程化）：
-  - [ ] 加 ruff（先只开 E722/F841/E501）；CI 可选。
+  - [x] 加 ruff：新增 `ruff.toml`，只开 E722/F841（E501 待定 line-length，暂置 100）；E722 0、F841 0（含 tests）；CI 可选（未接）。
   - [x] **不整体拆** `main_window.py`（8738 行，拆分收益低于回归风险）：新代码进独立模块，
     旧文件只在改动时顺手抽离（如本次原子写、名称清洗、搜索缓存）。
 - 测试计划：原子写、名称越界（`..` 与非法字符）、不同工作目录下启动、配置损坏回退、编号索引缓存、
@@ -791,9 +798,9 @@
   - 富文本：右栏 `detail` 改用 `_DetailLabel`（默认纯文本，校验汇总走 `setHtml`）；直接进 QMessageBox 的用户名/分类名/标签名按 `_esc_ui` 转义。
   - 小项：批量保存取消空白改名不再按临时名落盘；`check_all` 有失败/停止不写 `last_check`；发布元数据写失败保留脏标记；`_name_taken` 大小写不敏感（原有路径归一测试改用尾部空格，继续覆盖避让逻辑）。
   - 上一轮遗留 P0/P1：更新页「恢复原始/上一次」只恢复 SOURCES 目录数据，配置快照移到 `backup/config/`（恢复原始优先用出厂模板）；分类/标签文件损坏时先另存 `.bad-<时间戳>` 再写；清理报告按「清理前－清理后」统计实际删除量并提示残留；`meta.json` 损坏先备份再按空库继续。
-  - P2/P3：`_replace_staged_path` 残留目录返回 False；EPUB `full-path` 反斜杠/`./..` 归一；新建分类 id 经 `safe_name` 清洗；14 处裸 `except:` 改 `except Exception:`。
+  - P2/P3：`_replace_staged_path` 残留目录返回 False；EPUB `full-path` 反斜杠/`./..` 归一；新建分类 id 经 `safe_name` 清洗；18 处裸 `except:` 改 `except Exception:`（17 处在 `941f6ed`，1 处 `main_window.py:2347` 在本次）。
   - 测试：全量 **861 项通过**（原 851 + 新增 10 项）；`tests/test_state_regressions.py` 覆盖退出保存失败、取消不写水位、配置目录保留、名称大小写、放行指纹、设置页配置路径、分类/标签/meta 损坏、恢复只还原目录数据。
-  - 未做：第四批之二（解压原子性/同名策略）、空服务替身（测试辅助）。
+  - 未做：空服务替身（测试辅助）；批量下载并发（可选）。
 
 ## 备注
 

@@ -53,7 +53,6 @@ class RightPanelTest(unittest.TestCase):
 
     def test_publish_group_wraps_format_and_buttons(self):
         win = self.win
-        box = win.findChild(QGroupBox, None)
         # 找到标题为「发布」的分组框
         groups = [g for g in win.findChildren(QGroupBox) if g.title() == "发布"]
         self.assertEqual(len(groups), 1, [g.title() for g in win.findChildren(QGroupBox)])

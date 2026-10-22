@@ -1,0 +1,8 @@
+# 只开低风险规则；E501 待定行宽（P28 记录：88→567、100→191、120→60 处）。
+line-length = 100
+
+# 共享层为上游单源，按上游风格；不在此处 lint，避免误改 vendor。
+extend-exclude = ["cbeta_publish/_vendor"]
+
+[lint]
+select = ["E722", "F841"]

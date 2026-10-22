@@ -13,7 +13,7 @@ URL 模板 / work id 大小写规范化 / catalog 查表 / 文件与 zip 下载 
 同步：本文件是唯一事实源；宿主项目内的副本请用 `tools/sync_into.py` 同步，勿手改。
 """
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 
 import os
 import re
@@ -213,7 +213,8 @@ def download(url: str, dest: str, *, timeout: int = 90, retries: int = 2,
     """下载 `url` → `dest`。文件写入为**原子替换**（`.part` → `os.replace`）。
 
     - `unzip=False`：`dest` 是**文件路径**（父目录自动创建）。
-    - `unzip=True`：`dest` 是**目录**，下载 zip 后平展解压（zip 不留）。
+    - `unzip=True`：`dest` 是**目录**，下载 zip 后平展解压（zip 不留）；先解到临时
+      目录、成功后逐个替换，同名 basename 整单失败。
     - TLS 按主机预选：cbdata 只放宽 `VERIFY_X509_STRICT`，证书链与主机名照常校验。
     - 响应带 `Content-Length` 时校验实际写入字节数；短读失败重试。
     失败返回 False（重试 `retries` 次）。
@@ -252,7 +253,7 @@ def download(url: str, dest: str, *, timeout: int = 90, retries: int = 2,
 
 
 def _unzip_bytes(data: bytes, dest_dir: str) -> bool:
-    """兼容旧调用：内存 zip → 临时文件 → 平展解压（同名后者覆盖）。"""
+    """兼容旧调用：内存 zip → 临时文件 → 平展解压（原子；同名整单失败）。"""
     base = os.path.abspath(dest_dir)
     tmp = _part_path(base + ".zip")
     try:
@@ -266,13 +267,33 @@ def _unzip_bytes(data: bytes, dest_dir: str) -> bool:
         _remove(tmp)
 
 
-def _extract(zf: "zipfile.ZipFile", dest_dir: str) -> None:
+def _flat_entries(zf: "zipfile.ZipFile") -> List[Tuple[str, str]]:
+    """返回 (zip 内名, 平展后的 basename)。
+
+    同名 basename（Windows 下不分大小写）整单失败，避免“后者覆盖”造成不可预期的
+    内容；不安全的 `.`/`..` 条目同样失败。
+    """
+    entries: List[Tuple[str, str]] = []
+    seen: Dict[str, str] = {}
     for n in zf.namelist():
         if n.endswith("/") or n.endswith("\\"):
             continue
         base = os.path.basename(n.replace("\\", "/"))
         if not base:
             continue
+        if base in (".", ".."):
+            raise zipfile.BadZipFile(f"unsafe entry name: {n!r}")
+        key = base.casefold() if os.name == "nt" else base
+        if key in seen:
+            raise zipfile.BadZipFile(
+                f"duplicate entry basename {base!r}: {seen[key]!r} / {n!r}")
+        seen[key] = n
+        entries.append((n, base))
+    return entries
+
+
+def _extract(zf: "zipfile.ZipFile", dest_dir: str) -> None:
+    for n, base in _flat_entries(zf):
         with zf.open(n) as src, open(os.path.join(dest_dir, base), "wb") as dst:
             shutil.copyfileobj(src, dst, CHUNK)
 
@@ -280,11 +301,24 @@ def _extract(zf: "zipfile.ZipFile", dest_dir: str) -> None:
 def unzip_flat(zip_path: str, dest_dir: str) -> None:
     """平展解压：忽略 zip 自带目录层次，按 basename 写入 `dest_dir`（防 zip-slip）。
 
-    同名条目保持旧行为（后者覆盖）；解压原子性与同名策略延后到第二批。
+    原子性：先解压到同卷临时目录，全部成功后再逐个 `os.replace` 进 `dest_dir`；
+    坏包、同名 basename（Windows 下不分大小写）、不安全条目整单失败，不留下半成品。
+    `dest_dir` 中已有、且 zip 未包含的文件保留（供多作品共享同一格式目录）。
     """
-    os.makedirs(dest_dir, exist_ok=True)
-    with zipfile.ZipFile(zip_path) as z:
-        _extract(z, dest_dir)
+    dest = os.path.abspath(dest_dir)
+    parent = os.path.dirname(dest) or os.curdir
+    os.makedirs(parent, exist_ok=True)
+    tmp_dir = _part_path(
+        os.path.join(parent, "." + (os.path.basename(dest) or "unzip") + ".unzip"))
+    os.makedirs(tmp_dir)
+    try:
+        with zipfile.ZipFile(zip_path) as z:
+            _extract(z, tmp_dir)
+        os.makedirs(dest, exist_ok=True)
+        for base in os.listdir(tmp_dir):
+            os.replace(os.path.join(tmp_dir, base), os.path.join(dest, base))
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 def fetch_if_changed(url: str, dest: str, *, etag: Optional[str] = None,

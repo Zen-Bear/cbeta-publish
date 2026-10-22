@@ -3,13 +3,13 @@
 > 提交对象：`cbeta-org/cbeta-fetch`
 > 基线版本：`0.1.2`，commit `634b14bb31f1d721aa9bf6521c373b9effc4bc31`，`sha256=c6c779289aba9dc49d6fed581ea2eade2be9fcf5396807f0066ce37a2c71fcaf`
 > 提出方：CBETA publish 管理器（下游 vendor 使用方）
-> 状态：已实施（cbeta-fetch 0.2.0 / commit `817d207`；已同步 xml2pdf 与 publish）
+> 状态：已实施（cbeta-fetch 0.2.1 / commit `d28fc5d`；已同步 xml2pdf 与 publish）
 > 关联：publish `TODO.md` P28 第四批；xml2pdf `pycbeta/_vendor/cbeta_fetch.py` 与 publish `cbeta_publish/_vendor/cbeta_fetch.py` 同源
-> 修订：2026-10-21 第 2 版——TLS 改为按主机预选（取消 unverified 回退）；流式补 `Content-Length` 完整性校验；解压原子性/同名策略延后到第二批。
+> 修订：2026-10-21 第 2 版——TLS 改为按主机预选（取消 unverified 回退）；流式补 `Content-Length` 完整性校验；解压原子性/同名策略延后到第二批。2026-10-22 第 3 版——解压原子性/同名策略补齐（0.2.1）。
 
 ## 0. 一句话
 
-把全局 `ssl._create_unverified_context()` 改为**按主机预选上下文**：默认严格校验，仅对 `cbdata.dila.edu.tw` 放宽 OpenSSL 附加严格检查（缺 Subject Key Identifier），证书链与主机名照常校验；把 `r.read()` 整包入内存改为**分块写入 `.part` 临时文件 + `Content-Length` 完整性校验**，成功后再原子替换。解压原子性与同名策略本批不做。
+把全局 `ssl._create_unverified_context()` 改为**按主机预选上下文**：默认严格校验，仅对 `cbdata.dila.edu.tw` 放宽 OpenSSL 附加严格检查（缺 Subject Key Identifier），证书链与主机名照常校验；把 `r.read()` 整包入内存改为**分块写入 `.part` 临时文件 + `Content-Length` 完整性校验**，成功后再原子替换。解压原子性与同名策略已于 0.2.1 补齐（临时目录 + 逐个替换；同名整单失败）。
 
 ## 1. 背景与问题
 
@@ -302,8 +302,8 @@ tmp = f"{dest}.part{os.getpid()}.{uuid.uuid4().hex[:8]}"
 2. 已在 Python 3.14 / OpenSSL 3.0.18 复现：cbdata 默认失败于 Missing Subject Key Identifier，清 strict 位后 200；GitHub 严格 200。
 3. 版本号采用 `0.2.0`。
 4. 本批不加下载进度回调（公共签名不变）。
-5. 本批只做 TLS + 流式；解压原子性与同名策略放到第二批。
-6. 同名策略第二批再定；本版保持旧行为（后者覆盖）。
+5. 本批只做 TLS + 流式；解压原子性与同名策略放到第二批（0.2.1 已补）。
+6. 同名策略 0.2.1 定案：同名 basename（Windows 下不分大小写）与 `.`/`..` 条目整单失败。
 
 ## 12. 实施清单
 
@@ -315,7 +315,7 @@ tmp = f"{dest}.part{os.getpid()}.{uuid.uuid4().hex[:8]}"
 - [x] 新增 TLS/流式/截断/`.part` 测试（解压原子性测试随第二批）
 - [x] 版本号、`USER_AGENT`、`SOURCE.txt` 更新
 - [x] 同步 xml2pdf 与 publish，跑两边 `test_vendor_sync` 与 publish 全量测试
-- [ ] 第二批：解压原子化 + 同名策略（待上游确认后另起）
+- [x] 第二批：解压原子化 + 同名策略（0.2.1 / `d28fc5d`，见 §14）
 
 ## 13. 实施结果（2026-10-21）
 
@@ -325,4 +325,14 @@ tmp = f"{dest}.part{os.getpid()}.{uuid.uuid4().hex[:8]}"
 - 实测：cbdata `probe_status` 200（默认上下文仅因 Missing SKI 失败，清 strict 位后成功）；GitHub 严格 200。
 - 同步：publish `cbeta_publish/_vendor` 与 xml2pdf `pycbeta/_vendor` 均为 `version=0.2.0`、`commit=817d207`、`sha256=353a6004984815e5afe2923fc59432ef9f7a7d8b043ad8d10bb294976fd5a2c7`。
 - 下游：publish `official_ebook_source._head_absent_404` 改用 `cf.probe_status`，保留 404/410 快判。
-- 未做：解压原子性/同名策略（第二批）、可选下载进度回调。上游 commit 未推送。
+- 未做：可选下载进度回调。上游 commit 未推送。（解压原子性/同名策略 0.2.1 已补，见 §14）
+
+## 14. 追加实施：解压原子性与同名策略（2026-10-22，0.2.1）
+
+- 上游 `cbeta-fetch` 本地 commit `d28fc5d`，版本 `0.2.1`；`API.md`、`CHANGELOG.md`、`pyproject.toml` 已更新。
+- `unzip_flat`：先解到同卷临时目录（名带 pid + 随机后缀），全部成功后逐个 `os.replace` 进目标目录；坏包/中途失败不改动已有文件，临时目录清理。
+- 同名策略定案：同名 basename（Windows 下不分大小写）与 `.`/`..` 条目整单失败（`zipfile.BadZipFile`），不再后者覆盖。
+- 目标目录中已有、zip 未包含的文件保留（xml2pdf 多作品共享同一格式目录依赖此点）。
+- 测试：上游 28 项；publish 861 项；xml2pdf `test_fetch` 51 + `test_update_data` 20 + vendor sync 3 项通过。
+- 同步：两处 vendor 均为 `version=0.2.1`、`commit=d28fc5d`、`sha256=e2e1e3259236176095fd1c4627134a80292921fc5727713c2b1bc870789c9c5e`。
+- 实测：真实 cbdata docx zip（T0099，50 卷）解压与重下均成功；重下保留目录内其他文件，无 `.part`/`.unzip` 残留。

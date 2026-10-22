@@ -2344,7 +2344,7 @@ class MainWindow(QMainWindow):
         try:
             cm=CategoryManager(cdir/"categories.json")
             cats=cm.all()
-        except: cats=[]
+        except Exception: cats=[]
         self.coll_cat_filter.blockSignals(True)
         cur_cat=self.coll_cat_filter.currentData()
         self.coll_cat_filter.clear()
@@ -3990,7 +3990,7 @@ class MainWindow(QMainWindow):
 
     def _new_blank_collection(self):
         # “空白”按钮：选择唯一的空白工作丛书（不存在则创建），并显式刷新书单
-        target=self._ensure_blank_working()
+        self._ensure_blank_working()
         self._load_coll_works()
         if self.nav_combo.currentText()=="丛书":
             self._refresh_coll_tree(filter_cat=self.coll_filter.currentData(),
@@ -5349,7 +5349,7 @@ class MainWindow(QMainWindow):
             order[at:at]=ids
             d["work_ids"]=order
         else:
-            vols=d.setdefault("manual_volumes", [])
+            d.setdefault("manual_volumes", [])
             root=self.coll_list.invisibleRootItem()
             if self._coll_is_book(target):
                 parent=target.parent()

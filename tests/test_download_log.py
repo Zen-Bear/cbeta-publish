@@ -423,7 +423,7 @@ class MergeXmlSourceTest(unittest.TestCase):
         # ZIP/导出 共用的批量生成助手：ok_map/failed 结构
         import cbeta_publish.books.xml2pdf_bridge as b
         win = self.win
-        out_dir = self._xml_env()
+        self._xml_env()
         calls = []
         real = b.convert
 
