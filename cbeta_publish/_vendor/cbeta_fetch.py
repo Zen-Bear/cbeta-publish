@@ -13,18 +13,27 @@ URL 模板 / work id 大小写规范化 / catalog 查表 / 文件与 zip 下载 
 同步：本文件是唯一事实源；宿主项目内的副本请用 `tools/sync_into.py` 同步，勿手改。
 """
 
-__version__ = "0.1.2"
+__version__ = "0.2.0"
 
 import os
 import re
+import shutil
 import ssl
 import time
-import zipfile
 import urllib.error
+import urllib.parse
 import urllib.request
+import uuid
+import zipfile
 from typing import Dict, List, Optional, Tuple
 
-USER_AGENT = "cbeta-fetch/0.1"
+USER_AGENT = "cbeta-fetch/0.2"
+
+#: 分块大小：下载/解压的峰值内存与文件大小无关
+CHUNK = 1024 * 1024
+
+#: cbdata 证书缺 Subject Key Identifier：仅该主机在证书校验失败时回退
+CB_DATA_HOSTS = {"cbdata.dila.edu.tw"}
 
 # ---------------------------------------------------------------- work id 语法
 CANON = r"(?:CC|DA|GA|GB|LC|TX|YP|ZS|ZW|[A-Z])"
@@ -133,12 +142,30 @@ def canonical_work_id(work_id: str, catalog: Optional[str] = None) -> str:
 
 
 # ---------------------------------------------------------------- HTTP
-def _ctx():
-    """cbdata 证书缺 Subject Key Identifier：公共数据集用 unverified context。"""
+def _context_for(url: str):
+    """按主机预选 TLS 上下文：cbdata 只清 VERIFY_X509_STRICT，链与主机名照常校验。"""
+    ctx = ssl.create_default_context()
+    host = ""
     try:
-        return ssl._create_unverified_context()
+        host = (urllib.parse.urlsplit(url).hostname or "").lower()
     except Exception:  # noqa: BLE001
-        return None
+        pass
+    strict = getattr(ssl, "VERIFY_X509_STRICT", 0)
+    if host in CB_DATA_HOSTS and strict:
+        ctx.verify_flags &= ~strict
+    return ctx
+
+
+def _ctx():
+    """兼容旧调用：返回默认校验上下文（不再全局 unverified）。"""
+    return ssl.create_default_context()
+
+
+def _open(url: str, *, headers=None, method=None, timeout: int = 90):
+    """urlopen：按主机预选上下文；不做异常驱动的降级。"""
+    return urllib.request.urlopen(
+        _request(url, headers, method), timeout=timeout,
+        context=_context_for(url))
 
 
 def _request(url: str, headers: Optional[Dict[str, str]] = None,
@@ -149,44 +176,94 @@ def _request(url: str, headers: Optional[Dict[str, str]] = None,
     return urllib.request.Request(url, headers=h, method=method)
 
 
+def _part_path(dest: str) -> str:
+    """唯一临时名：同进程并发下载同一目标也不会撞名。"""
+    return f"{dest}.part{os.getpid()}.{uuid.uuid4().hex[:8]}"
+
+
+def _remove(path) -> None:
+    try:
+        if path:
+            os.unlink(path)
+    except OSError:
+        pass
+
+
+def _copy_stream(r, f) -> int:
+    """分块读到 f，返回实际字节数。"""
+    total = 0
+    while True:
+        chunk = r.read(CHUNK)
+        if not chunk:
+            break
+        f.write(chunk)
+        total += len(chunk)
+    return total
+
+
+def _check_length(r, total: int) -> None:
+    """响应带 Content-Length 时校验实际字节数；短读不能静默当成成功。"""
+    cl = r.headers.get("Content-Length")
+    if cl and str(cl).isdigit() and int(cl) != total:
+        raise IOError(f"incomplete download: got {total} bytes, want {cl}")
+
+
 def download(url: str, dest: str, *, timeout: int = 90, retries: int = 2,
              unzip: bool = False, headers: Optional[Dict[str, str]] = None) -> bool:
     """下载 `url` → `dest`。文件写入为**原子替换**（`.part` → `os.replace`）。
 
     - `unzip=False`：`dest` 是**文件路径**（父目录自动创建）。
     - `unzip=True`：`dest` 是**目录**，下载 zip 后平展解压（zip 不留）。
+    - TLS 按主机预选：cbdata 只放宽 `VERIFY_X509_STRICT`，证书链与主机名照常校验。
+    - 响应带 `Content-Length` 时校验实际写入字节数；短读失败重试。
     失败返回 False（重试 `retries` 次）。
     """
-    ctx = _ctx()
     for attempt in range(max(1, retries + 1)):
+        tmp = _part_path(dest)
+        tmp_zip = tmp + ".zip" if unzip else None
         try:
-            with urllib.request.urlopen(
-                    _request(url, headers), timeout=timeout, context=ctx) as r:
-                data = r.read()
-            if unzip:
-                return _unzip_bytes(data, dest)
-            d = os.path.dirname(os.path.abspath(dest))
-            if d:
-                os.makedirs(d, exist_ok=True)
-            tmp = dest + f".part{os.getpid()}"
-            with open(tmp, "wb") as f:
-                f.write(data)
+            r = _open(url, headers=headers, timeout=timeout)
+            with r:
+                if unzip:
+                    with open(tmp_zip, "wb") as f:
+                        total = _copy_stream(r, f)
+                    _check_length(r, total)
+                    try:
+                        unzip_flat(tmp_zip, dest)
+                    except (zipfile.BadZipFile, OSError, ValueError):
+                        return False
+                    return True
+                d = os.path.dirname(os.path.abspath(dest))
+                if d:
+                    os.makedirs(d, exist_ok=True)
+                with open(tmp, "wb") as f:
+                    total = _copy_stream(r, f)
+                _check_length(r, total)
             os.replace(tmp, dest)
             return True
         except Exception:  # noqa: BLE001
+            _remove(tmp)
+            _remove(tmp_zip)
             time.sleep(min(1.0 * (attempt + 1), 3.0))
+        finally:
+            if unzip:
+                _remove(tmp_zip)
     return False
 
 
 def _unzip_bytes(data: bytes, dest_dir: str) -> bool:
-    import io as _io
+    """兼容旧调用：内存 zip → 临时文件 → 平展解压（同名后者覆盖）。"""
+    base = os.path.abspath(dest_dir)
+    tmp = _part_path(base + ".zip")
     try:
-        os.makedirs(dest_dir, exist_ok=True)
-        with zipfile.ZipFile(_io.BytesIO(data)) as z:
-            _extract(z, dest_dir)
+        with open(tmp, "wb") as f:
+            f.write(data)
+        unzip_flat(tmp, dest_dir)
         return True
-    except (zipfile.BadZipFile, OSError):
+    except (zipfile.BadZipFile, OSError, ValueError):
         return False
+    finally:
+        _remove(tmp)
 
 
 def _extract(zf: "zipfile.ZipFile", dest_dir: str) -> None:
@@ -197,11 +274,14 @@ def _extract(zf: "zipfile.ZipFile", dest_dir: str) -> None:
         if not base:
             continue
         with zf.open(n) as src, open(os.path.join(dest_dir, base), "wb") as dst:
-            dst.write(src.read())
+            shutil.copyfileobj(src, dst, CHUNK)
 
 
 def unzip_flat(zip_path: str, dest_dir: str) -> None:
-    """平展解压：忽略 zip 自带目录层次，所有文件按 basename 写入 `dest_dir`（防 zip-slip）。"""
+    """平展解压：忽略 zip 自带目录层次，按 basename 写入 `dest_dir`（防 zip-slip）。
+
+    同名条目保持旧行为（后者覆盖）；解压原子性与同名策略延后到第二批。
+    """
     os.makedirs(dest_dir, exist_ok=True)
     with zipfile.ZipFile(zip_path) as z:
         _extract(z, dest_dir)
@@ -212,31 +292,33 @@ def fetch_if_changed(url: str, dest: str, *, etag: Optional[str] = None,
                      retries: int = 1) -> Tuple[str, Optional[str], Optional[str]]:
     """条件 GET → `dest`（原子）。返回 `(status, etag, last_modified)`，
     `status ∈ {"downloaded","not-modified","failed"}`。"""
-    ctx = _ctx()
     headers: Dict[str, str] = {}
     if etag:
         headers["If-None-Match"] = etag
     if last_modified:
         headers["If-Modified-Since"] = last_modified
     for attempt in range(max(1, retries + 1)):
+        tmp = _part_path(dest)
         try:
-            with urllib.request.urlopen(
-                    _request(url, headers), timeout=timeout, context=ctx) as r:
-                data = r.read()
-            d = os.path.dirname(os.path.abspath(dest))
-            if d:
-                os.makedirs(d, exist_ok=True)
-            tmp = dest + f".part{os.getpid()}"
-            with open(tmp, "wb") as f:
-                f.write(data)
+            r = _open(url, headers=headers, timeout=timeout)
+            with r:
+                new_etag = r.headers.get("ETag")
+                new_lm = r.headers.get("Last-Modified")
+                d = os.path.dirname(os.path.abspath(dest))
+                if d:
+                    os.makedirs(d, exist_ok=True)
+                with open(tmp, "wb") as f:
+                    total = _copy_stream(r, f)
+                _check_length(r, total)
             os.replace(tmp, dest)
-            return ("downloaded", r.headers.get("ETag"),
-                    r.headers.get("Last-Modified"))
+            return ("downloaded", new_etag, new_lm)
         except urllib.error.HTTPError as e:
+            _remove(tmp)
             if e.code == 304:
                 return ("not-modified", etag, last_modified)
             time.sleep(min(1.0 * (attempt + 1), 3.0))
         except Exception:  # noqa: BLE001
+            _remove(tmp)
             time.sleep(min(1.0 * (attempt + 1), 3.0))
     return ("failed", None, None)
 
@@ -250,15 +332,13 @@ def probe_info(url: str, *, etag: Optional[str] = None,
     "size"}`；`size` 为远端 `Content-Length`（int，缺失为 None）。
     供宿主做「大小一致即跳过」类判断；`probe` 保持三元组兼容。
     """
-    ctx = _ctx()
     headers: Dict[str, str] = {"User-Agent": USER_AGENT}
     if etag:
         headers["If-None-Match"] = etag
     if last_modified:
         headers["If-Modified-Since"] = last_modified
     try:
-        req = urllib.request.Request(url, headers=headers, method="HEAD")
-        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as r:
+        with _open(url, headers=headers, method="HEAD", timeout=timeout) as r:
             cl = r.headers.get("Content-Length")
             return {"status": "changed", "etag": r.headers.get("ETag"),
                     "last_modified": r.headers.get("Last-Modified"),
@@ -270,6 +350,20 @@ def probe_info(url: str, *, etag: Optional[str] = None,
         return {"status": "failed", "etag": None, "last_modified": None, "size": None}
     except Exception:  # noqa: BLE001
         return {"status": "failed", "etag": None, "last_modified": None, "size": None}
+
+
+def probe_status(url: str, *, timeout: int = 20) -> Optional[int]:
+    """HEAD 返回 HTTP 状态码；网络/证书/其它异常返回 None。
+
+    供宿主做「404/410 确定不存在」快判；与 `probe_info` 共用同一套 TLS 回退。
+    """
+    try:
+        with _open(url, method="HEAD", timeout=timeout) as r:
+            return getattr(r, "status", None) or 200
+    except urllib.error.HTTPError as e:
+        return e.code
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def probe(url: str, *, etag: Optional[str] = None,
