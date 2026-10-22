@@ -1,4 +1,4 @@
 repo=https://github.com/Zen-Bear/cbeta-fetch
-commit=66d56888aa8d91400f3dac382684e7c53badfe7e
+commit=938762ee4cb32c64c470cc8f9b6e63a74f3edc22
 version=0.2.1
 sha256=e2e1e3259236176095fd1c4627134a80292921fc5727713c2b1bc870789c9c5e

@@ -758,8 +758,8 @@
     必须显式校验）；`.part` 名加 pid+随机后缀；`unzip=True` 临时 zip + `unzip_flat`。
   - [x] 新增 `probe_status(url) -> int|None`（HEAD 状态码，共用同一套 TLS 上下文），
     publish `_head_absent_404` 改用它，保留 404/410 快判。
-  - [x] 解压原子性与同名策略：先解到同卷临时目录，成功后逐个 `os.replace`；同名 basename（Windows 下不分大小写）与 `.`/`..` 条目整单失败；目标目录既有文件保留。cbeta-fetch 0.2.1 / `d28fc5d`。
-  - 实施：cbeta-fetch `66d5688` / v0.2.1（实现 `d28fc5d`；已推送 `Zen-Bear/cbeta-fetch`）；已同步 xml2pdf `pycbeta/_vendor` 与
+  - [x] 解压原子性与同名策略：先解到同卷临时目录，成功后逐个 `os.replace`；同名 basename（Windows 下不分大小写）与 `.`/`..` 条目整单失败；目标目录既有文件保留。cbeta-fetch 0.2.1 / `a05a14d`。
+  - 实施：cbeta-fetch `938762e` / v0.2.1（实现 `a05a14d`；已推送 `Zen-Bear/cbeta-fetch`）；已同步 xml2pdf `pycbeta/_vendor` 与
     publish `cbeta_publish/_vendor`（两边 `SOURCE.txt` 已更新）。上游 28 项、
     publish 861 项、xml2pdf `test_fetch` 51 项 + `test_update_data` 20 项 + vendor sync 3 项通过。
   - 方案与测试清单见 `docs/上游-cbeta-fetch-TLS与分块下载.md`。

@@ -3,7 +3,7 @@
 > 提交对象：`Zen-Bear/cbeta-fetch`（原计划 `cbeta-org/cbeta-fetch`）
 > 基线版本：`0.1.2`，commit `634b14bb31f1d721aa9bf6521c373b9effc4bc31`，`sha256=c6c779289aba9dc49d6fed581ea2eade2be9fcf5396807f0066ce37a2c71fcaf`
 > 提出方：CBETA publish 管理器（下游 vendor 使用方）
-> 状态：已实施（cbeta-fetch 0.2.1 / commit `d28fc5d`；已同步 xml2pdf 与 publish）
+> 状态：已实施（cbeta-fetch 0.2.1 / commit `a05a14d`；已同步 xml2pdf 与 publish）
 > 关联：publish `TODO.md` P28 第四批；xml2pdf `pycbeta/_vendor/cbeta_fetch.py` 与 publish `cbeta_publish/_vendor/cbeta_fetch.py` 同源
 > 修订：2026-10-21 第 2 版——TLS 改为按主机预选（取消 unverified 回退）；流式补 `Content-Length` 完整性校验；解压原子性/同名策略延后到第二批。2026-10-22 第 3 版——解压原子性/同名策略补齐（0.2.1）。
 
@@ -315,7 +315,7 @@ tmp = f"{dest}.part{os.getpid()}.{uuid.uuid4().hex[:8]}"
 - [x] 新增 TLS/流式/截断/`.part` 测试（解压原子性测试随第二批）
 - [x] 版本号、`USER_AGENT`、`SOURCE.txt` 更新
 - [x] 同步 xml2pdf 与 publish，跑两边 `test_vendor_sync` 与 publish 全量测试
-- [x] 第二批：解压原子化 + 同名策略（0.2.1 / `d28fc5d`，见 §14）
+- [x] 第二批：解压原子化 + 同名策略（0.2.1 / `a05a14d`，见 §14）
 
 ## 13. 实施结果（2026-10-21）
 
@@ -329,10 +329,10 @@ tmp = f"{dest}.part{os.getpid()}.{uuid.uuid4().hex[:8]}"
 
 ## 14. 追加实施：解压原子性与同名策略（2026-10-22，0.2.1）
 
-- 上游 `cbeta-fetch`：实现 commit `d28fc5d`（v0.2.1）；随后 `66d5688` 把 `tools/sync_into.py` 的 `REPO` 改为 `https://github.com/Zen-Bear/cbeta-fetch`，两处 `SOURCE.txt` 已按 `66d5688` 同步。
+- 上游 `cbeta-fetch`：实现 commit `a05a14d`（v0.2.1）；随后 `938762e` 把 `tools/sync_into.py` 的 `REPO` 改为 `https://github.com/Zen-Bear/cbeta-fetch`，两处 `SOURCE.txt` 已按 `938762e` 同步。
 - `unzip_flat`：先解到同卷临时目录（名带 pid + 随机后缀），全部成功后逐个 `os.replace` 进目标目录；坏包/中途失败不改动已有文件，临时目录清理。
 - 同名策略定案：同名 basename（Windows 下不分大小写）与 `.`/`..` 条目整单失败（`zipfile.BadZipFile`），不再后者覆盖。
 - 目标目录中已有、zip 未包含的文件保留（xml2pdf 多作品共享同一格式目录依赖此点）。
 - 测试：上游 28 项；publish 861 项；xml2pdf `test_fetch` 51 + `test_update_data` 20 + vendor sync 3 项通过。
-- 同步：两处 vendor 均为 `version=0.2.1`、`commit=66d5688`、`sha256=e2e1e3259236176095fd1c4627134a80292921fc5727713c2b1bc870789c9c5e`。
+- 同步：两处 vendor 均为 `version=0.2.1`、`commit=938762e`、`sha256=e2e1e3259236176095fd1c4627134a80292921fc5727713c2b1bc870789c9c5e`。
 - 实测：真实 cbdata docx zip（T0099，50 卷）解压与重下均成功；重下保留目录内其他文件，无 `.part`/`.unzip` 残留。
