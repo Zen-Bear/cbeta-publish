@@ -31,6 +31,19 @@ class CacheManagerTest(unittest.TestCase):
         self.assertEqual(dir_stats(p), {"files": 0, "bytes": 0})
         self.assertEqual(clean(p)["removed_files"], 0)
 
+    def test_refuse_dangerous_targets(self):
+        from cbeta_publish.paths import app_root
+        with self.assertRaises(ValueError):
+            clean(app_root())
+        with self.assertRaises(ValueError):
+            clean(app_root() / "config")
+        with self.assertRaises(ValueError):
+            clean(Path.home())
+        anchor = Path(Path.cwd().anchor)
+        if anchor.exists():
+            with self.assertRaises(ValueError):
+                clean(anchor)
+
     def test_human(self):
         self.assertEqual(human(0), "0 B")
         self.assertEqual(human(512), "512 B")

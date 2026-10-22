@@ -379,7 +379,7 @@ def _cover_pdf(first_src: Path, title: str, out_path: Path, organizer: str="", c
         width, height = rect.width, rect.height
         paper = _detect_paper(width, height)
         is_a5 = paper in ("a5", "32k")
-    except:
+    except Exception:
         width, height = (419.5, 595.3)
         paper = "a5"
         is_a5 = True
@@ -464,7 +464,7 @@ def _cover_pdf(first_src: Path, title: str, out_path: Path, organizer: str="", c
     c.setFillColor(Color(*[v/255 for v in _color("cbeta",[51,51,51])]))
     try:
         c.setFont(font_cbeta, cbeta_sz)
-    except:
+    except Exception:
         c.setFont("Helvetica", cbeta_sz)
     # 处理空格（左上落款文字，可在 cover.imprint 配置；留空则不绘制）
     txt=cfg.get("imprint", "CBETA 電子佛典自選叢書")
@@ -475,7 +475,7 @@ def _cover_pdf(first_src: Path, title: str, out_path: Path, organizer: str="", c
         if part:
             try:
                 c.setFont(font_cbeta, cbeta_sz)
-            except:
+            except Exception:
                 c.setFont("Helvetica", cbeta_sz)
             c.drawString(cur_x, cur_y, part)
             cur_x+=c.stringWidth(part, font_cbeta if font_cbeta in pdfmetrics.getRegisteredFontNames() else "Helvetica", cbeta_sz)
@@ -493,7 +493,7 @@ def _cover_pdf(first_src: Path, title: str, out_path: Path, organizer: str="", c
     c.setFillColor(Color(*[v/255 for v in _color("title",[0,0,0])]))
     try:
         c.setFont(font_title, t_sz)
-    except:
+    except Exception:
         c.setFont("Helvetica", t_sz)
     # 处理空格和自动换行；“｜”为手动换行（丛书名｜册名各居中一行）
     def draw_centred_with_spaces(y, text, font, size):
@@ -709,7 +709,7 @@ def _toc_pdf(titles: list[str], first_src: Path, out_path: Path, config: dict=No
         rect=src[0].rect if len(src)>0 else pymupdf.Rect(0,0,595,842)
         src.close()
         width, height = rect.width, rect.height
-    except:
+    except Exception:
         width, height = (595,842)
     # 纸张类型判定与边距（优先纸张定义，无则用 margin_ratio）
     def _detect_paper(w, h):
@@ -753,7 +753,7 @@ def _toc_pdf(titles: list[str], first_src: Path, out_path: Path, config: dict=No
     c.setFillColor(Color(*[v/255 for v in _color("toc_title",[0,0,0])]))
     try:
         c.setFont(font_toc_title, t_sz)
-    except:
+    except Exception:
         c.setFont("Helvetica", t_sz)
     c.drawCentredString(width/2, y_toc, "目录")
     # 目录标题后空一行再开始条目（Y 20% 起，可配置 toc_item_y_ratio）
@@ -779,7 +779,7 @@ def _toc_pdf(titles: list[str], first_src: Path, out_path: Path, config: dict=No
             toc_pg+=1
             try:
                 c.setFont(font_toc_item, item_sz)
-            except:
+            except Exception:
                 c.setFont("Helvetica", item_sz)
         # 一级目录 左对齐（经书加序号，全局连续、自适应补零；与 EPUB 目录同规则）
         txt = _epub_seq_title(i, len(titles), f"{t}")
@@ -787,7 +787,7 @@ def _toc_pdf(titles: list[str], first_src: Path, out_path: Path, config: dict=No
             txt=txt[:38]+"..."
         try:
             c.setFont(font_toc_item, item_sz)
-        except:
+        except Exception:
             c.setFont("Helvetica", item_sz)
         c.setFillColor(Color(*[v/255 for v in _color("toc_item",[30,30,30])]))
         c.drawString(toc_left, y, txt)
@@ -798,7 +798,7 @@ def _toc_pdf(titles: list[str], first_src: Path, out_path: Path, config: dict=No
         c.setFillColor(Color(*[v/255 for v in _color("toc_page",[100,100,100])]))
         try:
             c.setFont(font_page, page_sz)
-        except:
+        except Exception:
             c.setFont("Helvetica", page_sz)
         c.drawRightString(width - toc_right, y, page_text)
         link_rects.append((toc_start_index+toc_pg, y, y+line_h))
@@ -837,7 +837,7 @@ def _intro_pdf(intro: dict, first_src: Path, out_path: Path, config: dict=None) 
         rect=src[0].rect if len(src)>0 else pymupdf.Rect(0,0,595,842)
         src.close()
         width, height = rect.width, rect.height
-    except:
+    except Exception:
         width, height = (595,842)
     def _detect_paper(w, h):
         if 350 < w < 385 and 510 < h < 535:
@@ -1087,7 +1087,7 @@ def _editnote_pdf(parsed, first_src: Path, out_path: Path, config: dict=None) ->
         rect=src[0].rect if len(src)>0 else pymupdf.Rect(0,0,595,842)
         src.close()
         width, height = rect.width, rect.height
-    except:
+    except Exception:
         width, height = (595,842)
     tm=_toc_text_style(cfg, width, height, _detect_paper(width, height))
     left=tm["left"]; right=tm["right"]; bottom=tm["bottom"]
@@ -1252,7 +1252,7 @@ def _image_pdf(first_src: Path, image_path: Path, out_path: Path):
         rect=src[0].rect if len(src)>0 else pymupdf.Rect(0,0,595,842)
         src.close()
         width, height = rect.width, rect.height
-    except:
+    except Exception:
         width, height = (595,842)
     try:
         with pymupdf.open(str(image_path)) as _im:

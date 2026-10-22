@@ -114,8 +114,8 @@ class FetchTextTest(unittest.TestCase):
             self._data = data
             self.headers = {"Content-Type": ctype}
 
-        def read(self):
-            return self._data
+        def read(self, n=-1):
+            return self._data[:n] if n is not None and n >= 0 else self._data
 
         def __enter__(self):
             return self
@@ -139,6 +139,15 @@ class FetchTextTest(unittest.TestCase):
 
     def test_network_error_empty(self):
         with mock.patch("urllib.request.urlopen", side_effect=OSError("boom")):
+            self.assertEqual(ii.fetch_text("https://x"), "")
+
+    def test_size_and_binary_limits(self):
+        with mock.patch.object(ii, "MAX_FETCH_BYTES", 4):
+            with mock.patch("urllib.request.urlopen",
+                            return_value=self._Resp(b"abcdef", "text/html")):
+                self.assertEqual(ii.fetch_text("https://x"), "")
+        with mock.patch("urllib.request.urlopen",
+                        return_value=self._Resp(b"\x00\x01", "image/png")):
             self.assertEqual(ii.fetch_text("https://x"), "")
 
 

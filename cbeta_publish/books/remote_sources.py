@@ -40,5 +40,17 @@ def url_of(key: str) -> str:
 SOURCES = [(key, cat, cf.REMOTE_URLS[shared], rel) for key, cat, rel, shared in _SPEC]
 
 
-def local_path(rel: str) -> Path:
-    return ROOT / rel
+def local_path(rel: str, root=None) -> Path:
+    """源表相对路径 → 本地路径。
+
+    `root` 传「目录数据根」（如 config 的 mulu_dir）时，把 `mulu/` 前缀换成该根；
+    不传保持既有语义（app_root/mulu/…）。
+    """
+    if root is None:
+        return ROOT / rel
+    p = Path(rel)
+    try:
+        p = p.relative_to("mulu")
+    except ValueError:
+        pass
+    return Path(root) / p

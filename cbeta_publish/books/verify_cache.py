@@ -17,9 +17,10 @@
   库中产物存在、复用开关开。
 """
 import json
-import os
 from datetime import datetime
 from pathlib import Path
+
+from cbeta_publish.utils.atomic import atomic_write_json
 
 SCHEMA = 2
 
@@ -64,12 +65,7 @@ def load(path) -> dict:
 def _save(path, data: dict) -> bool:
     """原子写（同目录 tmp + os.replace）；失败返回 False。"""
     try:
-        p = Path(path)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        tmp = p.with_name(p.name + ".tmp")
-        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2),
-                       encoding="utf-8")
-        os.replace(str(tmp), str(p))
+        atomic_write_json(path, data)
         return True
     except Exception as e:
         print("verify cache save fail", e)

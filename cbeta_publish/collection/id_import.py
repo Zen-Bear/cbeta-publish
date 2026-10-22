@@ -17,6 +17,13 @@ from dataclasses import dataclass
 
 from cbeta_publish.catalog.work_id import canonical_work, is_work_id
 
+#: 单次网页抓取上限（防误抓大文件占满内存）
+MAX_FETCH_BYTES = 5 * 1024 * 1024
+#: 明显二进制内容类型：ID 导入只取文本页
+_BINARY_TYPES = ("image/", "audio/", "video/", "application/pdf",
+                 "application/zip", "application/octet-stream",
+                 "application/x-")
+
 __all__ = ["IdRow", "STATUS_OK", "STATUS_UNKNOWN", "STATUS_INVALID",
            "STATUS_DUP", "split_token", "normalize_token", "parse_id_lines",
            "classify", "html_to_text", "fetch_text", "juan_token", "token_juan"]
@@ -197,7 +204,7 @@ def _guess_encoding(content_type, data):
 
 
 def fetch_text(url, timeout=30, user_agent="cbeta-publish/1.0"):
-    """抓取 http(s) 网页 → 文本（仅 http(s)、UA、编码猜测、超时）；失败返回 ""。"""
+    """抓取 http(s) 网页 → 文本（仅 http(s)、UA、编码猜测、超时、大小/类型上限）；失败返回 ""。"""
     u = (url or "").strip()
     if not re.match(r"^https?://", u, re.IGNORECASE):
         return ""
@@ -206,8 +213,13 @@ def fetch_text(url, timeout=30, user_agent="cbeta-publish/1.0"):
                     "Accept-Language": "zh-CN,zh;q=0.9"})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            data = resp.read()
-            enc = _guess_encoding(resp.headers.get("Content-Type", ""), data)
+            ctype = (resp.headers.get("Content-Type", "") or "").lower()
+            if ctype.startswith(_BINARY_TYPES):
+                return ""
+            data = resp.read(MAX_FETCH_BYTES + 1)
+            if len(data) > MAX_FETCH_BYTES:
+                return ""
+            enc = _guess_encoding(ctype, data)
     except Exception:
         return ""
     for cand in (enc, "utf-8", "gbk"):

@@ -3,6 +3,8 @@ from pathlib import Path
 from datetime import datetime
 
 from cbeta_publish.catalog.work_id import canonical_work, canonical_entry, split_entry
+from cbeta_publish.utils.atomic import atomic_write_json
+from cbeta_publish.utils.safe_name import safe_name
 
 
 def _work_of(entry) -> str:
@@ -103,7 +105,7 @@ def slugify(category: str, name: str) -> str:
     try:
         from pypinyin import lazy_pinyin
         py = "".join(lazy_pinyin(name))[:20]
-    except:
+    except Exception:
         py = name[:10]
     ts = datetime.now().strftime("%Y%m%d")
     base = f"{category}_{py}_{ts}"
@@ -183,8 +185,8 @@ class Collection:
     def save(self, collections_dir: Path):
         cat_dir = collections_dir / self.category
         cat_dir.mkdir(parents=True, exist_ok=True)
-        # filename: name.json, handle duplicate
-        fname = f"{self.name}.json"
+        # filename: name.json, handle duplicate（名称先清洗为合法文件名）
+        fname = f"{safe_name(self.name)}.json"
         target = cat_dir / fname
         if target.exists():
             # add suffix
@@ -193,7 +195,7 @@ class Collection:
             while target.exists():
                 target = cat_dir / f"{base}_{i}.json"
                 i+=1
-        target.write_text(json.dumps(self.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
+        atomic_write_json(target, self.to_dict())
         return target
 
 def create_collection(name: str, category: str, tags, work_ids: list[str], source: str="official", work_groups=None, manual_volumes=None, work_notes=None) -> Collection:

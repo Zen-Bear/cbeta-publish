@@ -5,13 +5,29 @@
 所在目录）互补。id 由名称生成的 slug（拼音），在文件内唯一。
 """
 import json
+import shutil
+from datetime import datetime
 from pathlib import Path
+
+from cbeta_publish.utils.atomic import atomic_write_json
 
 
 class TagsManager:
     def __init__(self, path: str | Path):
         self.path = Path(path)
-        self.data = json.loads(self.path.read_text(encoding="utf-8")) if self.path.exists() else {"tags": []}
+        self.corrupt = False
+        self.data = {"tags": []}
+        if self.path.exists():
+            try:
+                raw = json.loads(self.path.read_text(encoding="utf-8-sig"))
+                if isinstance(raw, list):
+                    raw = {"tags": raw}
+                if not isinstance(raw, dict) or not isinstance(raw.get("tags"), list):
+                    raise ValueError("tags 不是列表")
+                self.data = raw
+            except Exception as e:
+                self.corrupt = True
+                print("tags file corrupt", self.path, e)
         self.data.setdefault("tags", [])
 
     def all(self):
@@ -71,6 +87,20 @@ class TagsManager:
         self.data["tags"] = [t for t in self.data["tags"] if t["id"] not in victims]
         self.save()
 
+    def _backup_bad(self):
+        """损坏文件先另存 .bad-<时间戳>，备份失败则拒绝覆盖。"""
+        if self.path.exists():
+            bak = self.path.with_name(
+                f"{self.path.name}.bad-{datetime.now():%Y%m%d-%H%M%S}")
+            try:
+                if not bak.exists():
+                    shutil.copy2(self.path, bak)
+            except Exception as e:
+                raise RuntimeError(f"标签文件损坏，且备份失败：{e}") from e
+        self.corrupt = False
+
     def save(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(self.data, ensure_ascii=False, indent=2), encoding="utf-8")
+        if self.corrupt:
+            self._backup_bad()
+        atomic_write_json(self.path, self.data)

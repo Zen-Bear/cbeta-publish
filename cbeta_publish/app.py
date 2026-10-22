@@ -1,10 +1,10 @@
-import sys, json, os
+import sys, os
 from pathlib import Path
 # 支持 `python -m cbeta_publish.app` 与 `python cbeta_publish/app.py`
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from PySide6.QtWidgets import QApplication
 from cbeta_publish.gui.main_window import MainWindow, apply_ui_fonts
-from cbeta_publish.paths import ensure_user_config
+from cbeta_publish.paths import read_user_config, app_root
 from cbeta_publish import APP_NAME, APP_ID, __version__
 
 def main():
@@ -13,9 +13,14 @@ def main():
         _browsers = Path(sys.executable).resolve().parent / "ms-playwright"
         if _browsers.is_dir():
             os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", str(_browsers))
-    # 首启：用户配置缺失时从出厂模板 config/app.default.json 复制
-    cfg_path=ensure_user_config()
-    cfg=json.loads(cfg_path.read_text(encoding="utf-8-sig"))
+    # 首启：用户配置缺失时从出厂模板 config/app.default.json 复制；
+    # 损坏时备份为 app.json.bak-<时间戳> 并恢复出厂（提示延后到主窗显示后，见下）
+    cfg, cfg_recovered = read_user_config()
+    if not isinstance(cfg, dict):
+        cfg = {}
+    # 极端情况（出厂模板也缺失/不可写）：给最小默认，避免 KeyError 直接崩
+    cfg.setdefault("mulu_dir", str(app_root() / "mulu"))
+    cfg.setdefault("collections_dir", str(app_root() / "collections"))
     ui=cfg.get("ui",{}) or {}
     from cbeta_publish.qt_diag import install as _install_diag
     _diag_log=_install_diag()
@@ -33,6 +38,9 @@ def main():
                       " QTreeView{border:1px solid #ccc}")
     w=MainWindow(cfg)
     w.show()
+    if cfg_recovered:
+        w.detail.setText(f"配置文件损坏，已恢复出厂默认"
+                         f"（旧文件备份为 {cfg_recovered.name}）")
     sys.exit(app.exec())
 
 if __name__=="__main__":

@@ -29,6 +29,17 @@ class SettingsDialogTest(unittest.TestCase):
     def _dlg(self):
         return SettingsDialog(copy.deepcopy(DEFAULT_CONFIG), None)
 
+    @staticmethod
+    def _wait_update(dlg, timeout=10.0):
+        """等待更新线程结束（异步：等信号/事件循环，不能立即断言）。"""
+        import time
+        from PySide6.QtWidgets import QApplication
+        deadline = time.time() + timeout
+        while getattr(dlg, "_upd_worker", None) is not None and time.time() < deadline:
+            QApplication.processEvents()
+            time.sleep(0.01)
+        QApplication.processEvents()
+
     def test_official_library_roundtrip(self):
         # 本地库分组面板：根目录＋覆盖落盘；重扫弹窗说明结果
         import tempfile
@@ -239,6 +250,26 @@ class SettingsDialogTest(unittest.TestCase):
                 self.assertEqual(w.text(), want, (r, c))
                 self.assertIn(want, w.toolTip())
 
+    def test_update_paths_follow_mulu_dir(self):
+        # 更新源的 meta/备份/落盘目标都跟随配置的 mulu_dir（不再写死 PROJECT_ROOT/mulu）
+        from cbeta_publish.gui.settings_dialog import PROJECT_ROOT
+        cfg = copy.deepcopy(DEFAULT_CONFIG)
+        cfg["mulu_dir"] = "muluX"
+        dlg = SettingsDialog(cfg, None)
+        self.assertEqual(dlg._mulu_dir(), PROJECT_ROOT / "muluX")
+        self.assertEqual(dlg._backup_dir(), PROJECT_ROOT / "muluX" / "backup")
+        self.assertEqual(dlg._meta_path(),
+                         PROJECT_ROOT / "muluX" / "cache" / "meta.json")
+
+    def test_updating_disables_update_buttons(self):
+        dlg = self._dlg()
+        dlg._set_updating(True)
+        self.assertFalse(dlg.btn_check_update.isEnabled())
+        self.assertFalse(dlg.btn_mulu_diff.isEnabled())
+        self.assertFalse(dlg.btn_restore_last.isEnabled())
+        dlg._set_updating(False)
+        self.assertTrue(dlg.btn_check_update.isEnabled())
+
     def test_update_table_height_fits_content(self):
         # 表格高度按内容定（不参与拉伸），给下方「检查状态」让出空间
         dlg = self._dlg()
@@ -275,6 +306,7 @@ class SettingsDialogTest(unittest.TestCase):
                  mock.patch.object(QMessageBox, "information",
                                    staticmethod(lambda *a, **k: None)):
                 dlg._check_update()
+                self._wait_update(dlg)
             txt = dlg.upd_status.toPlainText()
             self.assertIn("下载 category.json", txt)
             self.assertIn("下载 dynasty-works.json", txt)
@@ -366,6 +398,7 @@ class SettingsDialogTest(unittest.TestCase):
                  mock.patch.object(QMessageBox, "information",
                                    staticmethod(lambda *a, **k: None)):
                 dlg._check_update()
+                self._wait_update(dlg)
             txt = dlg.upd_status.toPlainText()
             self.assertIn("—— 目录变更（对比上次更新前的备份）——", txt)
             self.assertIn("category.json（部类）：新增 1、删除 0、改名 0", txt)

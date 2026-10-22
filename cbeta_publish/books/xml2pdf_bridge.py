@@ -152,6 +152,9 @@ def _replace_staged_path(src: Path, dest: Path):
             return True
         import shutil
         shutil.rmtree(dest, ignore_errors=True)
+        if dest.exists():
+            print("remove staged dest dir fail", dest)
+            return False
     except OSError:
         pass
     try:
@@ -160,6 +163,9 @@ def _replace_staged_path(src: Path, dest: Path):
             dest.unlink()
         elif dest.is_dir():
             shutil.rmtree(dest, ignore_errors=True)
+            if dest.exists():
+                print("remove staged dest dir fail", dest)
+                return False
         shutil.move(str(src), str(dest))
         return True
     except OSError as e:
@@ -434,7 +440,8 @@ def save_preset(config, name, data) -> Path | None:
         d = root / "presets"
         d.mkdir(parents=True, exist_ok=True)
         p = d / f"{stem}.json"
-        p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        from cbeta_publish.utils.atomic import atomic_write_json
+        atomic_write_json(p, data)
         return p
     except Exception as e:
         print("save preset fail", e)

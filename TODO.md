@@ -2,7 +2,7 @@
 
 > 设计文档：`docs/设计总案.md`（总方案）、`docs/UI设计.md`（UI）、
 > `docs/链路B-设计契约.md`（与 xml2pdf 的跨仓调用契约）。
-> 测试：`python -m unittest discover tests`（当前 756 项通过）。
+> 测试：`python -m unittest discover tests`（当前 861 项通过）。
 
 ## 约定（务必遵守）
 
@@ -595,6 +595,205 @@
 - [x] `cbeta_publish/creators/related_works.py`：`SUFFIXES` 加「尊者」；模块注释记「集／別集」不收的原因。
 - [x] 测试：`tests/test_related_works.py` 增 2 例（尊者三正例；天竺別集/空谷集不命中；related_index 归位）。
 - [x] 文档：`docs/UI设计.md` 作者节后缀列表加「尊者」。
+
+### P28 — 代码审计：数据安全、并发与性能（2026-10-19 审计完成；第一至第四批已完成）
+- 实施进展（2026-10-21）：第一批、第二批（除可选的下载并发）、第三批与第四批已完成；第五批待实施。
+  第三批另修正一处：自定义 `mulu_dir` 时更新**落盘目标**也跟随（`remote_sources.local_path`
+  增加根参数，`RemoteManager`/`UpdateWorker` 透传），否则更新仍写默认 `mulu/`。
+  实测：`MainWindow` 初始化 **2.20 s → 0.74 s**；`canonical_entry`
+  **3.5 ms → 0.013 ms**；搜索命中键 **0.265 s → 0.026 s**（首次仍为 0.265 s，逐节点懒缓存）；
+  全量测试 **851 项通过**（新增 22 项）。新增文件：`cbeta_publish/utils/atomic.py`、
+  `utils/safe_name.py`；测试 `tests/test_atomic_write.py`、`test_safe_name.py`、
+  `test_config_paths.py`、`test_verify_worker.py`。
+  复核修正（5 项）：清理护栏扩到程序数据目录（config/mulu/collections/assets）并拒绝文件目标；
+  配置损坏且模板不可用时给最小默认，避免启动 KeyError；搜索缓存改存「原文＋简体」防原地改字
+  命中旧文本；更新进行中禁止保存配置；清洗后为空的丛书名合并到独立输出目录（防互相覆盖）。
+  实现差异：搜索缓存挂在节点 data（`0x0100 + 101`），树重建自动失效，未用版本号；
+  相对路径归一实际只在 `MainWindow.__init__` 调用（app.py 经构造覆盖、测试同样生效），未重复调用；
+  设置页更新改为异步 `UpdateWorker`（相关测试改为等待线程完成）；清理拒绝以 `ValueError`
+  抛给界面提示。
+- 审计范围：`cbeta_publish/` 44 个业务模块（另有 `_vendor/` 2 个共享层文件不手改）；
+  `ebook_merger` 渲染细节与跨仓 `pycbeta` 边界只做重点抽查。审计时仓库未改动。
+- 实测（offscreen + 真实 mulu 数据）：
+  - `MainWindow` 初始化 **2.20 s**；作品编号规范化每次重读 1978 行/328 KB 索引（**3.5 ms/次**），
+    22 部含作品的丛书（569 条 work_ids）归一化 **1.882 s** → 改内存索引后 **0.008 s**（模拟索引实测，启动降到 **0.79 s**）。
+  - 搜索每次按键 **0.229–0.271 s**；拆解：遍历 8148 节点取文本仅 **0.008 s**，
+    **OpenCC 繁简转换占 0.206 s**，`lower()` 0.002 s → 根因是繁简转换，不是树遍历。
+  - 作者树 8148 节点、rebuild **0.375 s**；部类树 rebuild **0.383 s**。
+- 口径修正（上一轮口头结论更正，动手时以此为准）：
+  - 相对路径问题**只影响打包版**（`build_exe.ps1` 第 6 步把出厂模板改成相对路径；仓库模板是绝对路径，
+    源码运行不受影响）。
+  - 裸 `except:` 全仓 18 处（main_window 5 处），`except Exception` 360 处、`except BaseException` 2 处。
+  - `Collection.save` 不是死代码（`tests/test_merge_mode.py` 在用）；真问题是与主程序写盘**两套逻辑并存**。
+- 复核更正（第二轮审核）：先期口头提过的两处不算缺陷——`main_window.py:5684-5689`、
+  `:6419-6425` 的 QEventLoop 等待线程是注释在案的有意设计（`:5686`、`:6421`），残留风险仅
+  「worker 未捕获异常未发 finished_all 时挂死」，暂不列入实施；`:6064` 的 Popen 是打开
+  链路B独立窗，正常。本轮审核未改任何代码。
+- 第三轮审核补正：全库写点盘点后，丛书写点实为 7 处（原子写清单已重写）；
+  `_write_index` 已有 try（`main_window.py:1953-1958`，best-effort），collections 目录
+  不可写时启动不崩，索引仅为派生缓存；`UpdateWorker`（`books/update_worker.py:7`）
+  可直接复用，`DownloadWorker` 为单循环串行（`download_worker.py:41`），并发改造面清晰。
+- 第四轮审核（错漏与过度设计）：`last_publish_dir` **不能**作为批量清除目标（ZIP `:8916`、
+  导出 `:9137` 也会写它）；相对路径归一键缩到 4 个（其余已有 `_abs`/`_font_path`/`_out_dir`
+  解析）；剔除 4 项过度设计（见下）。
+- 过度设计剔除（不实施，理由留档）：
+  - 作者树作品叶懒加载：`_search_current_tree`（`main_window.py:3565-3572`）靠遍历已建子节点
+    收集作品，懒加载会让搜索漏掉未展开的作者；收益仅 rebuild 0.375 s→约 0.1 s，风险大于收益。
+  - `collections/index.json` 原子化：全仓无读取方，半截文件也无影响。
+  - 归一键扩到六个目录 + `cover.images`/`supplement_ttf`：多数已有工程根解析，重复处理无收益。
+  - 整体拆 `main_window.py`：见第五批，改为「新代码进模块、旧文件只在改动时顺手抽离」。
+  - Windows 保留设备名（`CON`/`NUL`/`AUX`）与超长名**不额外处理**：实测本机可正常创建
+    `CON.json`/`NUL.json`/`aux.json`/`COM1.json`；超长名写盘失败有可见报错，收益低于规则复杂度。
+- 第五轮审核（打根验证）：三处 `PROJECT_ROOT` 均为 `app_root()`（`settings_dialog.py:17`、
+  `xml2pdf_bridge.py:22`、`ebook_merger.py:115`），冻结（onedir）解析正确——**勿改回 `__file__`
+  推导**；`xml2pdf.path` 的全部消费经 `_x2p_root` 漏斗（`xml2pdf_bridge.py:44-45`），条目行号
+  等价覆盖；清理入口唯一（设置页 `_clean_cache` → `cache_manager.clean`），护栏放
+  `cache_manager.clean` 内即覆盖未来入口；下载主机实为 cbdata + `raw.githubusercontent.com`
+  两类，TLS 白名单方案与之吻合。新发现两处（已并入第一批/第三批清单）：设置页缓存统计对
+  相对值受 cwd 影响、设置页 mulu/meta 与主窗两套来源。
+- 第六轮审核（实测验证）：`_safe_name` 现状（`main_window.py:7216-7220`）实测已能中和路径穿越
+  与非法字符——`..`/`.`/`...`/纯空白/换行 → 兜底名，`a/b`·`a:b`·`a\b` → `a_b`，`阿含/地藏` →
+  `阿含_地藏`，尾点/尾空格去掉；**无需再加规则**。打包入口确认是 `cbeta_publish/app.py`
+  （`packaging/cbeta_publish.spec:60`），故 app.py 层的「配置损坏恢复」与「相对路径归一」
+  对打包版确实生效。新增一条实施约束：构造期提示不可用模态框（见第一批对应条目）。
+- 第七轮审核（终审）：更正一处数字——`main_window.py` 实际 **8738 行**（此前记 9147，已改）。
+  复核「忽略返回值」的 3 个调用点语义均成立：用户点「立即保存」（`:5876`）、设置页保存后写说明页
+  （`:7037`）、分册「确定即落盘」（`:8183`）；补一条时机约束——`app.py:18` 的配置读取早于
+  `QApplication`（`:24`），损坏提示必须延后。其余条目、行号、数字与方案经全量复核无新错漏。
+  终审结论：P28 定稿，可实施。
+- 动手前的约束：
+  - 共享层 `_vendor/cbeta_fetch.py` **不可本地手改**（`tests/test_vendor_sync.py` 校验 sha256）；
+    TLS 与流式下载须在 cbeta-fetch 上游改（`cbeta-org/cbeta-fetch`），再用其
+    `tools/sync_into.py` 同步到 xml2pdf `pycbeta/_vendor` 与 publish
+    `cbeta_publish/_vendor`，两处都更新 `SOURCE.txt`；不要只改 xml2pdf 或手改 vendor。
+    （publish 仓里**没有** `tools/sync_into.py`——`test_vendor_sync.py:24` 报错文案引用了它，
+    属误导，工程化批可补脚本或改文案。）
+  - 已有文件名清洗器：`_safe_name`（`main_window.py:7216`）、`_safe_stem`（`xml2pdf_bridge.py:409`）、
+    `_safe_seg`（`catalog_path.py:46`）——**复用/上提，不新造**。
+  - 原子写现成范例 `official_state.py:60`、`verify_cache.py:64` 用固定 tmp 名（双开两实例会撞名），
+    新 helper 的 tmp 名要带进程号/随机后缀。
+- 第一批（数据安全，publish 内）：
+  - [x] 统一原子写 helper（同目录 tmp 名带 pid＋随机后缀 + `os.replace`），覆盖**用户数据写点**：
+    丛书文件 7 处（`main_window.py:3853/4118/4223/4379/5771/5805/4263`、`collection_model.py:196`）、
+    config 及本地状态 4 处（`main_window.py:2306/2328/2590`、`settings_dialog.py:2006`）、分类/标签/远程 meta
+    （`category_manager.py:38`、`tags_manager.py:76`、`remote_manager.py:26`）、preset 回退
+    （`xml2pdf_bridge.py:437`）。派生索引 `collection_model.py:132` **不改造**（`index.json` 全仓无读取方，
+    grep 只有写点）。报告/临时文件写点同样不改造（`main_window.py:6015/8337/8597`、
+    `xml2pdf_bridge.py:285/467`）。`official_state.py:60`、`verify_cache.py:64` 已顺带换用共享 helper。
+  - [x] 存盘失败保留脏标记并提示：批量保存无条件清脏（`main_window.py:4268-4269`）；
+    单册 `_save_one_collection`（`:5790` 失败 `return False`）有 3 个调用点忽略返回值
+    （`:5876/7037/8183`）→ 统一「失败＝脏保留＋提示，成功才清」。多文件失败时**合并成一次提示**
+    （逐个弹窗会连环打断）。
+  - [x] 丛书名/分类名走 `_safe_name`：文件名构造 4 处（`main_window.py:3879` 新建、`:4107` 另存为、
+    `:4209` 移动、`:4291` 空白丛书保存）、合并输出目录 `7850`、批量清除目标 `8359/8383`
+    （**不要用 `last_publish_dir`**——它也被 ZIP `:8916` 与导出 `:9137` 覆盖成用户选的目录；
+    改为 `out_root / safe_name(name)` 并加 `is_relative_to` 越界校验；名字为 `..` 时现会删到
+    输出根的父目录）。显示名保持用户原文，只清洗文件名部分。`collection_model.py:187`
+    （仅测试调用的 `Collection.save`）同规则顺手改。
+  - [x] 配置损坏自动恢复：`app.py:18` 捕获后备份 `app.json.bak-<时间戳>`、回退出厂模板并提示。
+    注意读取发生在 `QApplication` 创建（`:24`）之前，**提示须延后**到主窗显示后（或先写日志），
+    不能在此处直接弹窗。
+  - [x] 目录数据缺失/损坏：**不阻断启动**，在构造函数末尾检查服务是否齐全，提示并引导到
+    「设置→更新源」（否则用户进不了设置页修）。**提示用非模态**（状态栏/左栏角标），
+    不要在构造函数里弹 `QMessageBox`——测试与离屏环境会被模态框挂起。
+    现 `main_window.py:419-425` 吞异常留半残状态，
+    且 `:419` 的 `config["mulu_dir"]` 在 try 外、键缺失直接崩；`1948` 裸 `except` 让损坏丛书静默消失
+    （改为收集文件清单，在左栏/状态栏提示跳过后数量）。
+  - [x] 打包版相对路径归一：只处理**实际按原样消费**的 4 个键——`mulu_dir`（`main_window.py:419`）、
+    `collections_dir`（`:3877` 等）、`official_ebooks_dir`（或别名 `cbeta_ebooks_dir`，
+    `official_ebook_source.py:95` 直接 `Path`）、`xml2pdf.path`（`main_window.py:5991/6249`、
+    `xml2pdf_bridge.py:45` 均未走 `_abs`；空值时主窗回退写死的开发机路径 `E:/dev/cbeta/xml2pdf`，
+    属既有行为，归一只对有值配置生效）；**又一 cwd 敏感点**：设置页缓存统计/清理对
+    「官方电子书缓存」用原始值直接 `Path`（`settings_dialog.py:1182/1229`），归一必须在
+    构造 `SettingsDialog` 前生效才顺带修好它；做成**幂等函数放 `paths.py`**，
+    `app.py` 与 `MainWindow.__init__` 都调用（测试与其它入口不经过 `app.py`），只改内存，
+    不改用户磁盘配置。其余键**无需处理**（已有工程根解析）：`output_dir` 走 `_out_dir`（`:5946-5950`）、
+    `verify_dir`/`xml_to_ebooks_dir`/`xml2pdf.cbeta_ebook` 走 `_abs`（`xml2pdf_bridge.py:35-37/48-50/489/728`）、
+    `cover.images` 走 `_font_path`（`ebook_merger.py:108-112`）；`ui.supplement_ttf` 打包默认空。
+- 第二批（性能，publish 内）：
+  - [x] `work_id.py` 惰性建 `{canon+no → 原始大小写}` 索引（首次出现者胜，与 `catalog_lookup` 同语义；
+    按文件 mtime/size 失效——`sutra_mapping` 本身是更新源，`remote_sources.py:27`，更新后文件被替换）
+    → 启动省约 1.4 s。
+  - [x] 搜索简体兜底缓存：现状已是「原文子串优先→简体兜底」（`main_window.py:3556-3563`），
+    但未命中节点每次按键都重算 OpenCC 简体（8148 节点 0.206 s）；节点简体文本按树版本缓存后
+    常态按键约 26 ms（实测；首次 0.265 s）；未使用的 `_title_s2`（`main_window.py:1060`，白花 0.154 s）删除——
+    **但要保留 `text_util.init()`（`:1059`）**：那是全仓唯一初始化点（grep 仅此一处），
+    删掉后 `to_simplified` 静默不转换（`utils/text_util.py:19-25`），繁简搜索会无声失效。
+  - [x] 刊本树缓存：每次刷新都重新解析 1.1 MB 的 vol.json（`main_window.py:1458` 调
+    `vol_service.load_vol`），按 mtime 缓存（`vol.json` 也是更新源 `remote_sources.py:21`）；
+    朝代索引已有内存缓存（`:1563`），仅缺更新源替换文件后的失效。
+  - [ ] 批量下载 2–4 并发（可选，非必需；保留取消与重试语义）。
+- 第三批（并发与安全，publish 内）：
+  - [x] 设置页「检查更新」改用现成 `UpdateWorker`（`books/update_worker.py:7`，已带
+    progress/checked/updated 信号；现 `settings_dialog.py:1487-1492` 在 UI 线程调
+    `rm.update_all` 靠 `processEvents()` 续命）；运行期间禁用「关闭」防半途中断；
+    完成后沿用主窗口径提示「重启后生效」（`main_window.py:1144`），`result` 仍供
+    `_reload_update_table`/`_append_mulu_diff` 使用。
+  - [x] `verify_worker.py:161-169` 异常时只把**未处理**作品记失败：现异常分支把 `self.works`
+    全部补进 `failed`（已通过的也算失败）；改以 `verdicts` 是否已含该作品为界，只补未处理者。
+    保留现有捕获 BaseException 防 SystemExit 穿透的意图（`:162-165` 注释）。
+  - [x] 设置页更新源的 meta/备份目录与主窗**两套来源**：设置页硬编码 `PROJECT_ROOT/mulu`（`:19`、
+    `:1375`、`:1480`），主窗用 `config["mulu_dir"]`（`main_window.py:1120/1136`）；用户自设
+    mulu 目录时两边读写不同的 meta.json 与 backup/。改用 worker 时顺带统一为
+    `self._cfg["mulu_dir"]` 派生。**实现时发现落盘目标也写死 app_root**（`remote_sources.local_path`），
+    已一并加根参数随 `mulu_dir`。
+  - [x] `collection/id_import.py:208-209` 抓取加大小/类型上限（现 `resp.read()` 无上限）。
+  - [x] 缓存清理护栏：`cache_manager.clean` 会逐个删除目标目录下的**全部子项**
+    （`cache_manager.py:38-44`），目标若被设成盘根/程序根/用户主目录＝删整盘、删程序本身；
+    硬拒绝这三类目标（现 `settings_dialog.py:174-191` 只提示与 XML 根重叠）。
+- 第四批（跨仓轨：cbeta-fetch 改完同步到 xml2pdf/publish；已完成）：
+  - [x] TLS：所有主机默认 `ssl.create_default_context()`；cbdata 只清
+    `VERIFY_X509_STRICT` 附加位（`CERT_REQUIRED` + `check_hostname` 保持开启），
+    不使用 `ssl._create_unverified_context()`；其它主机严格。实测 Python 3.14 /
+    OpenSSL 3.0.18：cbdata 默认报 Missing SKI，清 strict 位后 200；GitHub 严格 200。
+  - [x] 下载分块流式：`download`/`fetch_if_changed` 1 MiB 分块写 `.part`；
+    `Content-Length` 与实际字节数不一致即失败重试（`copyfileobj` 短读不抛异常，
+    必须显式校验）；`.part` 名加 pid+随机后缀；`unzip=True` 临时 zip + `unzip_flat`。
+  - [x] 新增 `probe_status(url) -> int|None`（HEAD 状态码，共用同一套 TLS 上下文），
+    publish `_head_absent_404` 改用它，保留 404/410 快判。
+  - [ ] 解压原子性与同名策略：延后第二批（临时目录解压后替换；同名整单失败 vs 后者覆盖）。
+  - 实施：cbeta-fetch `817d207` / v0.2.0（本地 commit，未推送；该仓库未配置 remote）；已同步 xml2pdf `pycbeta/_vendor` 与
+    publish `cbeta_publish/_vendor`（两边 `SOURCE.txt` 已更新）。上游 23 项、
+    publish 861 项、xml2pdf `test_fetch` 51 项 + `test_update_data` 20 项 + vendor sync 3 项通过。
+  - 方案与测试清单见 `docs/上游-cbeta-fetch-TLS与分块下载.md`。
+- 第五批（工程化）：
+  - [ ] 加 ruff（先只开 E722/F841/E501）；CI 可选。
+  - [x] **不整体拆** `main_window.py`（8738 行，拆分收益低于回归风险）：新代码进独立模块，
+    旧文件只在改动时顺手抽离（如本次原子写、名称清洗、搜索缓存）。
+- 测试计划：原子写、名称越界（`..` 与非法字符）、不同工作目录下启动、配置损坏回退、编号索引缓存、
+  搜索缓存失效、盘根清理被拒、校验异常只记未处理作品——每项一条回归测试。
+
+### 第九轮：状态机与跨文件一致性（2026-10-21）
+
+- 审查角度：脏状态、跨次残留、线程退出、目录切换、界面过滤、富文本；审查阶段只读，结论确认后实施。
+- 新增结论（已复核）：
+  1. 退出保存失败仍关闭；空白丛书改名先删旧文件，随后写新文件失败会丢已保存内容（`main_window.py` 的 `closeEvent`、`_save_collections`、`_finalize_blank_save`）。
+  2. 官方书备齐失败/取消后，旧文件存在时合并/ZIP/导出静默用旧版；取消还会误写「备齐水位」。影响 5 个调用点（单册合并、批量更新、批量合并、ZIP、导出）。
+  3. 启动目录更新线程无进度、不可取消、退出不等待；设置页可再起一个更新线程，同进程两线程撞同一个 `.part` 临时文件，表现为假失败。
+  4. 设置改「丛书数据/目录数据」即时生效但不重建内存；`_save_config` 整份写回会撤销目录修改，并把归一化后的绝对路径写回 `app.json`，破坏打包版便携相对路径。
+  5. `_dl_stats` 跨次残留；删除当前分类后右侧过滤显示「全部」但实际仍按已删分类过滤；左栏丛书树刷新不沿用当前分类/标签过滤。
+  6. 人工放行后汇总仍把该作品列在「未入库」；放行记录只按（作品，格式）记，文件变化后再失败不会重新询问。
+  7. `detail` 富文本未转义收藏名（低危，需点击；他人分享的丛书 JSON 可注入链接）。
+  8. 小项：批量保存取消空白丛书改名仍按临时名落盘、`check_all` 失败也写 `last_check`、发布元数据写失败静默、`_name_taken` 大小写敏感、设置页固定写默认配置路径（生产不受影响，测试/自定义路径才有差异）。
+- 修法要点：
+  - 退出：`_save_collections` 返回是否全部成功；失败弹「取消/仍退出」默认取消；空白丛书改名改为先写新文件、成功后再删旧文件。
+  - 官方备齐：取消不写水位；下载尝试后重算 `stale`，仍有「文件存在但过期」时询问「是否用旧版继续」，默认否；批量更新把仍过期项计入失败。
+  - 更新线程：`RemoteManager`/`UpdateWorker` 增加停止标志与进度；关闭时停止并等待；与设置页更新互斥。
+  - 目录：本次会话固定旧目录并提示重启；`_save_config` 只覆盖运行时键、保留文件里的路径键；设置页下次打开显示文件里的待生效目录。
+  - 界面：重建过滤下拉后用实际 `currentData()`；树刷新沿用当前过滤；放行后从 `fail`/`undet` 剔除；富文本只转义用户名。
+- 测试计划：退出保存失败、取消/失败备齐、配置目录保留、过滤状态、放行汇总、名称大小写、设置页配置路径；`MainWindow` 测试全部用临时 `_config_path`/`collections_dir`。
+- 实施结果（2026-10-21，全部完成）：
+  - 退出保存：`_save_collections` 返回是否全部成功；`closeEvent` 失败时弹「取消/仍退出」默认取消；空白丛书改名改为先写新文件、成功后再删旧文件（`_finalize_blank_save` 用副本写入，失败不动内存）。
+  - 官方备齐：`_download_missing` 入口重置 `_dl_stats`；取消不写水位；新增 `_official_stale_pairs`/`_confirm_use_old_official`，单册合并、批量更新、批量合并、ZIP、导出五处按仍过期项提示或计入失败。
+  - 更新线程：`RemoteManager`/`UpdateWorker` 增加停止标志；主窗口连接 progress，关闭时先停并最多等 20 秒，超时拒绝关闭；设置页更新与主窗口更新互斥。
+  - 目录/配置：设置改 `collections_dir`/`mulu_dir` 本次会话固定旧值并提示重启；`_save_config` 改为保留文件里的目录键与 `xml2pdf.path`，不再把归一化绝对路径写回；设置页按传入 `_config_path` 保存/备份。
+  - 界面：`_sync_combo` 用重建后的实际分类；`_refresh_coll_tree` 校验过滤值并在三个刷新点沿用当前过滤；`_manual_approved` 改按（作品，格式）＋文件大小/修改时间；放行后从 `fail`/`undet` 剔除对应行。
+  - 富文本：右栏 `detail` 改用 `_DetailLabel`（默认纯文本，校验汇总走 `setHtml`）；直接进 QMessageBox 的用户名/分类名/标签名按 `_esc_ui` 转义。
+  - 小项：批量保存取消空白改名不再按临时名落盘；`check_all` 有失败/停止不写 `last_check`；发布元数据写失败保留脏标记；`_name_taken` 大小写不敏感（原有路径归一测试改用尾部空格，继续覆盖避让逻辑）。
+  - 上一轮遗留 P0/P1：更新页「恢复原始/上一次」只恢复 SOURCES 目录数据，配置快照移到 `backup/config/`（恢复原始优先用出厂模板）；分类/标签文件损坏时先另存 `.bad-<时间戳>` 再写；清理报告按「清理前－清理后」统计实际删除量并提示残留；`meta.json` 损坏先备份再按空库继续。
+  - P2/P3：`_replace_staged_path` 残留目录返回 False；EPUB `full-path` 反斜杠/`./..` 归一；新建分类 id 经 `safe_name` 清洗；14 处裸 `except:` 改 `except Exception:`。
+  - 测试：全量 **861 项通过**（原 851 + 新增 10 项）；`tests/test_state_regressions.py` 覆盖退出保存失败、取消不写水位、配置目录保留、名称大小写、放行指纹、设置页配置路径、分类/标签/meta 损坏、恢复只还原目录数据。
+  - 未做：第四批之二（解压原子性/同名策略）、空服务替身（测试辅助）。
 
 ## 备注
 

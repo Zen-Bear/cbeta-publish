@@ -5,6 +5,13 @@ from pathlib import Path
 from PySide6.QtCore import QThread, Signal
 
 
+def unprocessed_works(works, verdicts, failed):
+    """异常中断时：只补「尚未判定」的作品（verdicts 无记录、也不在 failed 里）。"""
+    done = set(verdicts or {})
+    bad = set(failed or [])
+    return [w for w in (works or []) if w not in done and w not in bad]
+
+
 class VerifyWorker(QThread):
     # 进度：done, label, level（level: "run"/"ok"/"fail"/""）
     progress = Signal(int, str, str)
@@ -164,8 +171,6 @@ class VerifyWorker(QThread):
             # 主线程嵌套事件循环永不退出（界面挂死）。此处吞掉并记失败，
             # 保证 finished_all 发出、界面可继续。
             print("verify worker fail", e)
-            for w in self.works:
-                if w not in failed:
-                    failed.append(w)
+            failed.extend(unprocessed_works(self.works, verdicts, failed))
         self.verdicts.emit(verdicts)
         self.finished_all.emit(ok, total, failed)

@@ -102,24 +102,29 @@ DEFAULT_CONFIG = {
 }
 
 
-def _ensure_original_backup():
-    """首次启动/首次保存前：建立出厂原始配置备份（mulu/backup/original）。"""
-    if not CONFIG_PATH.exists():
-        return
-    orig_dir = BACKUP_DIR / "original"
+def _ensure_original_backup(backup_dir=None, cfg_path=None):
+    """首次保存前：出厂模板快照到 mulu/backup/config/original（与目录数据分开）。"""
+    src = Path(cfg_path or CONFIG_PATH)
+    orig_dir = Path(backup_dir or BACKUP_DIR) / "config" / "original"
     orig_dir.mkdir(parents=True, exist_ok=True)
     target = orig_dir / "app.json"
-    if not target.exists():
-        shutil.copy2(str(CONFIG_PATH), str(target))
-
-
-def _backup_last():
-    """保存前：当前配置快照到 mulu/backup/last。"""
-    if not CONFIG_PATH.exists():
+    if target.exists():
         return
-    last_dir = BACKUP_DIR / "last"
+    # 优先用出厂模板；没有模板才退回当前配置
+    dflt = src.with_name("app.default.json")
+    source = dflt if dflt.exists() else src
+    if source.exists():
+        shutil.copy2(str(source), str(target))
+
+
+def _backup_last(backup_dir=None, cfg_path=None):
+    """保存前：当前配置快照到 mulu/backup/config/last。"""
+    src = Path(cfg_path or CONFIG_PATH)
+    if not src.exists():
+        return
+    last_dir = Path(backup_dir or BACKUP_DIR) / "config" / "last"
     last_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(str(CONFIG_PATH), str(last_dir / "app.json"))
+    shutil.copy2(str(src), str(last_dir / "app.json"))
 
 
 def note_rel(f):
@@ -193,15 +198,19 @@ def cache_clean_warning(path, cfg) -> str:
 
 class SettingsDialog(QDialog):
     def __init__(self, config: dict, parent=None, collection=None,
-                 collection_path=None):
+                 collection_path=None, catalog_busy=None):
         super().__init__(parent)
         self.setWindowTitle("设置")
         self.resize(680, 560)
         self._cfg = json.loads(json.dumps(config))  # 深拷贝
-        self._cfg_path = CONFIG_PATH
+        # 保存/备份用实际配置路径（测试或自定义 _config_path 时不写默认 config/app.json）
+        self._cfg_path = Path(self._cfg.get("_config_path") or CONFIG_PATH)
+        self._catalog_busy = catalog_busy
         # 当前丛书上下文（丛书特定说明页用）；None=无丛书（设置项禁用）
         self._coll = json.loads(json.dumps(collection)) if isinstance(collection, dict) else None
         self._coll_path = collection_path
+        self._upd_worker = None
+        self._updating = False
 
         v = QVBoxLayout(self)
         tabs = QTabWidget()
@@ -224,7 +233,7 @@ class SettingsDialog(QDialog):
         self._btn_default = QPushButton("恢复默认")
         self._btn_default.setToolTip("恢复为内置默认设置（仅改动本窗口控件，需点「确定/保存」才生效）")
         self._btn_original = QPushButton("恢复原始")
-        self._btn_original.setToolTip("从 mulu/backup/original/app.json 恢复初始配置（仅改动本窗口控件，需点「确定/保存」才生效）")
+        self._btn_original.setToolTip("从 mulu/backup/config/original/app.json 恢复初始配置（仅改动本窗口控件，需点「确定/保存」才生效）")
         self._btn_cancel = QPushButton("取消")
         # 确定=默认按钮（回车触发）；恢复默认/恢复原始靠左，其余靠右
         self._btn_apply.setDefault(True)
@@ -245,6 +254,58 @@ class SettingsDialog(QDialog):
         widget.setFocusPolicy(Qt.StrongFocus)
         widget.installEventFilter(self)
         return widget
+
+    # ---------- 更新源：路径与运行状态 ----------
+    def _mulu_dir(self) -> Path:
+        """目录数据根：配置值（绝对/相对）→ 绝对路径；空则默认 app_root/mulu。"""
+        raw = str(self._cfg.get("mulu_dir") or "").strip()
+        if not raw:
+            return PROJECT_ROOT / "mulu"
+        p = Path(raw)
+        return p if p.is_absolute() else PROJECT_ROOT / p
+
+    def _backup_dir(self) -> Path:
+        return self._mulu_dir() / "backup"
+
+    def _meta_path(self) -> Path:
+        return self._mulu_dir() / "cache" / "meta.json"
+
+    @staticmethod
+    def _under_root(value):
+        """配置里的目录值：相对按工程根解析；空返回空。"""
+        s = str(value or "").strip()
+        if not s:
+            return ""
+        p = Path(s)
+        return p if p.is_absolute() else PROJECT_ROOT / p
+
+    def _set_updating(self, on: bool):
+        self._updating = bool(on)
+        for name in ("btn_check_update", "btn_mulu_diff",
+                     "btn_restore_orig", "btn_restore_last",
+                     "_btn_save", "_btn_apply", "_btn_original", "_btn_default"):
+            b = getattr(self, name, None)
+            if b is not None:
+                b.setEnabled(not on)
+
+    def reject(self):
+        if getattr(self, "_updating", False):
+            QMessageBox.information(self, "正在更新", "更新进行中，请等待完成。")
+            return
+        super().reject()
+
+    def accept(self):
+        if getattr(self, "_updating", False):
+            QMessageBox.information(self, "正在更新", "更新进行中，请等待完成。")
+            return
+        super().accept()
+
+    def closeEvent(self, e):
+        if getattr(self, "_updating", False):
+            QMessageBox.information(self, "正在更新", "更新进行中，请等待完成。")
+            e.ignore()
+            return
+        super().closeEvent(e)
 
     def eventFilter(self, obj, event):
         if isinstance(obj, (QSpinBox, QDoubleSpinBox, QComboBox)) and event.type() == QEvent.Type.Wheel:
@@ -1179,7 +1240,7 @@ class SettingsDialog(QDialog):
         self._cache_rows = {}
         from cbeta_publish.books import xml2pdf_bridge
         specs = [
-            ("ebooks", "官方电子书缓存", lambda: self._cfg.get("official_ebooks_dir", "")),
+            ("ebooks", "官方电子书缓存", lambda: self._under_root(self._cfg.get("official_ebooks_dir", ""))),
             # 自制电子书：用 bridge 默认兜底（配置缺省也有值），保证能统计/清理
             ("xmlbooks", "自制电子书", lambda: str(xml2pdf_bridge.xml_books_dir(self._cfg))),
             # 校验工作根：验证报告与暂存产物（清理后需重新校验）
@@ -1246,9 +1307,18 @@ class SettingsDialog(QDialog):
             msg += f"\n\n{warn}"
         if QMessageBox.question(self, "清理缓存", msg) != QMessageBox.Yes:
             return
-        from cbeta_publish.books.cache_manager import clean, human
-        r = clean(path)
-        QMessageBox.information(self, "完成", f"已删除 {r['removed_files']} 个文件（{human(r['removed_bytes'])}）")
+        from cbeta_publish.books.cache_manager import clean, dir_stats, human
+        try:
+            r = clean(path)
+        except ValueError as e:
+            QMessageBox.warning(self, "拒绝清理", str(e))
+            return
+        msg = f"已删除 {r['removed_files']} 个文件（{human(r['removed_bytes'])}）"
+        left = dir_stats(path)
+        if left["files"]:
+            msg += (f"\n仍有 {left['files']} 个文件未能删除（{human(left['bytes'])}），"
+                    "请关闭占用后重试。")
+        QMessageBox.information(self, "完成", msg)
         self._refresh_cache_stats()
 
     def _clean_verify_records(self):
@@ -1310,18 +1380,18 @@ class SettingsDialog(QDialog):
         row = QWidget()
         h = QHBoxLayout(row)
         h.setContentsMargins(0, 0, 0, 0)
-        btn_check = QPushButton("立即检查更新")
-        btn_check.clicked.connect(self._check_update)
-        btn_diff = QPushButton("查看目录变更…")
-        btn_diff.setToolTip("当前目录 vs 上次更新前的备份（mulu/backup/last/）：\n"
-                            "只列经的新增/删除/改名（经号＋书名＋卷＋作者）")
-        btn_diff.clicked.connect(self._show_mulu_diff)
-        btn_r_orig = QPushButton("恢复原始（目录数据）")
-        btn_r_orig.clicked.connect(lambda: self._restore_mulu("original"))
-        btn_r_last = QPushButton("恢复上一次（目录数据）")
-        btn_r_last.clicked.connect(lambda: self._restore_mulu("last"))
-        h.addWidget(btn_check); h.addWidget(btn_diff)
-        h.addWidget(btn_r_orig); h.addWidget(btn_r_last); h.addStretch()
+        self.btn_check_update = QPushButton("立即检查更新")
+        self.btn_check_update.clicked.connect(self._check_update)
+        self.btn_mulu_diff = QPushButton("查看目录变更…")
+        self.btn_mulu_diff.setToolTip("当前目录 vs 上次更新前的备份（mulu/backup/last/）：\n"
+                                      "只列经的新增/删除/改名（经号＋书名＋卷＋作者）")
+        self.btn_mulu_diff.clicked.connect(self._show_mulu_diff)
+        self.btn_restore_orig = QPushButton("恢复原始（目录数据）")
+        self.btn_restore_orig.clicked.connect(lambda: self._restore_mulu("original"))
+        self.btn_restore_last = QPushButton("恢复上一次（目录数据）")
+        self.btn_restore_last.clicked.connect(lambda: self._restore_mulu("last"))
+        h.addWidget(self.btn_check_update); h.addWidget(self.btn_mulu_diff)
+        h.addWidget(self.btn_restore_orig); h.addWidget(self.btn_restore_last); h.addStretch()
         v.addWidget(row)
         hint = QLabel("权威源为 cbdata/stable scope-selector（部类/朝代/作者）；更新前旧文件自动快照到 mulu/backup/last/——「查看目录变更…」即对比它（只列经的新增/删除/改名）。")
         hint.setStyleSheet("color: gray;")
@@ -1345,7 +1415,7 @@ class SettingsDialog(QDialog):
         for key, cat, url, rel in SOURCES:
             r = self.tbl.rowCount()
             self.tbl.insertRow(r)
-            p = local_path(rel)
+            p = local_path(rel, self._mulu_dir())
             for c, val in enumerate([cat, key]):
                 item = QTableWidgetItem(val)
                 item.setToolTip(val)
@@ -1372,7 +1442,8 @@ class SettingsDialog(QDialog):
             pass
         try:
             import json as _json
-            meta = _json.loads((PROJECT_ROOT / "mulu" / "cache" / "meta.json").read_text(encoding="utf-8")) if (PROJECT_ROOT / "mulu" / "cache" / "meta.json").exists() else {}
+            _mp = self._meta_path()
+            meta = _json.loads(_mp.read_text(encoding="utf-8")) if _mp.exists() else {}
             self.lbl_last_check.setText(f"上次检查：{meta.get('last_check', '从未')}")
         except Exception:
             self.lbl_last_check.setText("上次检查：从未")
@@ -1385,9 +1456,9 @@ class SettingsDialog(QDialog):
         """
         from cbeta_publish.books import mulu_diff
         from cbeta_publish.books.remote_sources import SOURCES, local_path
-        last = Path(last_dir) if last_dir is not None else (BACKUP_DIR / "last")
+        last = Path(last_dir) if last_dir is not None else (self._backup_dir() / "last")
         if new_of is None:
-            new_of = local_path
+            new_of = lambda rel: local_path(rel, self._mulu_dir())
         out = {}
         for key, _cat, _url, rel in SOURCES:
             if keys is not None and key not in keys:
@@ -1403,12 +1474,11 @@ class SettingsDialog(QDialog):
         from cbeta_publish.books.remote_sources import SOURCES
         return {key: f"{Path(rel).name}（{cat}）" for key, cat, _url, rel in SOURCES}
 
-    @staticmethod
-    def _mulu_backup_times(last_dir=None):
+    def _mulu_backup_times(self, last_dir=None):
         """{源key: 备份文件时间 `MM-DD HH:MM`}：明细里标注对比基准。"""
         import datetime as _dt
         from cbeta_publish.books.remote_sources import SOURCES
-        last = Path(last_dir) if last_dir is not None else (BACKUP_DIR / "last")
+        last = Path(last_dir) if last_dir is not None else (self._backup_dir() / "last")
         out = {}
         for key, _cat, _url, rel in SOURCES:
             p = last / Path(rel).name
@@ -1466,32 +1536,46 @@ class SettingsDialog(QDialog):
                 "更新失败（未能对比）："
                 + "、".join(names.get(k, k) for k in sorted(fail)))
 
-    def _check_update(self):
-        from cbeta_publish.books.remote_manager import RemoteManager
-        from cbeta_publish.books.remote_sources import SOURCES
+    def _scroll_status(self):
+        try:
+            _sb = self.upd_status.verticalScrollBar()
+            _sb.setValue(_sb.maximum())
+        except Exception:
+            pass
 
-        def _scroll_status():
+    def _check_update(self):
+        if getattr(self, "_upd_worker", None) is not None:
+            return
+        _busy = getattr(self, "_catalog_busy", None)
+        if callable(_busy):
             try:
-                _sb = self.upd_status.verticalScrollBar()
-                _sb.setValue(_sb.maximum())
+                if _busy():
+                    QMessageBox.information(self, "目录更新",
+                        "主窗口的目录更新仍在进行，请等它完成后再检查/更新。")
+                    return
             except Exception:
                 pass
-
-        rm = RemoteManager(PROJECT_ROOT / "mulu" / "cache" / "meta.json")
-        QApplication.setOverrideCursor(Qt.WaitCursor)
+        from cbeta_publish.books.update_worker import UpdateWorker
+        from cbeta_publish.books.remote_sources import SOURCES
         import datetime as _dt
         self.upd_status.appendPlainText(
             f"—— 检查更新 {_dt.datetime.now():%Y-%m-%d %H:%M:%S} ——")
-        _scroll_status()
+        self._scroll_status()
+        self._upd_worker = UpdateWorker(self._meta_path(), SOURCES,
+                                        self._backup_dir(), do_update=True,
+                                        parent=self, root=self._mulu_dir())
+        self._upd_worker.progress.connect(self._on_update_progress)
+        self._upd_worker.updated.connect(self._on_update_done)
+        self._upd_worker.finished.connect(self._on_update_finished)
+        self._set_updating(True)
+        self._upd_worker.start()
 
-        def progress(msg):
-            self.upd_status.appendPlainText(str(msg))
-            _scroll_status()
-            QApplication.processEvents()
-        try:
-            result = rm.update_all(SOURCES, BACKUP_DIR, progress=progress)
-        finally:
-            QApplication.restoreOverrideCursor()
+    def _on_update_progress(self, msg):
+        self.upd_status.appendPlainText(str(msg))
+        self._scroll_status()
+
+    def _on_update_done(self, result):
+        result = result or {}
         upd = [k for k, v in result.items() if v == "updated"]
         fail = [k for k, v in result.items() if v == "failed"]
         self._reload_update_table()
@@ -1499,28 +1583,57 @@ class SettingsDialog(QDialog):
             f"完成：更新 {len(upd)} 项，失败 {len(fail)} 项，其余已最新"
             + (f"；失败：{', '.join(fail)}" if fail else ""))
         self._append_mulu_diff(result)
-        _scroll_status()
+        self._scroll_status()
         QMessageBox.information(self, "检查更新",
                                 f"更新 {len(upd)} 项，失败 {len(fail)} 项，其余已最新。\n"
                                 + (f"失败：{', '.join(fail)}" if fail else "")
-                                + "\n\n变更清单见「检查状态」（明细点「查看目录变更…」）。")
+                                + "\n\n变更清单见「检查状态」（明细点「查看目录变更…」）。\n"
+                                  "（重启后生效）")
+
+    def _on_update_finished(self):
+        w = getattr(self, "_upd_worker", None)
+        self._upd_worker = None
+        self._set_updating(False)
+        if w is not None:
+            w.deleteLater()
 
     def _restore_mulu(self, which: str):
-        src_dir = BACKUP_DIR / which
-        if not src_dir.exists() or not any(src_dir.iterdir()):
+        src_dir = self._backup_dir() / which
+        if not src_dir.exists():
             QMessageBox.information(self, "提示", f"备份目录为空：{src_dir}")
             return
+        from cbeta_publish.books.remote_sources import SOURCES, local_path
+        mulu = self._mulu_dir()
+        pairs = []
+        for _key, _cat, _url, rel in SOURCES:
+            relp = Path(rel)
+            try:
+                relp = relp.relative_to("mulu")
+            except ValueError:
+                pass
+            src = src_dir / relp
+            if src.is_file():
+                pairs.append((src, local_path(rel, mulu)))
+        if not pairs:
+            QMessageBox.information(
+                self, "提示",
+                f"「{src_dir}」中没有目录数据文件。\n"
+                "（配置快照在 backup/config/，由此页的「恢复原始/恢复默认」处理）")
+            return
         label = "出厂原始" if which == "original" else "上一次"
-        if QMessageBox.question(self, "恢复", f"用「{label}」备份覆盖 mulu 元数据？") != QMessageBox.Yes:
+        if QMessageBox.question(
+                self, "恢复",
+                f"用「{label}」的 {len(pairs)} 个目录数据文件覆盖当前 mulu？\n"
+                "只改目录源文件，不改配置。") != QMessageBox.Yes:
             return
         try:
-            mulu = PROJECT_ROOT / "mulu"
+            mulu.mkdir(parents=True, exist_ok=True)
             names = []
-            for f in src_dir.iterdir():
-                if f.is_file():
-                    shutil.copy2(str(f), str(mulu / f.name))
-                    names.append(f.name)
-            QMessageBox.information(self, "完成", f"已恢复 {len(names)} 个文件：{', '.join(names[:5])}）")
+            for src, dst in pairs:
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(str(src), str(dst))
+                names.append(dst.name)
+            QMessageBox.information(self, "完成", f"已恢复 {len(names)} 个文件：{', '.join(names[:5])}")
         except Exception as e:
             QMessageBox.warning(self, "失败", f"恢复失败：{e}")
 
@@ -1856,11 +1969,17 @@ class SettingsDialog(QDialog):
         QMessageBox.information(self, "提示", "已载入默认配置，点「保存」生效。")
 
     def _restore_original(self):
-        orig = BACKUP_DIR / "original" / "app.json"
+        orig = self._backup_dir() / "config" / "original" / "app.json"
+        if not orig.exists():
+            # 兼容旧版：配置快照曾放在 backup/original/app.json
+            old = self._backup_dir() / "original" / "app.json"
+            if old.exists():
+                orig = old
         if not orig.exists():
             QMessageBox.information(self, "提示", "尚无出厂原始配置备份（首次保存时自动建立）。")
             return
-        if QMessageBox.question(self, "恢复原始", "从 mulu/backup/original/app.json 恢复出厂配置？") != QMessageBox.Yes:
+        if QMessageBox.question(self, "恢复原始",
+                                f"从 {orig} 恢复出厂配置？") != QMessageBox.Yes:
             return
         try:
             self._cfg = json.loads(orig.read_text(encoding="utf-8"))
@@ -1999,14 +2118,19 @@ class SettingsDialog(QDialog):
         self.accept()
 
     def _save(self):
+        if getattr(self, "_updating", False):
+            QMessageBox.information(self, "正在更新", "更新进行中，请等待完成。")
+            return
         try:
             cfg = self._collect()
-            _ensure_original_backup()
-            _backup_last()
-            CONFIG_PATH.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+            _ensure_original_backup(self._backup_dir(), self._cfg_path)
+            _backup_last(self._backup_dir(), self._cfg_path)
+            from cbeta_publish.utils.atomic import atomic_write_json
+            atomic_write_json(self._cfg_path, cfg)
             self._saved_cfg = cfg
             self._did_save = True
-            QMessageBox.information(self, "已保存", "配置已保存到 config/app.json\n（前一份已备份至 mulu/backup/last/）")
+            QMessageBox.information(self, "已保存",
+                f"配置已保存到 {self._cfg_path}\n（前一份已备份至 mulu/backup/last/）")
             self.accept()
         except Exception as e:
             QMessageBox.warning(self, "失败", f"保存失败：{e}")

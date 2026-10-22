@@ -13,14 +13,20 @@ from cbeta_publish.collection.category_manager import CategoryManager
 from cbeta_publish.collection.tags_manager import TagsManager
 from cbeta_publish.collection.collection_model import create_collection, slugify
 from cbeta_publish.utils import text_util
+from cbeta_publish.utils.atomic import atomic_write_json, atomic_write_text
+from cbeta_publish.utils.safe_name import safe_name
 from cbeta_publish.books import official_ebook_source
 from cbeta_publish.catalog import work_id
 from cbeta_publish.collection.collection_model import normalize_collection, write_index
-from cbeta_publish.paths import app_root
+from cbeta_publish.paths import app_root, normalize_config_paths
 from cbeta_publish import APP_NAME, __version__
 
 WORK_RE = re.compile(r"[A-Z]+[0-9A-Za-z]+")
 CONFIG_PATH = app_root() / "config" / "app.json"
+
+#: 导航树节点简体文本缓存（= Qt.UserRole + 101）。挂在 QTreeWidgetItem 上，
+#: 树重建时随节点一起丢弃，无需版本号失效。
+_NODE_S2_ROLE = 0x0100 + 101
 
 #: 报告页（书籍信息/丛书信息/自制报告/批处理报告）滚动条样式：
 #: Windows 11 风格滚动条是无轨道细圆点、几乎看不见，报告页改用经典可见滚动条（带轨道＋明显滑块）。
@@ -404,10 +410,22 @@ class _CollTree(QTreeWidget):
         self._owner._coll_drop(e)
 
 
+class _DetailLabel(QLabel):
+    """右栏详情标签：setText 默认按纯文本显示，避免收藏名里的 HTML 被解析；
+    需要富文本（校验汇总的链接）时显式调用 setHtml。"""
+    def setText(self, text):
+        import html as _html
+        super().setText(_html.escape(str(text if text is not None else "")))
+
+    def setHtml(self, text):
+        super().setText(str(text if text is not None else ""))
+
+
 class MainWindow(QMainWindow):
     def __init__(self, config):
         super().__init__()
         self.config=config
+        normalize_config_paths(self.config)   # 打包版相对路径按 app_root 归一（幂等）
         self._migrate_cover_title_pos(config)
         self._config_path=config.get("_config_path") or CONFIG_PATH
         self.setWindowTitle(f"{APP_NAME} v{__version__}")
@@ -417,12 +435,18 @@ class MainWindow(QMainWindow):
         else:
             self.resize(1240,720)
         mulu=Path(config["mulu_dir"])
+        self._services_error=None
         try:
             self.sutra = SutraService(mulu/"SutraList.json")
             self.mapping = MappingService(mulu/"sutra_mapping.txt")
             self.creator = CreatorService(mulu/"all-creators-with-alias.json", mulu/"creators-by-strokes-with-works.json")
         except Exception as e:
+            self._services_error=str(e)
             print("service load fail", e)
+            # 保持属性存在（None），避免后续 getattr 处 AttributeError
+            self.sutra=getattr(self,"sutra",None)
+            self.mapping=getattr(self,"mapping",None)
+            self.creator=getattr(self,"creator",None)
         self._bulei_roots=[]
         self._workspace=[]     # 唯一内存目录（中栏「工作区」与左栏工作区面板共用）
         self._selected=set()   # 工作区勾选集合
@@ -443,7 +467,8 @@ class MainWindow(QMainWindow):
         self._tmp_preset=None  # 「调整…」本次临时预设文件（不落盘；作用于 自制/合并 等）
         self._verify_worker=None  # 在途校验线程（跑完清理；关闭时可停）
         self._dl_worker=None      # 在途下载线程（跑完清理；关闭时可停）
-        self._manual_approved=set()  # 本 session 人工放行的 {(work, fmt)}（重跑导入不再重复询问）
+        # 本 session 人工放行 {(work, fmt): (size, mtime_ns)}；文件变了要重新询问
+        self._manual_approved={}
 
         splitter=_Splitter(Qt.Horizontal)
         left=QWidget()
@@ -617,7 +642,7 @@ class MainWindow(QMainWindow):
         self.list.setStyleSheet("QListWidget::item:selected { background: #bbdefb; color: #000; } QListWidget::item:hover { background: #fff3c4; } QListWidget::item:selected:hover { background: #90caf9; color: #000; }")
         self.list.setMinimumWidth(280)
         mv.addWidget(self.list)
-        self.detail=QLabel("")
+        self.detail=_DetailLabel("")
         self.detail.setWordWrap(True)
         self.detail.setAlignment(Qt.AlignTop | Qt.AlignLeft)
         self.detail.setTextInteractionFlags(
@@ -1037,7 +1062,7 @@ class MainWindow(QMainWindow):
         self.coll_view_combo.currentIndexChanged.connect(self._on_coll_view_changed)
         try:
             self.coll_list.model().rowsMoved.connect(self._on_coll_reordered)
-        except: pass
+        except Exception: pass
         self.coll_list.viewport().installEventFilter(self)
         self.coll_list.viewport().setMouseTracking(True)   # 图标 tooltip 需移动事件
         self.chk_pdf.stateChanged.connect(self._load_coll_works)
@@ -1054,22 +1079,8 @@ class MainWindow(QMainWindow):
         self._load_collections()
         # 有上次工作的丛书则保持选中；否则选中空白丛书
         self._ensure_blank_working(select=not bool(self._last_coll_path))
-        # 繁简搜索：启动时生成简体标题缓存
-        from cbeta_publish.utils import text_util
+        # 繁简搜索：初始化 OpenCC（全仓唯一初始化点；搜索按节点懒缓存简体文本）
         text_util.init()
-        self._title_s2={}
-        try:
-            def walk_b(nodes):
-                for n in nodes:
-                    for w in WORK_RE.findall(n.title):
-                        if len(w)>=4 and (self.sutra.title_of(w)!=w or self.mapping.work_exists(w)):
-                            t=self.sutra.title_of(w)
-                            m=(self.mapping.resolve(w) or {}).get("name","")
-                            self._title_s2[w]=(text_util.to_simplified(t), text_util.to_simplified(m))
-                    walk_b(n.children)
-            walk_b(self._bulei_roots)
-        except Exception as e:
-            print("s2 cache fail", e)
         # 拼音序作者列表：启动时预生成，切换即时显示（避免拼音排序卡顿）
         self._authors_pinyin_sorted=None
         # 作者朝代排序：work→朝代 映射缓存
@@ -1098,6 +1109,14 @@ class MainWindow(QMainWindow):
         # 目录更新：按 update_interval 到期后台静默检查（不阻塞启动）
         self._upd_worker=None
         QTimer.singleShot(3000, self._maybe_check_update)
+        # 目录数据缺失/损坏：非模态提示（不能用模态框：测试/离屏会挂）
+        notes=[]
+        if self._services_error:
+            notes.append("目录数据不完整（浏览/搜索可能不可用），请到「设置→更新源」检查更新")
+        if getattr(self, "_bad_coll_files", None):
+            notes.append(f"有 {len(self._bad_coll_files)} 个丛书文件损坏，已跳过")
+        if notes:
+            self.detail.setText("；".join(notes))
 
     def _maybe_check_update(self):
         try:
@@ -1117,11 +1136,24 @@ class MainWindow(QMainWindow):
                     pass
             from cbeta_publish.books.remote_sources import SOURCES
             from cbeta_publish.books.update_worker import UpdateWorker
-            self._upd_worker=UpdateWorker(meta_path, SOURCES, Path(self.config["mulu_dir"])/"backup", do_update=False)
-            self._upd_worker.checked.connect(self._on_update_checked)
-            self._upd_worker.start()
+            _w=UpdateWorker(meta_path, SOURCES, Path(self.config["mulu_dir"])/"backup", do_update=False, root=Path(self.config["mulu_dir"]))
+            self._upd_worker=_w
+            _w.progress.connect(self._on_update_progress)
+            _w.checked.connect(self._on_update_checked)
+            _w.finished.connect(lambda _x=_w: self._clear_update_worker(_x))
+            _w.start()
         except Exception as e:
             print("maybe check update fail", e)
+
+    def _on_update_progress(self, msg):
+        try:
+            self.detail.setText(f"目录更新：{msg}")
+        except Exception:
+            pass
+
+    def _clear_update_worker(self, w):
+        if getattr(self, "_upd_worker", None) is w:
+            self._upd_worker=None
 
     def _on_update_checked(self, changed):
         if not changed:
@@ -1133,10 +1165,20 @@ class MainWindow(QMainWindow):
             return
         from cbeta_publish.books.remote_sources import SOURCES
         from cbeta_publish.books.update_worker import UpdateWorker
+        # 旧检查线程可能刚 emit 完还没退出；等它退出再替换引用，避免销毁运行中的 QThread
+        _old=getattr(self, "_upd_worker", None)
+        if _old is not None:
+            try:
+                _old.wait(3000)
+            except Exception:
+                pass
         meta_path=Path(self.config["mulu_dir"])/"cache"/"meta.json"
-        self._upd_worker=UpdateWorker(meta_path, SOURCES, Path(self.config["mulu_dir"])/"backup", do_update=True)
-        self._upd_worker.updated.connect(self._on_update_done)
-        self._upd_worker.start()
+        _w=UpdateWorker(meta_path, SOURCES, Path(self.config["mulu_dir"])/"backup", do_update=True, root=Path(self.config["mulu_dir"]))
+        self._upd_worker=_w
+        _w.progress.connect(self._on_update_progress)
+        _w.updated.connect(self._on_update_done)
+        _w.finished.connect(lambda _x=_w: self._clear_update_worker(_x))
+        _w.start()
 
     def _on_update_done(self, result):
         upd=[k for k,v in (result or {}).items() if v=="updated"]
@@ -1455,7 +1497,7 @@ class MainWindow(QMainWindow):
             it.setForeground(0, Qt.gray)
             self.tree.addTopLevelItem(it)
             return
-        entries=load_vol(path)
+        entries=self._vol_entries(path)
         if filter_edition is None:
             filter_edition=self.vol_filter.currentData()
         # 过滤下拉：刊本（一级）
@@ -1497,6 +1539,21 @@ class MainWindow(QMainWindow):
                 for wid, wtitle in vol["works"]:
                     v_item.addChild(self._work_item(wid, wtitle))
         self._expand_tree()
+
+    def _vol_entries(self, path):
+        """vol.json 解析缓存（1.1 MB；按 mtime/size 失效，更新源替换后自动重读）。"""
+        from cbeta_publish.catalog.vol_service import load_vol
+        try:
+            st=path.stat()
+            key=(str(path), st.st_mtime_ns, st.st_size)
+        except OSError:
+            return []
+        cached=getattr(self, "_vol_entries_cache", None)
+        if cached and cached[0]==key:
+            return cached[1]
+        entries=load_vol(path)
+        self._vol_entries_cache=(key, entries)
+        return entries
 
     def _refresh_dynasty_tree(self):
         # 朝代视图：朝代→经（读 mulu/dynasty-works.json；受 catalog.filters.dynasty.hidden 过滤）
@@ -1559,11 +1616,16 @@ class MainWindow(QMainWindow):
 
     # ---------- 作者树 ----------
     def _dynasty_index(self):
-        # 缓存 work → 朝代 与 朝代顺序（来自 mulu/dynasty-works.json）
-        if getattr(self, "_work_dyn", None) is not None:
-            return self._work_dyn, self._dyn_order
+        # 缓存 work → 朝代 与 朝代顺序（来自 mulu/dynasty-works.json；文件替换后失效）
         from cbeta_publish.catalog.dynasty_service import load_dynasty
         path=Path(self.config["mulu_dir"])/"dynasty-works.json"
+        try:
+            st=path.stat()
+            key=(str(path), st.st_mtime_ns, st.st_size)
+        except OSError:
+            key=None
+        if getattr(self, "_work_dyn", None) is not None and getattr(self, "_dyn_key", None)==key:
+            return self._work_dyn, self._dyn_order
         dmap={}; order=[]
         for title, works in load_dynasty(path):
             order.append(title)
@@ -1571,6 +1633,7 @@ class MainWindow(QMainWindow):
                 dmap.setdefault(wid, title)
         self._work_dyn=dmap
         self._dyn_order=order
+        self._dyn_key=key
         return dmap, order
 
     @staticmethod
@@ -1851,7 +1914,7 @@ class MainWindow(QMainWindow):
             cm=CategoryManager(Path(self.config["collections_dir"])/"categories.json")
             for c in cm.all():
                 self.coll_filter.addItem(c["name"], c["id"])
-        except: pass
+        except Exception: pass
         if cur:
             for i in range(self.coll_filter.count()):
                 if self.coll_filter.itemData(i)==cur:
@@ -1873,6 +1936,13 @@ class MainWindow(QMainWindow):
                 if self.coll_tag_filter.itemData(i)==cur_tag:
                     self.coll_tag_filter.setCurrentIndex(i); break
         self.coll_tag_filter.blockSignals(False)
+        # 传入的过滤值可能已被删除（如刚删掉当前分类）：回落到下拉实际选中值
+        _cat_ids={self.coll_filter.itemData(i) for i in range(self.coll_filter.count())}
+        if filter_cat not in _cat_ids:
+            filter_cat=self.coll_filter.currentData()
+        _tag_ids={self.coll_tag_filter.itemData(i) for i in range(self.coll_tag_filter.count())}
+        if filter_tag not in _tag_ids:
+            filter_tag=self.coll_tag_filter.currentData()
         rows=list(self._collections)
         if filter_cat:
             rows=[(p,d) for p,d in rows if d.get("category")==filter_cat]
@@ -1937,7 +2007,13 @@ class MainWindow(QMainWindow):
         self._changed_colls=set()
         self._coll_originals={}
         self._collections=[]
-        for cat_dir in cdir.iterdir():
+        self._bad_coll_files=[]
+        if not cdir.exists():
+            try:
+                cdir.mkdir(parents=True, exist_ok=True)
+            except OSError as e:
+                print("create collections dir fail", e)
+        for cat_dir in (cdir.iterdir() if cdir.is_dir() else []):
             if cat_dir.is_dir():
                 for f in cat_dir.glob("*.json"):
                     try:
@@ -1945,7 +2021,9 @@ class MainWindow(QMainWindow):
                         self._collections.append((f,d))
                         # 基线也用规范化结果，读入即迁移（下次保存回写磁盘）
                         self._coll_originals[str(f)]=json.dumps(d, ensure_ascii=False, indent=2)
-                    except: pass
+                    except Exception as e:
+                        self._bad_coll_files.append(f.name)
+                        print("load collection fail", f, e)
         self._collections.sort(key=lambda x: 0 if x[1].get("name")=="空白丛书" else 1)
         self._write_index()
         self._sync_combo(select_path=self._last_coll_path)
@@ -1998,7 +2076,8 @@ class MainWindow(QMainWindow):
         # 分类删改后：右栏过滤下拉与左栏 coll_filter 同步刷新
         self._sync_combo(select_path=getattr(self, "_last_coll_path", None))
         if self.nav_combo.currentText()=="丛书":
-            self._refresh_coll_tree()
+            self._refresh_coll_tree(filter_cat=self.coll_filter.currentData(),
+                                    filter_tag=self.coll_tag_filter.currentData())
 
     def _category_manager_dialog(self):
         # 分类管理：列表（id/名称/描述/预设标记）+ 改名/删除；预设分类禁删
@@ -2020,6 +2099,11 @@ class MainWindow(QMainWindow):
                 item.setData(Qt.UserRole, c["id"])
                 lst.addItem(item)
         reload()
+        if CategoryManager(cdir/"categories.json").corrupt:
+            _warn_lbl=QLabel("分类文件损坏：原文件会先另存为 categories.json.bad-<时间戳>，再写入新内容。")
+            _warn_lbl.setWordWrap(True)
+            _warn_lbl.setStyleSheet("color:#c62828;")
+            v.addWidget(_warn_lbl)
         v.addWidget(lst)
         btnrow=_DM()
         hb=_HM(btnrow)
@@ -2066,7 +2150,7 @@ class MainWindow(QMainWindow):
             if files:
                 self._wrap_box(QMessageBox.Warning, "禁止删除", f"「{cat['name']}」分类下还有 {len(files)} 部丛书，请先移走或删除后再操作。")
                 return
-            ret=QMessageBox.question(self,"删除分类", f"确定删除分类「{cat['name']}」？", QMessageBox.Yes | QMessageBox.No)
+            ret=QMessageBox.question(self,"删除分类", f"确定删除分类「{self._esc_ui(cat['name'])}」？", QMessageBox.Yes | QMessageBox.No)
             if ret!=QMessageBox.Yes:
                 return
             cm.delete(cid)
@@ -2126,6 +2210,11 @@ class MainWindow(QMainWindow):
             return [d.get("name","") for _p, d in self._collections
                     if tid in (d.get("tags",[]) or [])]
         reload()
+        if TagsManager(cdir/"tags.json").corrupt:
+            _warn_lbl=QLabel("标签文件损坏：原文件会先另存为 tags.json.bad-<时间戳>，再写入新内容。")
+            _warn_lbl.setWordWrap(True)
+            _warn_lbl.setStyleSheet("color:#c62828;")
+            v.addWidget(_warn_lbl)
         v.addWidget(lst)
         btnrow=_DM()
         hb=_HM(btnrow)
@@ -2165,7 +2254,7 @@ class MainWindow(QMainWindow):
                 self._wrap_box(QMessageBox.Warning, "禁止删除",
                                f"标签「{self._tags().name_of(tid)}」已被 {len(used)} 部丛书使用，请先移除后再删除。")
                 return
-            if QMessageBox.question(self, "删除标签", f"确定删除标签「{self._tags().name_of(tid)}」？") != QMessageBox.Yes:
+            if QMessageBox.question(self, "删除标签", f"确定删除标签「{self._esc_ui(self._tags().name_of(tid))}」？") != QMessageBox.Yes:
                 return
             self._tags().delete(tid)
             reload()
@@ -2239,9 +2328,10 @@ class MainWindow(QMainWindow):
         dlg.exec()
 
     def _name_taken(self, name, exclude_path=None):
-        # 全局查重（跨分类），返回已占用丛书路径或 None
+        # 全局查重（跨分类，名称按大小写不敏感比较），返回已占用丛书路径或 None
+        _n=(name or "").casefold()
         for p,d in self._collections:
-            if str(p)!=str(exclude_path) and d.get("name")==name:
+            if str(p)!=str(exclude_path) and (d.get("name") or "").casefold()==_n:
                 return str(p)
         return None
 
@@ -2267,7 +2357,8 @@ class MainWindow(QMainWindow):
                     self.coll_cat_filter.setCurrentIndex(i)
                     break
         self.coll_cat_filter.blockSignals(False)
-        cat_filter=cur_cat
+        # 分类可能刚被删除：用下拉实际选中值（回落到「全部」），不要用删除前的 cur_cat
+        cat_filter=self.coll_cat_filter.currentData()
         self.coll_combo.blockSignals(True)
         self.coll_combo.clear()
         for p,d in self._collections:
@@ -2302,8 +2393,7 @@ class MainWindow(QMainWindow):
             p=Path(self._config_path)
             cfg=json.loads(p.read_text(encoding="utf-8-sig")) if p.exists() else self.config
             cfg.setdefault("ui", {})["layout"]=self._layout_mode()
-            p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+            atomic_write_json(p, cfg)
         except Exception as e:
             print("persist layout fail", e)
 
@@ -2321,11 +2411,38 @@ class MainWindow(QMainWindow):
             pass
 
     def _save_config(self):
-        # 运行期改动（来源/预设）写回磁盘配置
+        # 运行期改动（来源/预设/说明页/批量选项）写回磁盘配置。
+        # 路径键保留文件原值：本次会话可能固定了旧目录，且归一化后的绝对路径
+        # 不应覆盖打包版的便携相对路径；xml2pdf.path 同理。
+        _keep={"mulu_dir", "collections_dir", "official_ebooks_dir",
+               "cbeta_ebooks_dir", "_config_path"}
         try:
             p=Path(self._config_path)
-            p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(json.dumps(self.config, ensure_ascii=False, indent=2), encoding="utf-8")
+            disk={}
+            if p.exists():
+                try:
+                    disk=json.loads(p.read_text(encoding="utf-8-sig")) or {}
+                except Exception:
+                    disk={}
+            if not disk:
+                disk={k: v for k, v in self.config.items() if k != "_config_path"}
+            else:
+                for k, v in self.config.items():
+                    if k in _keep:
+                        continue
+                    if k == "xml2pdf" and isinstance(v, dict):
+                        x=dict(disk.get("xml2pdf") or {})
+                        for kk, vv in v.items():
+                            if kk == "path":
+                                continue
+                            x[kk]=vv
+                        disk["xml2pdf"]=x
+                    else:
+                        disk[k]=v
+                for k in _keep:
+                    if k != "_config_path" and k not in disk and k in self.config:
+                        disk[k]=self.config[k]
+            atomic_write_json(p, disk)
         except Exception as e:
             print("save config fail", e)
 
@@ -2586,8 +2703,7 @@ class MainWindow(QMainWindow):
             if cur.get("last_collection")==path:
                 return
             cur["last_collection"]=path
-            sp.parent.mkdir(parents=True, exist_ok=True)
-            sp.write_text(json.dumps(cur, ensure_ascii=False, indent=2), encoding="utf-8")
+            atomic_write_json(sp, cur)
         except Exception as e:
             print("persist last collection fail", e)
 
@@ -2647,7 +2763,8 @@ class MainWindow(QMainWindow):
         elif mode=="作者":
             self._refresh_author_tree()
         elif mode=="丛书":
-            self._refresh_coll_tree()
+            self._refresh_coll_tree(filter_cat=self.coll_filter.currentData(),
+                                    filter_tag=self.coll_tag_filter.currentData())
 
     def _on_nav_changed(self, mode):
         self.tree.clear()
@@ -3555,15 +3672,22 @@ class MainWindow(QMainWindow):
         """
         kw_l=kw.lower()
         vars_kw_s={text_util.to_simplified(v).lower() for v in self._search_variants(kw)}
-        def _hit(text):
-            tl=(text or "").lower()
-            if kw_l in tl:
+        def _hit(it):
+            text=it.text(0) or ""
+            if kw_l in text.lower():
                 return True
-            ts=text_util.to_simplified(text).lower()
+            # 简体兜底：每节点只算一次，挂在 item 上（树重建即失效）；
+            # 存 (原文, 简体)：item 文字被原地改写时自动重算，避免命中旧文本
+            cached=it.data(0, _NODE_S2_ROLE)
+            if isinstance(cached, tuple) and cached[0]==text:
+                ts=cached[1]
+            else:
+                ts=text_util.to_simplified(text).lower()
+                it.setData(0, _NODE_S2_ROLE, (text, ts))
             return any(kv in ts for kv in vars_kw_s)
         out=[]; seen=set()
         def walk(it):
-            if _hit(it.text(0)):
+            if _hit(it):
                 for wid, _g, _bp in self._item_payload(it):
                     if wid and wid not in seen and self._is_known_work(wid):
                         seen.add(wid); out.append(wid)
@@ -3850,7 +3974,7 @@ class MainWindow(QMainWindow):
             try:
                 cat_dir.mkdir(parents=True, exist_ok=True)
                 content=json.dumps(d, ensure_ascii=False, indent=2)
-                target.write_text(content, encoding="utf-8")
+                atomic_write_text(target, content)
                 self._collections.append((target,d))
                 self._coll_originals[str(target)]=content
             except Exception as e:
@@ -3869,14 +3993,15 @@ class MainWindow(QMainWindow):
         target=self._ensure_blank_working()
         self._load_coll_works()
         if self.nav_combo.currentText()=="丛书":
-            self._refresh_coll_tree()
+            self._refresh_coll_tree(filter_cat=self.coll_filter.currentData(),
+                                    filter_tag=self.coll_tag_filter.currentData())
         self.detail.setText("已选择空白丛书（可直接拖入书籍）")
 
     def _append_collection(self, d):
         # 仅加入内存并标记未保存（不写盘）；点“保存”才落盘
         cdir=Path(self.config["collections_dir"])
         cat_dir=cdir/d.get("category","custom")
-        target=cat_dir/f"{d.get('name','未命名')}.json"
+        target=cat_dir/f"{safe_name(d.get('name','未命名'), '未命名')}.json"
         taken={os.path.normcase(str(p)) for p,_ in self._collections} | {os.path.normcase(str(x)) for x in cat_dir.glob("*.json")}
         if os.path.normcase(str(target)) in taken:
             base=target.stem
@@ -3920,14 +4045,17 @@ class MainWindow(QMainWindow):
                 cid="".join(lazy_pinyin(newname))[:20]
             except Exception:
                 cid=newname[:10]
-            if not cid:
-                cid="cat"
+            cid=safe_name(cid, "cat")   # 新分类 id 只在此清洗；已有 id 不动
             try:
                 cm=CategoryManager(cdir/"categories.json")
-                cm.add(cid, newname, newdesc)
-            except ValueError:
-                import time as _t
-                cm.add(f"{cid}_{int(_t.time())}", newname, newdesc)
+                try:
+                    cm.add(cid, newname, newdesc)
+                except ValueError:
+                    import time as _t
+                    cm.add(f"{cid}_{int(_t.time())}", newname, newdesc)
+            except Exception as e:
+                QMessageBox.warning(self, "新建分类失败", str(e))
+                return None
             return cm.all()[-1]["id"]
         # 改名模式：返回 (name, desc) 由调用方保存
         return (newname, newdesc)
@@ -3939,7 +4067,7 @@ class MainWindow(QMainWindow):
         try:
             cm=CategoryManager(cdir/"categories.json")
             cats=cm.all()
-        except:
+        except Exception:
             cats=[]
         dlg=QDialog(self)
         dlg.setWindowTitle(title)
@@ -4104,7 +4232,7 @@ class MainWindow(QMainWindow):
         d["updated_at"]=__import__("datetime").datetime.utcnow().isoformat()+"Z"
         cdir=Path(self.config["collections_dir"])
         cat_dir=cdir/cat
-        target=cat_dir/f"{name}.json"
+        target=cat_dir/f"{safe_name(name)}.json"
         taken={os.path.normcase(str(x)) for x in cat_dir.glob("*.json")} | {os.path.normcase(str(pp)) for pp,_ in self._collections}
         if os.path.normcase(str(target)) in taken:
             base=target.stem
@@ -4115,7 +4243,7 @@ class MainWindow(QMainWindow):
         try:
             cat_dir.mkdir(parents=True, exist_ok=True)
             content=json.dumps(d, ensure_ascii=False, indent=2)
-            target.write_text(content, encoding="utf-8")
+            atomic_write_text(target, content)
         except Exception as e:
             self.detail.setText(f"另存为失败 {e}")
             return
@@ -4206,7 +4334,7 @@ class MainWindow(QMainWindow):
             return False
         cdir=Path(self.config["collections_dir"])
         cat_dir=cdir/cat
-        target=cat_dir/f"{name}.json"
+        target=cat_dir/f"{safe_name(name)}.json"
         taken={os.path.normcase(str(x)) for x in cat_dir.glob("*.json")}
         if os.path.normcase(str(target)) in taken:
             base=target.stem
@@ -4220,7 +4348,7 @@ class MainWindow(QMainWindow):
         try:
             cat_dir.mkdir(parents=True, exist_ok=True)
             content=json.dumps(d, ensure_ascii=False, indent=2)
-            target.write_text(content, encoding="utf-8")
+            atomic_write_text(target, content)
         except Exception as e:
             self.detail.setText(f"移动失败 {e}")
             return False
@@ -4243,37 +4371,58 @@ class MainWindow(QMainWindow):
         return True
 
     def _save_collections(self):
+        """保存全部脏丛书。返回是否全部成功（取消空白改名也算未完成）。"""
         if not self._changed_colls:
             self.detail.setText("没有未保存的丛书")
-            return
-        # 空白丛书（自动命名 空白/空白N）保存前：弹窗改名+归类
+            return True
+        # 空白丛书（自动命名 空白/空白N）保存前：弹窗改名+归类。
+        # 取消改名/改名写入失败的本次跳过，不按临时名落盘，保留脏状态。
+        skipped=set()
         for p in list(self._changed_colls):
             d=self._coll_dict(p)
             if d is None:
                 continue
             if self._is_blank_name(d.get("name","")):
-                self._finalize_blank_save(p, d)
+                if self._finalize_blank_save(p, d) is False:
+                    skipped.add(str(p))
         saved=0
+        failed=[]
         for p in list(self._changed_colls):
+            if str(p) in skipped:
+                continue
             d=self._coll_dict(p)
             if d is None:
+                self._changed_colls.discard(str(p))
                 continue
             try:
-                Path(p).parent.mkdir(parents=True, exist_ok=True)
-                Path(p).write_text(json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
-                self._coll_originals[str(p)]=json.dumps(d, ensure_ascii=False, indent=2)
+                content=json.dumps(d, ensure_ascii=False, indent=2)
+                atomic_write_text(p, content)
+                self._coll_originals[str(p)]=content
+                self._changed_colls.discard(str(p))
                 saved+=1
             except Exception as e:
+                failed.append((d.get("name") or Path(p).stem, str(e)))
                 print(e)
-        self._changed_colls=set()
-        self._coll_changed=False
+        self._coll_changed=bool(self._changed_colls)
         self._update_coll_marks()
         self._write_index()
         self._refresh_coll_tree_if_visible()   # 左栏「丛书」视图同步（空白丛书改名/归类等）
-        self.detail.setText(f"已保存 {saved} 部丛书")
+        if failed:
+            names="\n".join(f"「{self._esc_ui(n)}」：{self._esc_ui(err)}" for n,err in failed[:5])
+            if len(failed)>5:
+                names += f"\n……等共 {len(failed)} 部"
+            self.detail.setText(f"保存失败 {len(failed)} 部（改动已保留）")
+            QMessageBox.warning(self, "保存失败",
+                                f"有 {len(failed)} 部丛书未能保存，改动已保留在内存：\n{names}")
+        elif skipped:
+            self.detail.setText(f"有 {len(skipped)} 部空白丛书未保存（已取消改名或改名写入失败）")
+        else:
+            self.detail.setText(f"已保存 {saved} 部丛书")
+        return (not failed) and (not skipped)
 
     def _finalize_blank_save(self, p, d):
-        # 空白丛书保存前弹窗：改正式名称 + 归类（合并为一个对话框）
+        # 空白丛书保存前弹窗：改正式名称 + 归类（合并为一个对话框）。
+        # 先把新文件写成功，再改内存、删旧文件；失败时旧文件和内存都不动。
         cdir=Path(self.config["collections_dir"])
         res=self._ask_name_category("保存空白丛书", d.get("name",""))
         if res is None:
@@ -4282,13 +4431,15 @@ class MainWindow(QMainWindow):
         if self._name_taken(name):
             self._wrap_box(QMessageBox.Warning, "重名", f"已有同名丛书「{name}」，请换一个名称。")
             return False
-        d["name"]=name
-        d["slug"]=slugify(cat, name)
-        d["category"]=cat
-        d.setdefault("tags", [])   # 标签由用户维护
-        d["updated_at"]=__import__("datetime").datetime.utcnow().isoformat()+"Z"
+        # 用副本算新内容；写盘成功后才更新 d，避免失败后内存名字已变、文件仍旧
+        d2=dict(d)
+        d2["name"]=name
+        d2["slug"]=slugify(cat, name)
+        d2["category"]=cat
+        d2.setdefault("tags", [])   # 标签由用户维护
+        d2["updated_at"]=__import__("datetime").datetime.utcnow().isoformat()+"Z"
         cat_dir=cdir/cat
-        target=cat_dir/f"{name}.json"
+        target=cat_dir/f"{safe_name(name)}.json"
         # 路径归一化比对（Windows 下斜杠方向/大小写不同仍是同一文件，裸 str 会漏检致覆盖）
         taken={os.path.normcase(str(x)) for x in cat_dir.glob("*.json")} | {os.path.normcase(str(pp)) for pp,_ in self._collections}
         if os.path.normcase(str(target)) in taken:
@@ -4297,18 +4448,31 @@ class MainWindow(QMainWindow):
             while os.path.normcase(str(target)) in taken:
                 target=cat_dir/f"{base}_{i}.json"
                 i+=1
-        if str(target)!=str(p):
-            Path(p).unlink(missing_ok=True)
+        try:
+            cat_dir.mkdir(parents=True, exist_ok=True)
+            content=json.dumps(d2, ensure_ascii=False, indent=2)
+            atomic_write_text(target, content)
+        except Exception as e:
+            self.detail.setText(f"改名保存失败（改动已保留）：{e}")
+            return False
+        old_p=str(p)
+        d.update(d2)
+        if str(target)!=old_p:
             for i,(pp,dd) in enumerate(self._collections):
-                if str(pp)==str(p):
+                if str(pp)==old_p:
                     self._collections[i]=(target,d)
                     break
-            orig=self._coll_originals.pop(str(p), None)
-            if orig is not None:
-                self._coll_originals[str(target)]=orig
-            self._changed_colls.discard(str(p))
+            self._coll_originals.pop(old_p, None)
+            self._coll_originals[str(target)]=content
+            self._changed_colls.discard(old_p)
+            try:
+                Path(p).unlink(missing_ok=True)
+            except Exception as e:
+                print("remove old blank collection fail", e)
+        else:
+            self._coll_originals[str(target)]=content
         for i in range(self.coll_combo.count()):
-            if self.coll_combo.itemData(i)==str(p) or self.coll_combo.itemData(i)==str(target):
+            if self.coll_combo.itemData(i)==old_p or self.coll_combo.itemData(i)==str(target):
                 self.coll_combo.setItemData(i, str(target))
                 self.coll_combo.setItemText(i, name)
                 self.coll_combo.setCurrentIndex(i)
@@ -4376,7 +4540,7 @@ class MainWindow(QMainWindow):
         p=Path(data)
         try:
             content=json.dumps(d, ensure_ascii=False, indent=2)
-            p.write_text(content, encoding="utf-8")
+            atomic_write_text(p, content)
         except Exception as e:
             self.detail.setText(f"改名保存失败 {e}")
             return
@@ -4412,7 +4576,7 @@ class MainWindow(QMainWindow):
         unsaved_new = str(p) not in self._coll_originals   # 本会话新建且未保存
         empty = not d.get("work_ids")
         if not (unsaved_new and empty):
-            ret=QMessageBox.question(self,"删除丛书", f"确定删除丛书「{d.get('name','')}」？\n（{p}）", QMessageBox.Yes | QMessageBox.No)
+            ret=QMessageBox.question(self,"删除丛书", f"确定删除丛书「{self._esc_ui(d.get('name',''))}」？\n（{self._esc_ui(p)}）", QMessageBox.Yes | QMessageBox.No)
             if ret!=QMessageBox.Yes:
                 return
         try:
@@ -5566,12 +5730,14 @@ class MainWindow(QMainWindow):
                 pairs.append((w, f))
         ok=self._download_missing(pairs, dest_dir, title="下载/更新")
         st=getattr(self, "_dl_stats", {}) or {}
-        # 记备齐水位：成功（含跳过未变）的 (work, fmt) 更新水位，避免批量重复下载
+        # 记备齐水位：成功（含跳过未变）的 (work, fmt) 更新水位，避免批量重复下载。
+        # 取消时后台线程只 break，未处理项不在 failed 里，不能当成“已备齐”写水位。
         from cbeta_publish.books import official_state as _ost
         _failed=list(st.get("failed") or [])
-        for _w, _f in pairs:
-            if not any(str(x).startswith(f"{_w}.{_f}") for x in _failed):
-                _ost.mark_checked(self.config, _w, _f)
+        if not st.get("cancel"):
+            for _w, _f in pairs:
+                if not any(str(x).startswith(f"{_w}.{_f}") for x in _failed):
+                    _ost.mark_checked(self.config, _w, _f)
         entries=[(w, f, official_ebook_source.local_path(w, f, dest_dir))
                  for w, f in pairs
                  if official_ebook_source.local_path(w, f, dest_dir).exists()]
@@ -5662,6 +5828,8 @@ class MainWindow(QMainWindow):
         """
         from cbeta_publish.books.download_worker import DownloadWorker, REPLACE_LAST
         from PySide6.QtCore import QEventLoop
+        # 每次进入先清空：无待下载项时也必须清，避免上次的失败/取消标记被下次读取
+        self._dl_stats={"ok": 0, "total": 0, "failed": [], "cancel": False}
         if not pairs:
             return True
         total=max(1, len(pairs))
@@ -5727,6 +5895,8 @@ class MainWindow(QMainWindow):
         """
         from cbeta_publish.books import official_ebook_source as _oes
         from cbeta_publish.books import official_state as _ost
+        # 先清空本次统计，避免无待下载项时读到上次的失败/取消标记
+        self._dl_stats={"ok": 0, "total": 0, "failed": [], "cancel": False}
         pairs=[]
         _unsupported=[]
         for fmt in fmts:
@@ -5748,14 +5918,52 @@ class MainWindow(QMainWindow):
             title = "下载官方书" if policy == "missing" else "更新官方书"
             self._download_missing(pairs, dest_dir, title=title,
                                    autoclose_ok=True, force=(policy == "all"))
-        failed = list((getattr(self, "_dl_stats", {}) or {}).get("failed") or [])
-        for w, fmt in pairs:
-            tag = f"{w}.{fmt}"
-            if not any(str(x).startswith(tag) for x in failed):
-                _ost.mark_checked(self.config, w, fmt)
+        _st = (getattr(self, "_dl_stats", {}) or {}) if pairs else {}
+        failed = list(_st.get("failed") or [])
+        _cancelled = bool(_st.get("cancel"))
+        if not _cancelled:
+            for w, fmt in pairs:
+                tag = f"{w}.{fmt}"
+                if not any(str(x).startswith(tag) for x in failed):
+                    _ost.mark_checked(self.config, w, fmt)
         src_map = {fmt: {w: _oes.local_path(w, fmt, dest_dir) for w in works}
                    for fmt in fmts}
         return src_map, failed
+
+    def _official_stale_pairs(self, works, fmts, dest_dir):
+        """下载尝试后仍过期的官方书 (work, fmt)；跳过官方无单卷的卷条目。"""
+        from cbeta_publish.books import official_ebook_source as _oes
+        from cbeta_publish.books import official_state as _ost
+        out=[]
+        for fmt in fmts:
+            for w in works:
+                if self._entry_juan(w) and not _oes.juan_supported(fmt):
+                    continue
+                if _ost.stale(self.config, w, fmt, dest_dir):
+                    out.append((w, fmt))
+        return out
+
+    def _confirm_use_old_official(self, pairs, dest_dir, action="继续"):
+        """仍有过期但本地有旧文件的官方书：问是否用旧版继续；默认「否」。"""
+        from cbeta_publish.books import official_ebook_source as _oes
+        old=[]
+        for w, fmt in pairs:
+            try:
+                if _oes.local_path(w, fmt, dest_dir).exists():
+                    old.append(f"{w}.{fmt}")
+            except Exception:
+                pass
+        if not old:
+            return True
+        box=QMessageBox(QMessageBox.Question, "更新未完成", "",
+                        QMessageBox.Yes | QMessageBox.No, self)
+        box.setTextFormat(Qt.PlainText)
+        box.setText(f"有 {len(old)} 项官方书未更新成功，将使用本地旧版{action}：\n"
+                    + "\n".join(old[:10])
+                    + ("\n……等共 " + str(len(old)) + " 项" if len(old) > 10 else "")
+                    + "\n\n是否继续？")
+        box.setDefaultButton(QMessageBox.No)
+        return box.exec()==QMessageBox.Yes
 
     def _commit_publish_meta(self, data, d):
         # 发布元数据：丛书已有未保存改动则并入脏状态（保存时一起落盘）；
@@ -5766,12 +5974,14 @@ class MainWindow(QMainWindow):
         else:
             try:
                 p=Path(data)
-                p.parent.mkdir(parents=True, exist_ok=True)
                 content=json.dumps(d, ensure_ascii=False, indent=2)
-                p.write_text(content, encoding="utf-8")
+                atomic_write_text(p, content)
                 self._coll_originals[str(data)]=content
             except Exception as e:
                 print(e)
+                # 写失败不能静默丢发布信息：保留脏标记，退出/下次保存时重试
+                self._mark_coll_changed(str(data))
+                self.detail.setText(f"发布信息写盘失败，已保留在内存：{e}")
 
     def _dirty_coll_names(self):
         # 脏丛书 [(path, name)]，按名称排序，用于弹窗列出
@@ -5801,11 +6011,14 @@ class MainWindow(QMainWindow):
                     path=str(pp)
                     break
         try:
-            Path(path).parent.mkdir(parents=True, exist_ok=True)
-            Path(path).write_text(json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
-            self._coll_originals[path]=json.dumps(d, ensure_ascii=False, indent=2)
+            content=json.dumps(d, ensure_ascii=False, indent=2)
+            atomic_write_text(path, content)
+            self._coll_originals[path]=content
         except Exception as e:
             print(e)
+            self.detail.setText(f"保存失败（改动已保留）：{e}")
+            QMessageBox.warning(self, "保存失败",
+                                f"丛书保存失败，改动已保留在内存：\n{e}")
             return False
         self._changed_colls.discard(path)
         if not self._changed_colls:
@@ -5863,10 +6076,10 @@ class MainWindow(QMainWindow):
             box.setWindowTitle("保存丛书")
             box.setIcon(QMessageBox.Question)
             if is_blank:
-                box.setText(f"{reason}「{name}」是临时名称（无意义），是否另存为正式名称？")
+                box.setText(f"{reason}「{self._esc_ui(name)}」是临时名称（无意义），是否另存为正式名称？")
                 box.setInformativeText("选「暂不保存」保留在内存，退出时可再处理；其它未保存丛书不动。")
             else:
-                box.setText(f"{reason}「{name}」有未保存改动，是否立即保存？")
+                box.setText(f"{reason}「{self._esc_ui(name)}」有未保存改动，是否立即保存？")
                 box.setInformativeText("选「暂不保存」则改动保留在内存（不还原），退出时可再保存；其它未保存丛书不动。")
             box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
             box.setButtonText(QMessageBox.Yes, "立即保存")
@@ -5879,7 +6092,7 @@ class MainWindow(QMainWindow):
             return
         if not self._coll_changed:
             return
-        names="\n".join(f"・{n}" for _,n in self._dirty_coll_names())
+        names="\n".join(f"・{self._esc_ui(n)}" for _,n in self._dirty_coll_names())
         ret=QMessageBox.question(self, "保存丛书", f"{reason}以下丛书有未保存改动，是否保存？\n{names}", QMessageBox.Yes | QMessageBox.No)
         if ret==QMessageBox.Yes:
             self._save_collections()
@@ -5910,14 +6123,43 @@ class MainWindow(QMainWindow):
         self.detail.setText("已还原丛书改动")
 
     def closeEvent(self, event):
+        # 目录更新线程：先停止并等待。等待超时就不关闭，避免销毁仍在运行的 QThread。
+        _uw=getattr(self, "_upd_worker", None)
+        if _uw is not None:
+            try:
+                if _uw.isRunning():
+                    # 先断开结果信号，避免退出过程中再弹「检测到更新/更新完成」
+                    for _sig in ("checked", "updated"):
+                        try:
+                            getattr(_uw, _sig).disconnect()
+                        except Exception:
+                            pass
+                    _uw.stop()
+                    if not _uw.wait(20000):
+                        QMessageBox.warning(self, "目录更新",
+                            "目录更新仍在结束中，请稍候再关闭窗口。")
+                        event.ignore()
+                        return
+            except Exception:
+                pass
+            self._upd_worker=None
         if self._coll_changed:
-            names="\n".join(f"・{n}" for _,n in self._dirty_coll_names())
+            names="\n".join(f"・{self._esc_ui(n)}" for _,n in self._dirty_coll_names())
             ret=QMessageBox.question(self, "退出", f"以下丛书有未保存改动，是否保存？\n{names}", QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel)
             if ret==QMessageBox.Cancel:
                 event.ignore()
                 return
             elif ret==QMessageBox.Yes:
-                self._save_collections()
+                if not self._save_collections():
+                    box=QMessageBox(QMessageBox.Warning, "保存失败", "",
+                                    QMessageBox.Yes | QMessageBox.No, self)
+                    box.setTextFormat(Qt.PlainText)
+                    box.setText("有丛书未能保存（写入失败或已取消改名）。\n"
+                                "仍要退出吗？未保存的改动将丢失。")
+                    box.setDefaultButton(QMessageBox.No)
+                    if box.exec()!=QMessageBox.Yes:
+                        event.ignore()
+                        return
             else:
                 self._revert_collections()
         # 退出精确清理本进程临时文件（正常流程 wrapper 已删，此处兜底在途与临时预设）
@@ -6585,7 +6827,7 @@ class MainWindow(QMainWindow):
         if imp["skip"]:
             parts += [f"跳过 {len(imp['skip'])} 部（不在丛书中）"]
         parts.append("已入库目录：" + _dirlink(base))
-        self.detail.setText("<br>".join(parts))
+        self.detail.setHtml("<br>".join(parts))
         self.tab_bottom.setCurrentIndex(self._tab_book)
         try:
             self.detail_scroll.verticalScrollBar().setValue(0)
@@ -6889,7 +7131,7 @@ class MainWindow(QMainWindow):
         外部目录不删。放行后刷新「书籍信息」结果页。
         """
         review = [t for t in imp.get("review", [])
-                  if (t[0], t[1]) not in self._manual_approved]
+                  if not self._is_manual_approved(t)]
         if not review:
             return
         works = sorted({t[0] for t in review})
@@ -6913,14 +7155,48 @@ class MainWindow(QMainWindow):
         if passed:
             by_work = {}
             for work, fmt, dst in passed:
-                self._manual_approved.add((work, fmt))
+                try:
+                    _st=Path(dst).stat()
+                    self._manual_approved[(work, fmt)]=(_st.st_size, _st.st_mtime_ns)
+                except Exception:
+                    # 取不到指纹也记下（测试/外部目录），但过滤时不沿用，仍会重新询问
+                    self._manual_approved[(work, fmt)]=None
                 by_work.setdefault(work, []).append((fmt, dst))
             for work, files in by_work.items():
                 imp.setdefault("ok_files", {}).setdefault(work, []).extend(files)
                 imp["ok"].append(f"{work}（{'/'.join(f for f, _ in files)}）")
                 imp.setdefault("manual", set()).add(work)
+            # 汇总去重：同一作品已无剩余待检格式时，去掉对应的「校验未通过/未判定」行；
+            # 缺文件、读取失败等非人工检验失败项保留，避免掩盖真正的问题。
+            _done_works=set(by_work)
+            _done={(w, f) for w, f, _dst in passed}
+            _still={ (t[0], t[1]) for t in imp.get("review", [])
+                     if (t[0], t[1]) not in _done }
+            _still_works={w for w, _f in _still}
+            def _keep_fail(x):
+                w=str(x).split(" ", 1)[0]
+                if w in _done_works and w not in _still_works:
+                    return ("缺文件" in x) or ("读取失败" in x)
+                return True
+            imp["fail"]=[x for x in imp.get("fail", []) if _keep_fail(x)]
+            imp["undet"]=[x for x in imp.get("undet", []) if _keep_fail(x)]
             self._load_coll_works()
         self._show_verify_results(imp, vdir, base)
+
+    def _is_manual_approved(self, t):
+        """同一（作品，格式）且文件大小/修改时间未变，才沿用上次人工放行。
+        取不到指纹（测试/外部路径）时按已放行处理，避免重复弹窗。"""
+        key=(t[0], t[1])
+        if key not in self._manual_approved:
+            return False
+        fp=self._manual_approved.get(key)
+        if fp is None:
+            return True
+        try:
+            st=Path(t[2]).stat()
+            return (st.st_size, st.st_mtime_ns)==fp
+        except Exception:
+            return False
 
     def _import_verified(self):
         """手动导入：选择校验目录 → 报告判通过 → 产物移入自制书目录。
@@ -7012,11 +7288,30 @@ class MainWindow(QMainWindow):
         _coll=None
         if isinstance(_data, str) and not self._is_coll_placeholder(_data):
             _coll=self._coll_dict(_data)
-        dlg=SettingsDialog(self.config, self, collection=_coll, collection_path=_data)
+        # 本次运行有效的目录（旧值）；配置文件里可能有上次保存、待重启生效的新目录
+        _old_mulu=self.config.get("mulu_dir","")
+        _old_coll=self.config.get("collections_dir","")
+        _dlg_cfg=dict(self.config)
+        try:
+            _disk=json.loads(Path(self._config_path).read_text(encoding="utf-8-sig"))
+            for _k in ("mulu_dir", "collections_dir"):
+                if _disk.get(_k):
+                    _dlg_cfg[_k]=_disk[_k]
+        except Exception:
+            pass
+        dlg=SettingsDialog(
+            _dlg_cfg, self, collection=_coll, collection_path=_data,
+            catalog_busy=lambda: bool(getattr(self, "_upd_worker", None)
+                                      and self._upd_worker.isRunning()))
         dlg.exec()
         new_cfg=dlg.result_config()
         if new_cfg is not None:
             saved=bool(getattr(dlg, "_did_save", False))
+            # 目录键不在本次会话切换：固定旧值，避免一边写新目录、一边读旧内存
+            _dirs_changed=(self._norm_dir(new_cfg.get("mulu_dir",""))!=self._norm_dir(_old_mulu)
+                           or self._norm_dir(new_cfg.get("collections_dir",""))!=self._norm_dir(_old_coll))
+            new_cfg["mulu_dir"]=_old_mulu
+            new_cfg["collections_dir"]=_old_coll
             self.config=new_cfg
             self._wvol_cache=None
             apply_ui_fonts(new_cfg.get("ui", {}))
@@ -7037,9 +7332,26 @@ class MainWindow(QMainWindow):
                         self._save_one_collection(str(_data))
                     self._load_coll_works()
             if saved:
-                self.detail.setText("设置已保存（界面字体即时生效；封面字体下次合并生效）")
+                _msg="设置已保存（界面字体即时生效；封面字体下次合并生效）"
             else:
-                self.detail.setText("设置已应用（未写盘，仅本次运行生效）")
+                _msg="设置已应用（未写盘，仅本次运行生效）"
+            if _dirs_changed:
+                _msg += "；目录变更需重启后生效，本次仍用原目录"
+            self.detail.setText(_msg)
+
+    @staticmethod
+    def _norm_dir(value):
+        """目录比较用：相对路径按 app_root 解析、大小写归一。"""
+        raw=str(value or "").strip()
+        if not raw:
+            return ""
+        try:
+            p=Path(raw)
+            if not p.is_absolute():
+                p=Path(app_root())/p
+            return os.path.normcase(str(p.resolve()))
+        except Exception:
+            return os.path.normcase(raw)
 
     def _refresh_dir_labels(self):
         """设置变更后刷新「E书目录」页签的链接提示/完整路径（getter 动态取）。"""
@@ -7214,10 +7526,17 @@ class MainWindow(QMainWindow):
         return self._catalog_bulei_cache
 
     def _safe_name(self, label, fallback="未分册"):
-        import re as _re
-        s=_re.sub(r'[\\/:*?"<>|\r\n\t]+', "_", (label or "").strip())
-        s=_re.sub(r"\s+", " ", s).strip(" ._")
-        return s or fallback
+        return safe_name(label, fallback)
+
+    @staticmethod
+    def _merge_dir_name(d, path):
+        """合并/ZIP/清除共用的输出目录名：清洗后的书名；清洗为空时用文件 stem 兜底
+        （防两个清洗后为空的丛书名撞到同一个输出目录）。"""
+        name = (d or {}).get("name") or ""
+        safe = safe_name(name, "")
+        if safe:
+            return safe
+        return f"未分册_{safe_name(Path(path).stem, 'coll')}"
 
     def _pack_display_stem(self, work):
         """打包显示名（不含扩展名）：与合并书名书签同款（条目 `work:卷` 含卷），
@@ -7847,7 +8166,7 @@ class MainWindow(QMainWindow):
             update = lambda *a, **k: True
         success=[]; skipped=[]; failed=[]
         cover_cfg=self._cover_config()
-        out_dir=self._out_dir()/d["name"]
+        out_dir=self._out_dir()/self._merge_dir_name(d, data)
         _made_counts={}
         for w in works:
             if run_source == "xml":
@@ -8058,6 +8377,11 @@ class MainWindow(QMainWindow):
                 return
             if ret==QMessageBox.Yes:
                 self._prepare_official(works, fmts, dest_dir, policy="stale")
+                if not self._confirm_use_old_official(
+                        self._official_stale_pairs(works, fmts, dest_dir),
+                        dest_dir, "合成"):
+                    self.detail.setText("已取消合成（官方书更新未完成）")
+                    return
                 need=[f"{w}.{fmt}" for fmt in fmts for w in works
                       if _ost.stale(self.config, w, fmt, dest_dir)]
         skip_missing = (ret == QMessageBox.No) if need else False
@@ -8285,6 +8609,14 @@ class MainWindow(QMainWindow):
         if run_source == "official":
             _sm, failed = self._prepare_official(all_works, fmts, dest_dir,
                                                  policy=official_policy)
+            # 取消时未处理项不在 failed 里；按仍过期的项补齐，报告才如实。
+            # 未取消时 failed 已含本次失败项，不再按 stale 扩大，避免误伤。
+            if official_policy in ("stale", "all") and \
+                    (getattr(self, "_dl_stats", {}) or {}).get("cancel"):
+                for _w, _f in self._official_stale_pairs(all_works, fmts, dest_dir):
+                    _tag=f"{_w}.{_f}"
+                    if not any(str(x).startswith(_tag) for x in failed):
+                        failed.append(_tag)
         else:
             _ok, failed, cancelled, _short = self._ensure_xml_batch(
                 all_works, fmts, title="生成（批量更新）",
@@ -8363,7 +8695,7 @@ class MainWindow(QMainWindow):
                 if not _name:
                     purge_marks[str(_p)] = "空白名，跳过清除"
                     continue
-                targets.append((_p, _name, out_root / _name))
+                targets.append((_p, _name, out_root / self._merge_dir_name(_d, _p)))
             if targets:
                 _show = "\n".join(str(t[2]) for t in targets[:10])
                 if len(targets) > 10:
@@ -8377,9 +8709,14 @@ class MainWindow(QMainWindow):
                     self.detail.setText("已取消批量合并（清除前）")
                     return
             import shutil
+            _root = out_root.resolve()
             for _p, _name, _dir in targets:
                 try:
                     if _dir.exists():
+                        # 越界保护：清洗后仍须落在输出根内（防符号链接/异常名）
+                        if not _dir.resolve().is_relative_to(_root):
+                            purge_marks[str(_p)] = f"拒绝清除（越界）：{_dir}"
+                            continue
                         shutil.rmtree(_dir)
                         purge_marks[str(_p)] = f"已清除 { _dir.name}/"
                     else:
@@ -8406,6 +8743,13 @@ class MainWindow(QMainWindow):
             if run_source == "official":
                 _sm, prep_failed = self._prepare_official(
                     all_works, prepare_fmts, dest_dir, policy=opts["official_policy"])
+                if opts["official_policy"] in ("stale", "all") and \
+                        not self._confirm_use_old_official(
+                            self._official_stale_pairs(
+                                all_works, prepare_fmts, dest_dir),
+                            dest_dir, "批量合并"):
+                    self.detail.setText("已取消批量合并（官方书更新未完成）")
+                    return
             else:
                 _ok, prep_failed, cancelled, prep_short = self._ensure_xml_batch(
                     all_works, prepare_fmts, title="生成（批量备齐）",
@@ -8871,6 +9215,10 @@ class MainWindow(QMainWindow):
                     return
                 if ret==QMessageBox.Yes:
                     self._prepare_official(works, fmts, dest_dir, policy="stale")
+                    if not self._confirm_use_old_official(
+                            self._official_stale_pairs(works, fmts, dest_dir),
+                            dest_dir, "打包"):
+                        return
                     still=[f"{w}.{fmt}" for fmt in fmts for w in works
                            if not official_ebook_source.local_path(w, fmt, dest_dir).exists()]
                     if still:
@@ -8944,6 +9292,12 @@ class MainWindow(QMainWindow):
         return box.exec()
 
     @staticmethod
+    def _esc_ui(value):
+        """直接进 QMessageBox 富文本的裸文本（用户名/分类名/标签名）先转义。"""
+        import html as _html
+        return _html.escape(str(value if value is not None else ""))
+
+    @staticmethod
     def _soft_break(text):
         # 在 `\` `/` 后插零宽空格：无空格长路径也能折行
         import re as _re
@@ -9002,6 +9356,10 @@ class MainWindow(QMainWindow):
                     return
                 if ret==QMessageBox.Yes:
                     self._prepare_official(works, fmts, dest_dir, policy="stale")
+                    if not self._confirm_use_old_official(
+                            self._official_stale_pairs(works, fmts, dest_dir),
+                            dest_dir, "导出"):
+                        return
                     still=[f"{w}.{fmt}" for fmt in fmts for w in works
                            if not official_ebook_source.local_path(w, fmt, dest_dir).exists()]
                     if still:

@@ -32,6 +32,7 @@ class SanitizeDistTest(unittest.TestCase):
 
     def _write(self, rel, obj):
         p = self.dir / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(json.dumps(obj, ensure_ascii=False), encoding="utf-8")
         return p
 
@@ -49,11 +50,15 @@ class SanitizeDistTest(unittest.TestCase):
     def test_removes_backup_config_snapshots_only(self):
         self._write("mulu/backup/last/app.json", {"mulu_dir": "E:\\dev\\x"})
         self._write("mulu/backup/original/app.json", {"mulu_dir": "E:/dev/x"})
+        self._write("mulu/backup/config/last/app.json", {"mulu_dir": "E:\\dev\\x"})
+        self._write("mulu/backup/config/original/app.json", {"mulu_dir": "E:/dev/x"})
         kept = self._write("mulu/backup/last/bulei.txt", {"a": 1})
         got = self.mod.remove_backup_config(self.dir)
-        self.assertEqual(len(got), 2)
+        self.assertEqual(len(got), 4)
         self.assertFalse((self.dir / "mulu/backup/last/app.json").exists())
         self.assertFalse((self.dir / "mulu/backup/original/app.json").exists())
+        self.assertFalse((self.dir / "mulu/backup/config/last/app.json").exists())
+        self.assertFalse((self.dir / "mulu/backup/config/original/app.json").exists())
         self.assertTrue(kept.exists())                             # 其它快照保留
 
     def test_clears_absolute_paths_in_preset(self):

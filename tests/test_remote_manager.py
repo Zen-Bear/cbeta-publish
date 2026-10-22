@@ -54,7 +54,7 @@ class RemoteManagerTest(unittest.TestCase):
 
     def _m(self, local=None):
         m = RemoteManager(self.meta)
-        m._local_for = staticmethod(lambda url: local)
+        m._local_for = staticmethod(lambda url, root=None: local)
         return m
 
     @staticmethod
@@ -127,6 +127,14 @@ class RemoteManagerTest(unittest.TestCase):
         key, cat, url, rel = SOURCES[0]
         self.assertEqual(RemoteManager._local_for(url), local_path(rel))
         self.assertIsNone(RemoteManager._local_for("https://example.com/none.json"))
+
+    def test_local_for_custom_root(self):
+        # 自定义 mulu_dir 时，更新落盘目标跟随该根（不再写死 app_root/mulu）
+        from cbeta_publish.books.remote_sources import SOURCES
+        _key, _cat, url, rel = SOURCES[0]
+        root = self.dir / "custom_mulu"
+        self.assertEqual(RemoteManager._local_for(url, root),
+                         root / Path(rel).relative_to("mulu"))
 
 
 class RemoteSourcesTest(unittest.TestCase):

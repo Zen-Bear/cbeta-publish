@@ -335,14 +335,14 @@ def split_epub_juan(whole_epub, n, dest):
         return None
     try:
         opf_path = "OEBPS/content.opf"
+        _raw_opf = None
         try:
             cont = zin.read("META-INF/container.xml").decode("utf-8")
             m = _re.search(r'full-path="([^"]+\.opf)"', cont)
             if m:
-                opf_path = m.group(1)
+                _raw_opf = m.group(1)
         except Exception:
             pass
-        opf_dir = opf_path.rsplit("/", 1)[0] if "/" in opf_path else ""
 
         def _join(base, href):
             parts = []
@@ -356,6 +356,13 @@ def split_epub_juan(whole_epub, n, dest):
                     continue
                 parts.append(seg)
             return "/".join(parts)
+
+        # full-path 可能是反斜杠/含 ./.. 的写法；统一成 zip 内正斜杠相对路径
+        if _raw_opf:
+            _norm = _join("", _raw_opf.replace("\\", "/"))
+            if _norm:
+                opf_path = _norm
+        opf_dir = opf_path.rsplit("/", 1)[0] if "/" in opf_path else ""
 
         _NS = {"opf": "http://www.idpf.org/2007/opf"}
         try:
@@ -606,19 +613,7 @@ class RemoteNotFound(Exception):
 def _head_absent_404(url, timeout=_HEAD_PROBE_TIMEOUT) -> bool:
     """远端是否确定不存在：HEAD 返回 404/410 为 True；2xx 为 False；
     超时/405/其它异常一律 False（不定，照常下载，不断生路）。"""
-    import urllib.request
-    import urllib.error
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": cf.USER_AGENT},
-                                     method="HEAD")
-        with urllib.request.urlopen(req, timeout=timeout,
-                                    context=cf._ctx()) as r:
-            return False
-    except urllib.error.HTTPError as e:
-        return e.code in _GONE_STATUS
-    except Exception:
-        return False
-    return False
+    return cf.probe_status(url, timeout=timeout) in _GONE_STATUS
 
 
 # ---------- 官方电子书本地库（只读；本地优先、缺失回退下载） ----------

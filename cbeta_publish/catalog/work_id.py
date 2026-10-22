@@ -25,8 +25,51 @@ def catalog_path() -> Path:
     return ROOT / "mulu" / "sutra_mapping.txt"
 
 
+#: `{ (canon 大写, no 小写) → catalog 里首个匹配的原始 no }` 惰性索引。
+#: 键 = (路径, mtime_ns, size)：文件被「更新源」替换后自动重建。
+_INDEX = None
+
+
+def _catalog_index(path: Path):
+    """读一遍 catalog 建索引（约 2000 行）；文件缺失返回 None。
+
+    与 `cbeta_fetch.catalog_lookup` 同语义：同一键**取首个匹配行**的原始大小写。
+    """
+    global _INDEX
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    key = (str(path), st.st_mtime_ns, st.st_size)
+    if _INDEX is not None and _INDEX[0] == key:
+        return _INDEX[1]
+    index = {}
+    try:
+        with path.open(encoding="utf-8") as f:
+            for line in f:
+                parts = line.strip().split(",")
+                if len(parts) >= 3:
+                    index.setdefault((parts[0].upper(), parts[2].lower()),
+                                     parts[2])
+    except OSError:
+        return None
+    _INDEX = (key, index)
+    return index
+
+
 def canonical_work(work) -> str:
-    return cf.canonical_work_id((work or "").strip(), str(catalog_path()))
+    s = (work or "").strip()
+    if not s:
+        return s
+    try:
+        canon, no = cf.parse_work_id(s)
+    except ValueError:
+        return s
+    index = _catalog_index(catalog_path())
+    if not index:
+        return s
+    stored = index.get((canon.upper(), no.lower()))
+    return f"{canon}{stored}" if stored else s
 
 
 def split_entry(s):

@@ -5,6 +5,7 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from cbeta_publish.catalog.work_id import canonical_work, is_work_id
 from cbeta_publish.collection.collection_model import (Collection, normalize_collection,
@@ -81,6 +82,38 @@ class IndexTest(unittest.TestCase):
             self.assertEqual(rows[0]["category"], "custom")
         finally:
             shutil.rmtree(d1, ignore_errors=True)
+
+
+class CatalogIndexCacheTest(unittest.TestCase):
+    """编号索引：首个匹配者胜、文件变化（大小/时间）后自动重建。"""
+
+    def setUp(self):
+        from cbeta_publish.catalog import work_id
+        self._wid = work_id
+        self.dir = Path(tempfile.mkdtemp(prefix="catidx-"))
+        self.cat = self.dir / "sutra_mapping.txt"
+        self.cat.write_text("T,01,0001,1,1,1,阿含經,x\nTX,00,a001,1,1,1,太虛,x\n",
+                            encoding="utf-8")
+        self._patch = mock.patch.object(work_id, "catalog_path", lambda: self.cat)
+        self._patch.start()
+
+    def tearDown(self):
+        self._patch.stop()
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def test_case_from_catalog(self):
+        self.assertEqual(canonical_work("t0001"), "T0001")
+        self.assertEqual(canonical_work("TXA001"), "TXa001")
+        self.assertEqual(canonical_work("ZZ9999"), "ZZ9999")   # 未命中原样
+
+    def test_first_occurrence_wins(self):
+        self.cat.write_text("T,01,Ab12,x\nT,01,AB12,x\n", encoding="utf-8")
+        self.assertEqual(canonical_work("TAB12"), "TAb12")
+
+    def test_rebuild_after_file_change(self):
+        self.assertEqual(canonical_work("T0001"), "T0001")
+        self.cat.write_text("T,01,0001,1\nT,01,0002,1\n", encoding="utf-8")
+        self.assertEqual(canonical_work("T0002"), "T0002")
 
 
 if __name__ == "__main__":

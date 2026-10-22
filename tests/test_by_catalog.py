@@ -558,7 +558,9 @@ class BlankSaveDupTest(unittest.TestCase):
                                    {"id": "b2", "name": "空白2", "category": "custom",
                                     "tags": [], "work_ids": []})
         blank_d = win._coll_dict(blank_path)
-        self._stub("y", "custom")   # 与 "Y" 仅大小写不同，精确查重放过
+        # 大小写同名现在会被 _name_taken 拦下；这里用尾部空格（文件名清洗后同样是 y）
+        # 验证路径归一化避让仍然生效。
+        self._stub("y ", "custom")
         try:
             ret = win._finalize_blank_save(blank_path, blank_d)
         finally:

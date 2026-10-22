@@ -12,8 +12,9 @@ python packaging\\sanitize_dist.py <dist_app_dir>
 1. ``config/app.default.json`` 的 ``official_library.root`` 置空——``build_exe.ps1`` 只改写
    「目录类」键，这个键会残留打包机的本地官方库路径（如 ``E:\\CBETA\\2026r2``），
    新用户首启就会带上一台不存在的本地库。
-2. 删 ``mulu/backup/{last,original}/app.json``——那是打包机自己的 ``config/app.json``
-   快照；随包发出会让新用户点「恢复原始」恢复成打包机的配置（含打包机路径）。
+2. 删 ``mulu/backup/config/{last,original}/app.json``（及旧版 ``mulu/backup/{last,original}/app.json``）
+   ——那是打包机自己的 ``config/app.json`` 快照；随包发出会让新用户点「恢复原始」
+   恢复成打包机的配置（含打包机路径）。
    目录内其它 mulu 数据快照保留（「恢复」「目录变更对比」仍可用；用户首启后
    自己保存配置时会生成自己的 ``app.json`` 快照）。
 3. 清空包内预设 ``xml2pdf/presets/*.json`` 里**指向本机的绝对路径**
@@ -62,13 +63,14 @@ def sanitize_config_default(dist):
 
 
 def remove_backup_config(dist):
-    """删包内 ``mulu/backup/{last,original}/app.json``；返回被删的 Path 列表。"""
+    """删包内配置快照（新版 backup/config/ 与旧版 backup/{last,original}/）；返回被删的 Path 列表。"""
     removed = []
     for sub in ("last", "original"):
-        p = Path(dist) / "mulu" / "backup" / sub / "app.json"
-        if p.is_file():
-            p.unlink()
-            removed.append(p)
+        for base in (Path("config") / sub, Path(sub)):
+            p = Path(dist) / "mulu" / "backup" / base / "app.json"
+            if p.is_file():
+                p.unlink()
+                removed.append(p)
     return removed
 
 

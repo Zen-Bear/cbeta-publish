@@ -8,8 +8,10 @@
 包内只读资源（`cbeta_publish/gui/theme/...`）仍用 `Path(__file__).parent` 定位，
 PyInstaller 会随包收集，`__file__` 指向包内，不受本函数影响。
 """
+import json
 import shutil
 import sys
+from datetime import datetime
 from pathlib import Path
 
 
@@ -45,3 +47,58 @@ def ensure_user_config(cfg_path=None, default_path=None) -> Path:
         cfg.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(str(dflt), str(cfg))
     return cfg
+
+
+#: 打包版出厂模板里会被改写成相对路径、且**按原样消费**的键
+_PATH_KEYS = ("mulu_dir", "collections_dir", "official_ebooks_dir",
+              "cbeta_ebooks_dir")
+
+
+def _under_root(value: str) -> str:
+    p = Path(value)
+    return str(p if p.is_absolute() else app_root() / p)
+
+
+def normalize_config_paths(cfg):
+    """把相对路径按 `app_root()` 归一（**幂等**，只改内存 dict，不写磁盘）。
+
+    打包版 `config/app.default.json` 是便携相对路径（mulu、collections…），
+    而程序不改变工作目录；不归一时，从快捷方式/终端以别的 cwd 启动会读错目录。
+    只处理真正按原样消费的键：其余键（output_dir/verify_dir/xml_to_ebooks_dir/
+    xml2pdf.cbeta_ebook）已由 `_out_dir`/`_abs` 自行按工程根解析。
+    """
+    if not isinstance(cfg, dict):
+        return cfg
+    for key in _PATH_KEYS:
+        val = cfg.get(key)
+        if isinstance(val, str) and val.strip():
+            cfg[key] = _under_root(val.strip())
+    x2p = cfg.get("xml2pdf")
+    if isinstance(x2p, dict):
+        val = x2p.get("path")
+        if isinstance(val, str) and val.strip():
+            x2p["path"] = _under_root(val.strip())
+    return cfg
+
+
+def read_user_config(cfg_path=None, default_path=None):
+    """读取用户配置；JSON 损坏时备份并恢复出厂模板。
+
+    返回 `(cfg, backup_path 或 None)`。损坏文件改名为
+    `app.json.bak-<年月日-时分秒>`，不静默丢弃用户设置。
+    """
+    p = Path(cfg_path) if cfg_path else config_dir() / "app.json"
+    ensure_user_config(p, default_path)
+    try:
+        return json.loads(p.read_text(encoding="utf-8-sig")), None
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        bak = p.with_name(f"{p.name}.bak-{datetime.now():%Y%m%d-%H%M%S}")
+        try:
+            p.replace(bak)
+        except OSError:
+            bak = None
+        ensure_user_config(p, default_path)
+        try:
+            return json.loads(p.read_text(encoding="utf-8-sig")), bak
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+            return {}, bak
