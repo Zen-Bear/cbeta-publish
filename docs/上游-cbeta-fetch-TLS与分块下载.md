@@ -1,6 +1,6 @@
 # 上游改造提案：TLS 默认校验与分块流式下载
 
-> 提交对象：`cbeta-org/cbeta-fetch`
+> 提交对象：`Zen-Bear/cbeta-fetch`（原计划 `cbeta-org/cbeta-fetch`）
 > 基线版本：`0.1.2`，commit `634b14bb31f1d721aa9bf6521c373b9effc4bc31`，`sha256=c6c779289aba9dc49d6fed581ea2eade2be9fcf5396807f0066ce37a2c71fcaf`
 > 提出方：CBETA publish 管理器（下游 vendor 使用方）
 > 状态：已实施（cbeta-fetch 0.2.1 / commit `d28fc5d`；已同步 xml2pdf 与 publish）
@@ -325,14 +325,14 @@ tmp = f"{dest}.part{os.getpid()}.{uuid.uuid4().hex[:8]}"
 - 实测：cbdata `probe_status` 200（默认上下文仅因 Missing SKI 失败，清 strict 位后成功）；GitHub 严格 200。
 - 同步：publish `cbeta_publish/_vendor` 与 xml2pdf `pycbeta/_vendor` 均为 `version=0.2.0`、`commit=817d207`、`sha256=353a6004984815e5afe2923fc59432ef9f7a7d8b043ad8d10bb294976fd5a2c7`。
 - 下游：publish `official_ebook_source._head_absent_404` 改用 `cf.probe_status`，保留 404/410 快判。
-- 未做：可选下载进度回调。上游 commit 未推送。（解压原子性/同名策略 0.2.1 已补，见 §14）
+- 未做：可选下载进度回调。上游 commit 已推送 `Zen-Bear/cbeta-fetch`。（解压原子性/同名策略 0.2.1 已补，见 §14）
 
 ## 14. 追加实施：解压原子性与同名策略（2026-10-22，0.2.1）
 
-- 上游 `cbeta-fetch` 本地 commit `d28fc5d`，版本 `0.2.1`；`API.md`、`CHANGELOG.md`、`pyproject.toml` 已更新。
+- 上游 `cbeta-fetch`：实现 commit `d28fc5d`（v0.2.1）；随后 `66d5688` 把 `tools/sync_into.py` 的 `REPO` 改为 `https://github.com/Zen-Bear/cbeta-fetch`，两处 `SOURCE.txt` 已按 `66d5688` 同步。
 - `unzip_flat`：先解到同卷临时目录（名带 pid + 随机后缀），全部成功后逐个 `os.replace` 进目标目录；坏包/中途失败不改动已有文件，临时目录清理。
 - 同名策略定案：同名 basename（Windows 下不分大小写）与 `.`/`..` 条目整单失败（`zipfile.BadZipFile`），不再后者覆盖。
 - 目标目录中已有、zip 未包含的文件保留（xml2pdf 多作品共享同一格式目录依赖此点）。
 - 测试：上游 28 项；publish 861 项；xml2pdf `test_fetch` 51 + `test_update_data` 20 + vendor sync 3 项通过。
-- 同步：两处 vendor 均为 `version=0.2.1`、`commit=d28fc5d`、`sha256=e2e1e3259236176095fd1c4627134a80292921fc5727713c2b1bc870789c9c5e`。
+- 同步：两处 vendor 均为 `version=0.2.1`、`commit=66d5688`、`sha256=e2e1e3259236176095fd1c4627134a80292921fc5727713c2b1bc870789c9c5e`。
 - 实测：真实 cbdata docx zip（T0099，50 卷）解压与重下均成功；重下保留目录内其他文件，无 `.part`/`.unzip` 残留。

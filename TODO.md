@@ -670,7 +670,7 @@
   终审结论：P28 定稿，可实施。
 - 动手前的约束：
   - 共享层 `_vendor/cbeta_fetch.py` **不可本地手改**（`tests/test_vendor_sync.py` 校验 sha256）；
-    TLS 与流式下载须在 cbeta-fetch 上游改（`cbeta-org/cbeta-fetch`），再用其
+    TLS 与流式下载须在 cbeta-fetch 上游改（`Zen-Bear/cbeta-fetch`），再用其
     `tools/sync_into.py` 同步到 xml2pdf `pycbeta/_vendor` 与 publish
     `cbeta_publish/_vendor`，两处都更新 `SOURCE.txt`；不要只改 xml2pdf 或手改 vendor。
     （publish 仓里**没有** `tools/sync_into.py`——`test_vendor_sync.py:24` 报错文案引用了它，
@@ -759,7 +759,7 @@
   - [x] 新增 `probe_status(url) -> int|None`（HEAD 状态码，共用同一套 TLS 上下文），
     publish `_head_absent_404` 改用它，保留 404/410 快判。
   - [x] 解压原子性与同名策略：先解到同卷临时目录，成功后逐个 `os.replace`；同名 basename（Windows 下不分大小写）与 `.`/`..` 条目整单失败；目标目录既有文件保留。cbeta-fetch 0.2.1 / `d28fc5d`。
-  - 实施：cbeta-fetch `d28fc5d` / v0.2.1（本地 commit，未推送；该仓库未配置 remote）；已同步 xml2pdf `pycbeta/_vendor` 与
+  - 实施：cbeta-fetch `66d5688` / v0.2.1（实现 `d28fc5d`；已推送 `Zen-Bear/cbeta-fetch`）；已同步 xml2pdf `pycbeta/_vendor` 与
     publish `cbeta_publish/_vendor`（两边 `SOURCE.txt` 已更新）。上游 28 项、
     publish 861 项、xml2pdf `test_fetch` 51 项 + `test_update_data` 20 项 + vendor sync 3 项通过。
   - 方案与测试清单见 `docs/上游-cbeta-fetch-TLS与分块下载.md`。
