@@ -50,6 +50,7 @@
   （平铺/按刊本册/按部类/按作者/按朝代/手工分册，`_CollTree`；后四者为只读视图，可整体拷入手工分册）；
   单测 `tests/test_by_catalog.py`、`tests/test_manual_volumes.py`、`tests/test_by_author_dynasty.py`。
 - **发布 v0.9.5**（2026-10-22）：tag `v0.9.5` → `584d9f7`；交付 `cbeta-publish.zip`（157,310,255 字节，sha256 `0a5d6f21…4b928a3`）；Windows 便携包，未签名、未内置 Chromium。
+- **发布 v0.9.6**（2026-10-23）：tag `v0.9.6`；交付 `cbeta-publish.zip`（157,631,727 字节，sha256 `35af2890…7f6d2`）；Windows 便携包，未签名、未内置 Chromium；全量 861 项测试通过。
 
 ## 待办
 
