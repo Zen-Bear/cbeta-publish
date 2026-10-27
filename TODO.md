@@ -2,7 +2,7 @@
 
 > 设计文档：`docs/设计总案.md`（总方案）、`docs/UI设计.md`（UI）、
 > `docs/链路B-设计契约.md`（与 xml2pdf 的跨仓调用契约）。
-> 测试：`python -m unittest discover tests`（当前 861 项通过）。
+> 测试：`python -m unittest discover tests`（当前 863 项通过）。
 
 ## 约定（务必遵守）
 
@@ -51,6 +51,7 @@
   单测 `tests/test_by_catalog.py`、`tests/test_manual_volumes.py`、`tests/test_by_author_dynasty.py`。
 - **发布 v0.9.5**（2026-10-22）：tag `v0.9.5` → `584d9f7`；交付 `cbeta-publish.zip`（157,310,255 字节，sha256 `0a5d6f21…4b928a3`）；Windows 便携包，未签名、未内置 Chromium。
 - **发布 v0.9.6**（2026-10-23）：tag `v0.9.6`；交付 `cbeta-publish.zip`（157,631,727 字节，sha256 `35af2890…7f6d2`）；Windows 便携包，未签名、未内置 Chromium；全量 861 项测试通过。
+- **发布 v0.9.6.1**（2026-10-27）：tag `v0.9.6.1`；交付 `cbeta-publish.zip`（157,636,044 字节，sha256 `b065d863…9ae9`）；Windows 便携包，未签名、未内置 Chromium；工作目录默认 exe 旁并自动创建；全量 863 项测试通过。
 
 ## 待办
 

@@ -78,10 +78,11 @@ signtool verify /pa /v cbeta-publish.exe
   `cbeta_xml_ebooks/`、`cbeta_verify/`、`mulu/cache/`
 
 ### 未打入（可在目标机/构建机另行准备）
-- **Chromium**（playwright 的 PDF 引擎）：默认不打，目标机需 `python -m playwright install chromium`，
-  或用 `-WithBrowsers` 把 `%LOCALAPPDATA%\ms-playwright` 拷到 `exe\ms-playwright`；
-  程序冻结时会自动把该目录设为 `PLAYWRIGHT_BROWSERS_PATH`。
-- CBETA XML 目录：在「设置」里填（`config` 的 `xml2pdf.cbeta_ebook`）。
+- **Chromium**（Playwright）：可选。普通制书默认走 `docx2pdf`，使用本机 MS Word、WPS、LibreOffice（或 DocBuilder/minipdf）转 PDF，不需要 Chromium。
+  只有 HTML 管线（`html2pdf`，例如竖排或显式指定 HTML 引擎）才需要；可用 `-WithBrowsers` 一并打包。
+- CBETA XML 目录：默认使用 exe 同级的 `cbeta_xml/`（构建时创建，首启也会自动创建）。
+  制书时由 pycbeta 按所选书目自动下载并缓存 XML，不需要预先准备整套 XML 库；
+  离线或官方源不可用时，才需手工放入 XML 或指向已有目录。
 - `demo/`：仅仓库展示用的示例产物，**不打包进 exe**。（打包会含 `collections/` 演示丛书。）
 
 ## 关键机制

@@ -8,6 +8,7 @@
     - _internal\               依赖/包内资源（含 pycbeta、主题图标）
     - config\ mulu\ assets\    可写数据（放 exe 同级，便携：拷走整个目录即用）
     - xml2pdf\                 预设与 run.json（供制书；pycbeta 已打进 _internal）
+    - cbeta_xml\               CBETA XML 下载/缓存目录（默认位置，首启自动创建）
     - collections\ collections_books\ cbeta_ebooks\ cbeta_xml_ebooks\ cbeta_verify\  运行期自建
 
 .PARAMETER X2P
@@ -18,8 +19,8 @@
   构建用 Python 解释器。默认 python。
 
 .PARAMETER WithBrowsers
-  一并拷贝 playwright 的 Chromium（%LOCALAPPDATA%\ms-playwright -> exe\ms-playwright），
-  使 PDF 引擎在无网/无 playwright 安装的机器上也能跑（体积 +数百 MB）。
+  一并拷贝 playwright 的 Chromium（%LOCALAPPDATA%\ms-playwright -> exe\ms-playwright）。
+  仅 HTML 管线（html2pdf，如竖排）需要；普通 docx2pdf 使用本机 Office，不需要 Chromium。
 
 .PARAMETER SkipBuild
   跳过 PyInstaller，只重做数据拷贝/配置改写（调试用）。
@@ -159,7 +160,7 @@ foreach ($f in @("categories.json", "tags.json",
         Warn "演示丛书缺失（跳过）: collections/$f"
     }
 }
-foreach ($d in @("collections_books", "cbeta_ebooks",
+foreach ($d in @("collections_books", "cbeta_ebooks", "cbeta_xml",
                  "cbeta_xml_ebooks", "cbeta_verify", "mulu\cache")) {
     New-Item -ItemType Directory -Force -Path (Join-Path $Dist $d) | Out-Null
 }
@@ -183,7 +184,7 @@ Set-Prop $cfg "xml_to_ebooks_dir"    "cbeta_xml_ebooks"
 
 if ($null -ne $cfg.xml2pdf) {
     Set-Prop $cfg.xml2pdf "path" "xml2pdf"
-    Set-Prop $cfg.xml2pdf "cbeta_ebook" ""   # 用户自行指向 CBETA XML 目录
+    Set-Prop $cfg.xml2pdf "cbeta_ebook" "cbeta_xml"   # exe 同级；首启也会自动创建
 }
 if ($null -ne $cfg.ui) {
     Set-Prop $cfg.ui "supplement_ttf" ""
@@ -224,7 +225,7 @@ if ($WithBrowsers) {
         Warn "未找到 $src；先在构建机执行：python -m playwright install chromium"
     }
 } else {
-    Info "未打包 Chromium（按需，目标机制书时自行安装：python -m playwright install chromium）"
+    Info "未打包 Chromium（普通 docx2pdf 制书不需要；仅 html2pdf/竖排需要）"
 }
 
 # ---------- 8. 代码签名（可选；须在压缩前对 exe 签名）----------
@@ -278,4 +279,4 @@ Write-Host "本地使用：" -ForegroundColor Green
 Write-Host "  1) 整个 dist\$appId 目录拷到目标机任意位置"
 Write-Host "  2) 双击 $appId.exe"
 Write-Host "  3) 首次用制书：设置里填 CBETA XML 目录（config 的 xml2pdf.cbeta_ebook）"
-Write-Host "     并确保目标机有 Chromium（或用 -WithBrowsers 打包）"
+Write-Host "     并确保目标机有 Chromium（仅 html2pdf/竖排需要；普通 docx2pdf 用本机 Office）"

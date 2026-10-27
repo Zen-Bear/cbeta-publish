@@ -4,7 +4,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from PySide6.QtWidgets import QApplication
 from cbeta_publish.gui.main_window import MainWindow, apply_ui_fonts
-from cbeta_publish.paths import read_user_config, app_root
+from cbeta_publish.paths import read_user_config, app_root, ensure_frozen_dirs
 from cbeta_publish import APP_NAME, APP_ID, __version__
 
 def main():
@@ -21,6 +21,8 @@ def main():
     # 极端情况（出厂模板也缺失/不可写）：给最小默认，避免 KeyError 直接崩
     cfg.setdefault("mulu_dir", str(app_root() / "mulu"))
     cfg.setdefault("collections_dir", str(app_root() / "collections"))
+    for _key, _error in ensure_frozen_dirs(cfg):
+        print(f"无法创建目录 {_key}: {_error}", file=sys.stderr)
     ui=cfg.get("ui",{}) or {}
     from cbeta_publish.qt_diag import install as _install_diag
     _diag_log=_install_diag()

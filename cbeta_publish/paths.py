@@ -81,6 +81,50 @@ def normalize_config_paths(cfg):
     return cfg
 
 
+def ensure_frozen_dirs(cfg) -> list[tuple[str, str]]:
+    """冻结版启动时创建出厂目录；只执行于 PyInstaller 运行时。
+
+    返回 `(配置键, 错误信息)` 列表，调用方可记录但不应阻断启动。
+    相对路径统一按 `app_root()` 解析；`xml2pdf.cbeta_ebook` 未配置时
+    默认使用 exe 同级的 `cbeta_xml`。
+    """
+    if not is_frozen() or not isinstance(cfg, dict):
+        return []
+
+    candidates: dict[str, str] = {}
+    for key in (
+        "mulu_dir",
+        "collections_dir",
+        "official_ebooks_dir",
+        "cbeta_ebooks_dir",
+        "output_dir",
+        "verify_dir",
+        "xml_to_ebooks_dir",
+    ):
+        value = cfg.get(key)
+        if isinstance(value, str) and value.strip():
+            candidates[key] = value.strip()
+
+    x2p = cfg.get("xml2pdf")
+    if not isinstance(x2p, dict):
+        x2p = {}
+    cbeta_ebook = x2p.get("cbeta_ebook")
+    if not isinstance(cbeta_ebook, str) or not cbeta_ebook.strip():
+        cbeta_ebook = "cbeta_xml"
+    candidates["xml2pdf.cbeta_ebook"] = cbeta_ebook.strip()
+
+    errors: list[tuple[str, str]] = []
+    for key, value in candidates.items():
+        try:
+            path = Path(value)
+            if not path.is_absolute():
+                path = app_root() / path
+            path.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            errors.append((key, str(exc)))
+    return errors
+
+
 def read_user_config(cfg_path=None, default_path=None):
     """读取用户配置；JSON 损坏时备份并恢复出厂模板。
 

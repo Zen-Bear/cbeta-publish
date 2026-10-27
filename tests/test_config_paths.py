@@ -5,7 +5,9 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+from cbeta_publish import paths
 from cbeta_publish.paths import (app_root, normalize_config_paths,
                                  read_user_config)
 
@@ -38,6 +40,36 @@ class NormalizePathsTest(unittest.TestCase):
         abs_cfg = {"mulu_dir": str(app_root() / "elsewhere")}
         normalize_config_paths(abs_cfg)
         self.assertEqual(abs_cfg["mulu_dir"], str(app_root() / "elsewhere"))
+
+
+class EnsureFrozenDirsTest(unittest.TestCase):
+    def test_creates_configured_dirs(self):
+        with tempfile.TemporaryDirectory(prefix="frozen-") as tmp:
+            base = Path(tmp)
+            cfg = {
+                "mulu_dir": str(base / "mulu"),
+                "collections_dir": str(base / "collections"),
+                "output_dir": str(base / "out"),
+                "verify_dir": str(base / "verify"),
+                "xml_to_ebooks_dir": str(base / "xml_books"),
+                "xml2pdf": {"cbeta_ebook": str(base / "cbeta_xml")},
+            }
+            with patch.object(paths, "is_frozen", return_value=True):
+                errors = paths.ensure_frozen_dirs(cfg)
+            self.assertEqual(errors, [])
+            for name in ("mulu", "collections", "out", "verify",
+                         "xml_books", "cbeta_xml"):
+                self.assertTrue((base / name).is_dir(), name)
+
+    def test_source_mode_does_not_create(self):
+        with tempfile.TemporaryDirectory(prefix="source-") as tmp:
+            target = Path(tmp) / "cbeta_xml"
+            with patch.object(paths, "is_frozen", return_value=False):
+                errors = paths.ensure_frozen_dirs(
+                    {"xml2pdf": {"cbeta_ebook": str(target)}}
+                )
+            self.assertEqual(errors, [])
+            self.assertFalse(target.exists())
 
 
 class ReadUserConfigTest(unittest.TestCase):
